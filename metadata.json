@@ -1,0 +1,6 @@
+{
+  "name": "Shwari iPhones Dashboard",
+  "description": "WhatsApp AI Agent and Pricelist CRM for Shwari iPhones, using React, Express, Neon Postgres, Anthropic Claude, and Meta WhatsApp Cloud API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
