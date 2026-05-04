@@ -1,63 +1,43 @@
 import fs from 'fs';
 import path from 'path';
-import { updateDbString, initDb } from './db.js';
+import 'dotenv/config';
 
-export const config = {
-  NEON_DATABASE_URL: process.env.NEON_DATABASE_URL || '',
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
-  META_ACCESS_TOKEN: process.env.META_ACCESS_TOKEN || '',
-  META_PHONE_NUMBER_ID: process.env.META_PHONE_NUMBER_ID || '',
-  META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN || 'shwari_verify_2024',
+export let config = {
+  PORT: process.env.PORT || '3000',
+  SUPABASE_DATABASE_URL: process.env.SUPABASE_DATABASE_URL || '',
+  // Dashboard & N8N Webhook integrations
   N8N_API_URL: process.env.N8N_API_URL || '',
-  N8N_WORKFLOW_ID: process.env.N8N_WORKFLOW_ID || '',
 };
 
-export function updateConfig(newConfig: Partial<typeof config>) {
-  Object.assign(config, newConfig);
-  
-  // Update process.env
-  for (const [k, v] of Object.entries(newConfig)) {
-    if (v !== undefined) {
-      process.env[k] = v;
-    }
-  }
+export function updateConfig(newConfig: Record<string, string>) {
+  config = { ...config, ...newConfig };
 
-  // Write to .env
-  const envPath = path.resolve(process.cwd(), '.env');
+  const envPath = path.join(process.cwd(), '.env');
   let envContent = '';
+
   if (fs.existsSync(envPath)) {
-    envContent = fs.readFileSync(envPath, 'utf-8');
+    envContent = fs.readFileSync(envPath, 'utf8');
   }
 
-  const updatedLines: string[] = [];
-  const existingKeys = new Set();
+  const envLines = envContent.split('\n');
+  const envMap: Record<string, string> = {};
 
-  envContent.split('\n').forEach(line => {
-    const match = line.match(/^([^=]+)=(.*)$/);
-    if (match) {
-      const key = match[1];
-      if (key in newConfig) {
-        updatedLines.push(`${key}=${(newConfig as any)[key]}`);
-        existingKeys.add(key);
-      } else {
-        updatedLines.push(line);
-      }
-    } else {
-      updatedLines.push(line);
+  envLines.forEach(line => {
+    if (line.trim() && !line.startsWith('#')) {
+      const parts = line.split('=');
+      const key = parts[0].trim();
+      const val = parts.slice(1).join('=').trim();
+      if (key) envMap[key] = val;
     }
   });
 
-  for (const [k, v] of Object.entries(newConfig)) {
-    if (!existingKeys.has(k) && v !== undefined) {
-      updatedLines.push(`${k}=${v}`);
-    }
+  for (const [key, value] of Object.entries(newConfig)) {
+    envMap[key] = value;
   }
 
-  fs.writeFileSync(envPath, updatedLines.join('\n'));
+  const newEnvContent = Object.entries(envMap)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
 
-  // Re-init components using env
-  if (newConfig.NEON_DATABASE_URL) {
-    updateDbString(newConfig.NEON_DATABASE_URL);
-    initDb();
-  }
+  fs.writeFileSync(envPath, newEnvContent);
 }

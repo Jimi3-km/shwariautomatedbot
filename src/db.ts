@@ -1,79 +1,132 @@
 import { Pool } from 'pg';
-import 'dotenv/config';
+import { config } from './config.js';
 
 let pool: Pool | null = null;
 
-export function getDbString(): string {
-  // If the environment variable isn't set, try to use a local or in-memory one or throw
-  // But wait, user provides NEON_DATABASE_URL from dashboard.
-  return process.env.NEON_DATABASE_URL || '';
-}
-
-export function updateDbString(url: string) {
-  if (pool) {
-    pool.end();
-  }
-  process.env.NEON_DATABASE_URL = url;
-  pool = new Pool({ connectionString: url });
-}
-
-export function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool({ connectionString: getDbString() });
-  }
-  return pool;
+export function getPool() {
+    if (!pool) {
+        if (!config.SUPABASE_DATABASE_URL) {
+            console.error('Database connection string is required, falling back to dummy connection.');
+            pool = new Pool({ connectionString: 'postgresql://postgres:postgres@localhost:5432/postgres' });
+        } else {
+            try {
+                const url = new URL(config.SUPABASE_DATABASE_URL);
+                console.log(`📡 Connecting to Supabase at ${url.host}...`);
+                pool = new Pool({
+                    connectionString: config.SUPABASE_DATABASE_URL,
+                    ssl: config.SUPABASE_DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+                });
+            } catch (err) {
+                console.error('Invalid SUPABASE_DATABASE_URL provided.');
+                pool = new Pool({ connectionString: 'postgresql://postgres:postgres@localhost:5432/postgres' });
+            }
+        }
+    }
+    return pool;
 }
 
 export async function initDb() {
-  const dbPool = getPool();
-  if (!process.env.NEON_DATABASE_URL) {
-    console.warn("No Neon DB URL provided yet. Skipping DB init.");
-    return;
-  }
-  
-  try {
-    await dbPool.query(`
-      CREATE TABLE IF NOT EXISTS iphone_pricelist (
-        id SERIAL PRIMARY KEY,
-        model VARCHAR(255) NOT NULL,
-        storage VARCHAR(255) NOT NULL,
-        color VARCHAR(255),
-        condition VARCHAR(255),
-        price_ksh INTEGER NOT NULL,
-        availability BOOLEAN DEFAULT true,
-        notes TEXT,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    if (!config.SUPABASE_DATABASE_URL) return;
 
-    await dbPool.query(`
-      CREATE TABLE IF NOT EXISTS conversation_log (
-        id SERIAL PRIMARY KEY,
-        sender_phone VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255),
-        customer_message TEXT,
-        ai_reply TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    try {
+        const p = getPool();
 
-    // Seed if empty
-    const { rows } = await dbPool.query('SELECT COUNT(*) FROM iphone_pricelist');
-    if (parseInt(rows[0].count) === 0) {
-      console.log('Seeding initial phone data...');
-      await dbPool.query(`
-        INSERT INTO iphone_pricelist (model, storage, color, condition, price_ksh, availability, notes) VALUES
-        ('iPhone 11', '64GB', 'Black', 'Used', 35000, true, 'Good condition'),
-        ('iPhone 11', '128GB', 'White', 'Used', 42000, true, 'Minor scratches'),
-        ('iPhone 12 Pro', '128GB', 'Blue', 'Used', 65000, true, 'Pristine'),
-        ('iPhone 13', '128GB', 'Pink', 'New', 85000, true, 'Sealed'),
-        ('iPhone 14 Pro Max', '256GB', 'Deep Purple', 'Used', 150000, true, 'Battery health 95%'),
-        ('iPhone 15 Pro Max', '256GB', 'Natural Titanium', 'New', 185000, true, 'With AppleCare+'),
-        ('iPhone 16 Pro Max', '256GB', 'Desert Titanium', 'New', 230000, false, 'Coming soon')
-      `);
+        // Symmetric Inventory Tables
+        const inventoryTables = ['general_pricelist', 'lipa_mdogo_mdogo'];
+        for (const table of inventoryTables) {
+            await p.query(`
+                CREATE TABLE IF NOT EXISTS ${table} (
+                    id SERIAL PRIMARY KEY,
+                    "Phone Model" VARCHAR(100) NOT NULL,
+                    "Specs" TEXT,
+                    "Cash Price" TEXT NOT NULL,
+                    "Deposit" TEXT,
+                    "3 Months Plan" TEXT,
+                    "12 Weeks" TEXT,
+                    "Deposit_1" TEXT,
+                    "6 Months Plan" TEXT,
+                    "24 Weeks" TEXT,
+                    "full_price" TEXT,
+                    "lipa_mdogo_deposit" TEXT,
+                    "lipa_mdogo_weekly" TEXT,
+                    "lipa_mdogo_duration_weeks" TEXT,
+                    availability BOOLEAN DEFAULT TRUE,
+                    notes TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            `);
+        }
+
+        // Leads Table
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS leads (
+                id SERIAL PRIMARY KEY,
+                phone VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(255),
+                interest VARCHAR(100),
+                intent VARCHAR(50),
+                urgency VARCHAR(50),
+                delivery_location TEXT,
+                payment_method TEXT,
+                transaction_code VARCHAR(100),
+                product_model VARCHAR(100),
+                product_storage VARCHAR(50),
+                product_condition VARCHAR(50),
+                product_price VARCHAR(50),
+                upsell_items TEXT,
+                stage VARCHAR(50) DEFAULT 'new',
+                last_message TEXT,
+                last_contact TIMESTAMPTZ DEFAULT NOW(),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+
+        // Payments Table (UUID & n8n compliant)
+        await p.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS payments (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                customer_phone VARCHAR(50) NOT NULL,
+                customer_email VARCHAR(255),
+                transaction_code VARCHAR(100) UNIQUE NOT NULL,
+                amount DECIMAL(12,2) NOT NULL,
+                payment_method VARCHAR(50) DEFAULT 'M-Pesa',
+                delivery_location TEXT,
+                product_model VARCHAR(100),
+                product_storage VARCHAR(50),
+                product_condition VARCHAR(50),
+                upsell_items TEXT,
+                payment_status VARCHAR(50) DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ
+            );
+        `);
+
+        // Conversation Logs Table
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS conversation_logs (
+                id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                customer_phone VARCHAR(50) NOT NULL REFERENCES leads(phone) ON DELETE CASCADE,
+                message TEXT NOT NULL,
+                response TEXT,
+                sender VARCHAR(50) NOT NULL,
+                intent VARCHAR(50),
+                email VARCHAR(255),
+                delivery_location TEXT,
+                payment_method VARCHAR(50),
+                transaction_code VARCHAR(100),
+                product_model VARCHAR(100),
+                product_storage VARCHAR(50),
+                product_condition VARCHAR(50),
+                product_price VARCHAR(50),
+                upsell_items TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+
+        console.log('Database initialized successfully.');
+    } catch (err) {
+        console.error('Error initializing database:', err);
     }
-    console.log('Database initialized successfully.');
-  } catch (err) {
-    console.error('Error initializing database:', err);
-  }
 }

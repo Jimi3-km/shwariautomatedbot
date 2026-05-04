@@ -1,55 +1,33 @@
-# Shwari iPhones WhatsApp AI Agent
+# Shwari iPhones Agent 
 
-A full-stack WhatsApp AI agent system for Shwari iPhones, managing incoming customer requests via WhatsApp, using a Neon PostgreSQL database and Claude 3.5 Haiku via Anthropic to reply contextually.
+A complete AI-powered WhatsApp Agent system for a modern phone shop, integrated seamlessly with N8N and Supabase/Neon PostgreSQL.
 
-## Features
-- **Express Backend:** Webhooks for Meta WhatsApp API and REST endpoints for the dashboard.
-- **Vite/React Dashboard:** Manage the phone pricelist, monitor conversation logs, and trigger n8n workflows.
-- **Anthropic AI (Claude):** Powered by Claude 3.5 Haiku, the assistant uses retrieving-augmented generation (RAG) based on the Neon DB pricelist to answer user queries accurately.
-- **Neon PostgreSQL DB:** Serverless database auto-seeding.
-- **WhatsApp Cloud API Integration:** Send and receive messages instantly.
+## Features Let's Dive In!
+
+- 📊 **Unified Dashboard**: Clean, dark-mode React Dashboard for store admins.
+- 💬 **Lead Pipeline Management**: Track intent, urgency and sales stage of potential buyers.
+- 📱 **Real-time Inventory Management**: Track and update Shwari iPhone pricelist models from a click.
+- 🤖 **N8N Automation Sync**: Full workflow engine for capturing Meta WhatsApp webhooks, generating LangChain agent replies mapped securely back to the store dashboard.
 
 ## Setup Instructions
 
-### Environment Variables
-Configure your credentials in the **Settings** panel of the dashboard or update your `.env` file with the following:
-\`\`\`
-NEON_DATABASE_URL=your_neon_db_url
-ANTHROPIC_API_KEY=your_anthropic_api_key
+### 1. Database Configuration
+1. Obtain your Supabase or Neon Postgres Connection String.
+2. Clone `.env.example` to `.env` and assign `NEON_DATABASE_URL`.
+3. The server will **auto-initialize** your tables (`iphone_pricelist` and `leads`) on its first run!
 
-# Meta WhatsApp Config
-META_ACCESS_TOKEN=your_fb_access_token
-META_PHONE_NUMBER_ID=your_phone_id
-META_VERIFY_TOKEN=shwari_verify_2024
+### 2. N8N Automation System
+1. Open N8N (`http://localhost:5678`) locally or on the cloud.
+2. Select **Import from File...** and upload the included `n8n-workflow.json` configuration file.
+3. Once imported, you will have the fully designed AI Automation loop containing Intent Classifiers, Route Values, the Dashboard API, and WhatsApp triggers. 
+4. Update the **WhatsApp Trigger** and **WhatsApp Target Reply** tokens inside N8N to point to your live Meta Business keys.
+5. In your N8N Webhooks configuration within the automation, obtain the generic dashboard endpoint to paste inside your App Config on the Dashboard.
 
-# n8n Automation
-N8N_API_URL=https://your-n8n.com/webhook/{id}
-N8N_WORKFLOW_ID=your_workflow_id
-\`\`\`
-
-### Local Webhook Setup (ngrok)
-To allow Meta's WhatsApp Cloud API to communicate with your local development server:
-
-1. Download and install [ngrok](https://ngrok.com/).
-2. Run ngrok on port 3000:
-   \`\`\`bash
-   ngrok http 3000
-   \`\`\`
-3. Go to the [Meta for Developers Console](https://developers.facebook.com/).
-4. Under "WhatsApp > Configuration" in your app, click **Edit** on your Webhook configuration:
-   - **Callback URL:** `https://<YOUR_NGROK_URL>/webhook/whatsapp`
-   - **Verify Token:** `shwari_verify_2024`
-5. Click **Verify and Save**.
-
-### Running the App
-The full-stack app requires `tsx` to run the Express and Vite middleware.
-
-\`\`\`bash
-# Install dependencies
+### 3. Server Startup
+To boot up the unified Full Stack App (Express Backend Proxy + React FrontEnd locally):
+```bash
 npm install
-
-# Start the dev server
 npm run dev
-\`\`\`
+```
 
-Open your browser to `http://localhost:3000` to view the dashboard. Configure your credentials under the **Settings** tab. The database will automatically initialize and seed itself once you add a valid Neon DB URL and save.
+Dashboard will instantly deploy on **http://localhost:3000**. Enjoy!

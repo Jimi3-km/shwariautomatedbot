@@ -1,0 +1,1293 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -512,
+        104
+      ],
+      "id": "61547949-33f7-4eeb-bb84-73be4baa97da",
+      "name": "Telegram Trigger",
+      "webhookId": "d07f9ae8-c53a-485f-b2f2-8be2d4398d3a",
+      "credentials": {
+        "telegramApi": {
+          "id": "45w8KX30auwd8W8B",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "customerPhone",
+              "value": "={{ $json.message.from.id.toString() }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "chatId",
+              "value": "={{ $json.message.chat.id.toString() }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "messageText",
+              "value": "={{ $json.message.text }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "76154313-712c-4c05-b5b3-c207e52584bb",
+      "name": "Extract Message Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -288,
+        104
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "conversation_logs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "customer_phone",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
+            },
+            {
+              "fieldId": "message",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.messageText }}"
+            },
+            {
+              "fieldId": "response",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.responseText }}"
+            },
+            {
+              "fieldId": "sender",
+              "fieldValue": "customer"
+            },
+            {
+              "fieldId": "intent",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.timestamp }}"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.email }}"
+            },
+            {
+              "fieldId": "delivery_location",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.delivery_location }}"
+            },
+            {
+              "fieldId": "payment_method",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.payment_method }}"
+            },
+            {
+              "fieldId": "transaction_code",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.transaction_code }}"
+            },
+            {
+              "fieldId": "product_model",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_model }}"
+            },
+            {
+              "fieldId": "product_storage",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_storage }}"
+            },
+            {
+              "fieldId": "product_condition",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_condition }}"
+            },
+            {
+              "fieldId": "product_price",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_price }}"
+            },
+            {
+              "fieldId": "upsell_items",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.upsell_items }}"
+            }
+          ]
+        }
+      },
+      "id": "44b05344-2684-4733-a5e3-90e43bfcfcc8",
+      "name": "Log Conversation",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        848,
+        104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "dashboard-data",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "96a7ffaf-98a3-4a90-9877-4ced02c48980",
+      "name": "Dashboard API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -512,
+        432
+      ],
+      "webhookId": "490a06b3-f853-43b2-a2ba-64ddcf98b402"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "6d3e373f-60c0-445f-9404-9e41fbc142c8",
+      "name": "Get Dashboard Data",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        432
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const leads = $input.all().map(item => item.json);\n\nconst stats = {\n  total: leads.length,\n  highValue: leads.filter(l => l.urgency === \"high\").length,\n  mediumValue: leads.filter(l => l.urgency === \"medium\").length,\n  lowValue: leads.filter(l => l.urgency === \"low\").length,\n  byIntent: {\n    pricing: leads.filter(l => l.intent === \"pricing\").length,\n    serious_buyer: leads.filter(l => l.intent === \"serious_buyer\").length,\n    availability: leads.filter(l => l.intent === \"availability\").length,\n    browsing: leads.filter(l => l.intent === \"browsing\").length,\n    spam: leads.filter(l => l.intent === \"spam\").length\n  },\n  byStage: {\n    new: leads.filter(l => l.stage === \"new\").length,\n    engaged: leads.filter(l => l.stage === \"engaged\").length,\n    hot: leads.filter(l => l.stage === \"hot\").length,\n    closed: leads.filter(l => l.stage === \"closed\").length\n  }\n};\n\nreturn [{\n  json: {\n    success: true,\n    timestamp: new Date().toISOString(),\n    stats: stats,\n    leads: leads.slice(0, 50)\n  }\n}];"
+      },
+      "id": "61fcacb2-3acd-46d5-a476-d3f116d646ed",
+      "name": "Format Dashboard Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "update-lead",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "df85f37d-2d9a-4618-a626-7cfcf6717be1",
+      "name": "Update Lead API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -512,
+        656
+      ],
+      "webhookId": "7270ffc8-51b6-4df1-9432-50501a59659e"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.phone }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "stage",
+              "fieldValue": "={{ $json.body.stage }}"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $json.body.email }}"
+            },
+            {
+              "fieldId": "delivery_location",
+              "fieldValue": "={{ $json.body.delivery_location }}"
+            },
+            {
+              "fieldId": "payment_method",
+              "fieldValue": "={{ $json.body.payment_method }}"
+            }
+          ]
+        }
+      },
+      "id": "0dc948d5-7e5a-45c0-be6f-ca1c61a60ca1",
+      "name": "Update Lead Record",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        656
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "success",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "2",
+              "name": "message",
+              "value": "Lead updated successfully",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "recordId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f4e01118-6ac8-41bc-a0c2-0c3604e4f64c",
+      "name": "Format Update Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -64,
+        656
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.messageText }}",
+        "options": {
+          "systemMessage": "You are Amara, WhatsApp sales agent for Shwari iPhones, Nairobi Kenya.\n\nMEMORY: Read full conversation history before every reply. Never ask for info already given in this conversation.\n\nSALES STEPS — ask only one question per reply, follow this exact order:\n1. Ask which iPhone model they want (11, 12, 13, 14, 15 including Pro and Pro Max variants)\n2. Ask storage size (64GB, 128GB, 256GB, 512GB)\n3. Ask condition preference (New or Slightly Used)\n4. Use pricelist tool to get exact price. CRITICAL: When sharing price, you MUST present BOTH options:\n   - Full payment price from full_price column\n   - Lipa Mdogo Mdogo plan from lipa_mdogo_deposit, lipa_mdogo_weekly, lipa_mdogo_duration_weeks columns\n   Example format: \"iPhone 13 128GB Slightly Used costs KES 52,000 full payment, or Lipa Mdogo Mdogo: KES 15,000 deposit then KES 3,500 weekly for 12 weeks. Shall I reserve one for you?\"\n   If customer asks about lipa mdogo mdogo or installments, explain the payment plan clearly.\n5. Customer says yes: ask for their delivery location (city area or estate name)\n6. Ask for their email address so we can send them a receipt\n7. UPSELL: Ask if they would like to add a case, screen protector or AirPods to their order\n8. Ask payment method: Full M-Pesa payment, Lipa Mdogo Mdogo, or Cash on Delivery\n9. If Full M-Pesa: say \"Send KES [full_price] to Till 5735369 (Shwari iPhones), then share the M-Pesa confirmation code here.\"\n   If Lipa Mdogo Mdogo: say \"Send the deposit of KES [lipa_mdogo_deposit] to Till 5735369 (Shwari iPhones), then share the M-Pesa confirmation code. Weekly payments of KES [lipa_mdogo_weekly] start next week.\"\n   If Cash on Delivery: say \"Perfect! You will pay KES [full_price] when the iPhone is delivered to [their location].\"\n10. When customer shares M-Pesa code: say \"Payment received! We will verify and send your receipt to [their email]. Your iPhone will be delivered to [their location] within 24 hours and we will call you to confirm.\"\n\nSTEP SKIPPING RULES — skip a step if the answer is already in conversation history:\n- Model already mentioned: skip step 1\n- Storage already mentioned: skip step 2\n- Condition already mentioned: skip step 3\n- Location already mentioned: skip step 5\n- Email already given: skip step 6\n- Upsell already answered: skip step 7\n- Payment method already mentioned: skip step 8\n\nANSWER RECOGNITION — treat these short replies as valid answers:\n- 128gb or any storage size = answer to step 2\n- New or Used or slightly used = answer to step 3\n- Any location name like Westlands, CBD, Karen, Kilimani = answer to step 5\n- Any text containing @ symbol = email address, answer to step 6\n- No thanks or just the phone or yes add case = answer to step 7 (upsell)\n- Cash or mpesa or m-pesa or lipa mdogo or installments = answer to step 8\n- Any 10 character mix of letters and numbers = M-Pesa confirmation code, go to step 10\n- Yes or okay or sure or reserve = confirmation, move to next step\n\nRULES:\n- ALWAYS query the pricelist tool and use the EXACT values from these columns: full_price, lipa_mdogo_deposit, lipa_mdogo_weekly, lipa_mdogo_duration_weeks\n- ALWAYS present BOTH payment options unless customer already chose one\n- ALWAYS ask for delivery location AND email BEFORE asking for payment\n- ALWAYS do the upsell (step 7) BEFORE asking for payment method\n- Only greet the customer on the very first message, never again mid-conversation\n- Never restart the conversation\n- Never repeat a question already answered\n- Never guess or invent prices - only use pricelist tool data\n- If a model or storage is out of stock (stock_status column), say so clearly and suggest the closest available option\n- Maximum 3 sentences per reply when presenting pricing (to fit both options)\n- Plain text only, no markdown, no bullet points, no asterisks\n- Friendly Kenyan WhatsApp tone\n- Always end your reply with a question to keep the conversation moving"
+        }
+      },
+      "id": "eac6ed1a-565c-4a14-b7d6-827d151c2ac5",
+      "name": "Sales Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -8,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "1619c80c-9995-497f-9839-ae677febe5a8",
+      "name": "OpenAI Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        224
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "vrUHzozsaJkyHWUe",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $(\"Extract Message Data\").item.json.customerPhone }}",
+        "contextWindowLength": 50
+      },
+      "id": "1dfe6add-ff8f-44ce-98dc-05896723f2b7",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "operation": "getAll",
+        "tableId": "general_pricelist",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "1bca1a43-da7b-4300-a6bc-6e6136b7525a",
+      "name": "Pricelist Tool",
+      "type": "n8n-nodes-base.supabaseTool",
+      "typeVersion": 1,
+      "position": [
+        192,
+        224
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "ljGFZt7xip5zd9nf",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const responseText = $input.item.json.output || \"\";\nconst customerPhone = $('Extract Message Data').first().json.customerPhone;\nconst chatId = $('Extract Message Data').first().json.chatId;\nconst messageText = $('Extract Message Data').first().json.messageText || \"\";\n\n// Extract email from customer message or agent response\nconst emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/;\nconst customerEmailMatch = messageText.match(emailRegex);\nconst agentEmailMatch = responseText.match(emailRegex);\nconst email = customerEmailMatch ? customerEmailMatch[0] : (agentEmailMatch ? agentEmailMatch[0] : null);\n\n// Improved location extraction - check both customer message and agent response\nconst locations = ['westlands', 'cbd', 'karen', 'kilimani', 'ngong', 'kitengela', 'thika', 'kiambu', 'syokimau', 'embakasi', 'langata', 'nairobi', 'upperhill', 'parklands', 'kasarani', 'ruaka', 'rongai', 'south b', 'south c', 'donholm', 'buruburu', 'umoja', 'kayole'];\nlet delivery_location = null;\nconst lowerMsg = messageText.toLowerCase();\nconst lowerResponse = responseText.toLowerCase();\n\n// Check customer message first\nfor (const loc of locations) {\n  if (lowerMsg.includes(loc)) {\n    delivery_location = loc.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');\n    break;\n  }\n}\n\n// If not found in message, check agent response (agent might have confirmed location)\nif (!delivery_location) {\n  for (const loc of locations) {\n    if (lowerResponse.includes(loc)) {\n      delivery_location = loc.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');\n      break;\n    }\n  }\n}\n\n// Extract Payment Method\nlet payment_method = null;\nif (lowerMsg.includes('mpesa') || lowerMsg.includes('m-pesa')) payment_method = 'M-Pesa';\nelse if (lowerMsg.includes('cash')) payment_method = 'Cash on Delivery';\nelse if (lowerMsg.includes('installment') || lowerMsg.includes('lipa mdogo')) payment_method = 'Lipa Mdogo Mdogo';\n\n// Extract M-Pesa Transaction Code\nconst mpesaPattern = /\\b[A-Z]{2,3}[A-Z0-9]{7,9}\\b/;\nconst mpesaMatch = messageText.match(mpesaPattern);\nconst transaction_code = mpesaMatch ? mpesaMatch[0] : null;\n\n// Extract Product Details from conversation\nconst iphoneModels = ['iphone 11', 'iphone 12', 'iphone 13', 'iphone 14', 'iphone 15', 'iphone 11 pro', 'iphone 12 pro', 'iphone 13 pro', 'iphone 14 pro', 'iphone 15 pro', 'iphone 11 pro max', 'iphone 12 pro max', 'iphone 13 pro max', 'iphone 14 pro max', 'iphone 15 pro max'];\nlet product_model = null;\nfor (const model of iphoneModels) {\n  if (lowerMsg.includes(model) || lowerResponse.includes(model)) {\n    product_model = model.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');\n    break;\n  }\n}\n\n// Extract Storage\nconst storagePattern = /(64|128|256|512|1)\\s?(gb|tb)/i;\nconst storageMatch = (messageText + \" \" + responseText).match(storagePattern);\nconst product_storage = storageMatch ? storageMatch[0].toUpperCase() : null;\n\n// Extract Condition\nlet product_condition = null;\nif (lowerMsg.includes('new') || lowerResponse.includes('new')) product_condition = 'New';\nelse if (lowerMsg.includes('used') || lowerMsg.includes('slightly used') || lowerResponse.includes('used')) product_condition = 'Slightly Used';\n\n// Extract Price from agent response\nconst pricePattern = /kes\\s?([0-9,]+)/i;\nconst priceMatch = responseText.match(pricePattern);\nconst product_price = priceMatch ? priceMatch[1].replace(/,/g, '') : null;\n\n// Extract Upsell Items\nlet upsell_items = null;\nif (lowerMsg.includes('case') || lowerMsg.includes('screen protector') || lowerMsg.includes('airpods')) {\n  const items = [];\n  if (lowerMsg.includes('case')) items.push('Case');\n  if (lowerMsg.includes('screen protector')) items.push('Screen Protector');\n  if (lowerMsg.includes('airpods')) items.push('AirPods');\n  upsell_items = items.join(', ');\n} else if (lowerMsg.includes('no thanks') || lowerMsg.includes('just the phone')) {\n  upsell_items = 'None';\n}\n\n// Detect intent and urgency\nlet intent = \"browsing\";\nlet urgency = \"low\";\n\nconst hasMpesaInMessage = mpesaPattern.test(messageText);\nconst hasMpesaInResponse = lowerResponse.includes(\"payment confirmed\") || lowerResponse.includes(\"payment received\");\n\nif (hasMpesaInMessage || hasMpesaInResponse) {\n  intent = \"payment_confirmation\";\n  urgency = \"high\";\n} else if (lowerResponse.includes(\"till 5735369\") || lowerResponse.includes(\"send kes\")) {\n  intent = \"serious_buyer\";\n  urgency = \"high\";\n} else if (lowerResponse.includes(\"reserve\") || lowerResponse.includes(\"delivery location\") || lowerResponse.includes(\"email address\")) {\n  intent = \"serious_buyer\";\n  urgency = \"high\";\n} else if (lowerResponse.includes(\"kes\") && /\\d{4,}/.test(responseText)) {\n  intent = \"pricing\";\n  urgency = \"medium\";\n}\n\nreturn {\n  json: {\n    responseText,\n    customerPhone,\n    chatId,\n    intent,\n    urgency,\n    email,\n    delivery_location,\n    payment_method,\n    transaction_code,\n    product_model,\n    product_storage,\n    product_condition,\n    product_price,\n    upsell_items\n  }\n};"
+      },
+      "id": "743deb7a-c149-4e39-af83-382ac893ab32",
+      "name": "Prepare Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        104
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.responseText }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "89d6c6e3-ad2d-4d20-b63c-c3c78f4a1c7c",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        624,
+        104
+      ],
+      "webhookId": "6695259d-2c50-486c-9a05-0f993512ecb2",
+      "credentials": {
+        "telegramApi": {
+          "id": "45w8KX30auwd8W8B",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "477475660",
+        "text": "=🔔 Shwari iPhones Lead\n\nPhone: {{ $(\"Extract Message Data\").item.json.customerPhone }}\nStage: {{ $(\"Prepare Reply\").item.json.intent }}\n\nCustomer: {{ $(\"Extract Message Data\").item.json.messageText }}\n\nAgent: {{ $(\"Prepare Reply\").item.json.responseText }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "e8aec902-a7d7-42a0-9633-5975ba53599c",
+      "name": "Notify Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2416,
+        104
+      ],
+      "webhookId": "abcda0ef-9473-42e0-b9eb-46e6f4a258c3",
+      "credentials": {
+        "telegramApi": {
+          "id": "45w8KX30auwd8W8B",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "keyValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
+            }
+          ]
+        }
+      },
+      "id": "92a39f1f-ddd6-414c-9bdf-c47328720c9e",
+      "name": "Check Existing Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "any",
+                "operation": "exists"
+              }
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          }
+        },
+        "options": {}
+      },
+      "id": "b7d8b81e-b5e4-4c11-8d1c-7dcb8a148db6",
+      "name": "Decide Create or Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1296,
+        104
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "intent",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent }}"
+            },
+            {
+              "fieldId": "urgency",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.urgency }}"
+            },
+            {
+              "fieldId": "last_message",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.messageText.substring(0, 500) }}"
+            },
+            {
+              "fieldId": "last_contact",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.timestamp }}"
+            },
+            {
+              "fieldId": "stage",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent === \"payment_confirmation\" ? \"payment_submitted\" : $(\"Prepare Reply\").item.json.intent === \"serious_buyer\" ? \"quoted\" : \"interested\" }}"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.email || $(\"Check Existing Lead\").item.json.email }}"
+            },
+            {
+              "fieldId": "delivery_location",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.delivery_location || $(\"Check Existing Lead\").item.json.delivery_location }}"
+            },
+            {
+              "fieldId": "payment_method",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.payment_method || $(\"Check Existing Lead\").item.json.payment_method }}"
+            },
+            {
+              "fieldId": "transaction_code",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.transaction_code || $(\"Check Existing Lead\").item.json.transaction_code }}"
+            },
+            {
+              "fieldId": "product_model",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_model || $(\"Check Existing Lead\").item.json.product_model }}"
+            },
+            {
+              "fieldId": "product_storage",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_storage || $(\"Check Existing Lead\").item.json.product_storage }}"
+            },
+            {
+              "fieldId": "product_condition",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_condition || $(\"Check Existing Lead\").item.json.product_condition }}"
+            },
+            {
+              "fieldId": "product_price",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_price || $(\"Check Existing Lead\").item.json.product_price }}"
+            },
+            {
+              "fieldId": "upsell_items",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.upsell_items || $(\"Check Existing Lead\").item.json.upsell_items }}"
+            }
+          ]
+        }
+      },
+      "id": "e6b21c22-fa9e-480c-94a1-00bd35295a2a",
+      "name": "Update Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        8
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "5bc864dd-4beb-4499-86a9-b4d1eda7410d",
+      "name": "Merge Lead Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1744,
+        104
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
+            },
+            {
+              "fieldId": "intent",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent }}"
+            },
+            {
+              "fieldId": "urgency",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.urgency }}"
+            },
+            {
+              "fieldId": "last_message",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.messageText.substring(0, 500) }}"
+            },
+            {
+              "fieldId": "last_contact",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.timestamp }}"
+            },
+            {
+              "fieldId": "stage",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent === \"payment_confirmation\" ? \"payment_submitted\" : $(\"Prepare Reply\").item.json.intent === \"serious_buyer\" ? \"quoted\" : \"interested\" }}"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.email }}"
+            },
+            {
+              "fieldId": "delivery_location",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.delivery_location }}"
+            },
+            {
+              "fieldId": "payment_method",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.payment_method }}"
+            },
+            {
+              "fieldId": "transaction_code",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.transaction_code }}"
+            },
+            {
+              "fieldId": "product_model",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_model }}"
+            },
+            {
+              "fieldId": "product_storage",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_storage }}"
+            },
+            {
+              "fieldId": "product_condition",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_condition }}"
+            },
+            {
+              "fieldId": "product_price",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.product_price }}"
+            },
+            {
+              "fieldId": "upsell_items",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.upsell_items }}"
+            }
+          ]
+        }
+      },
+      "id": "97153358-fa73-40bc-86df-56cc23eb9ac0",
+      "name": "Create Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        200
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Prepare Reply\").item.json.intent }}",
+              "rightValue": "payment_confirmation",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          }
+        },
+        "options": {}
+      },
+      "id": "962ff00a-71ed-4a07-b5cd-5403286c4b33",
+      "name": "Is Payment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1968,
+        104
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "477475660",
+        "text": "=💰 PAYMENT TO VERIFY\n\nPhone: {{ $(\"Extract Message Data\").item.json.customerPhone }}\nEmail: {{ $(\"Prepare Reply\").item.json.email }}\nLocation: {{ $(\"Prepare Reply\").item.json.delivery_location }}\n\nProduct: {{ $(\"Prepare Reply\").item.json.product_model }} {{ $(\"Prepare Reply\").item.json.product_storage }} {{ $(\"Prepare Reply\").item.json.product_condition }}\nPrice: KES {{ $(\"Prepare Reply\").item.json.product_price }}\nUpsells: {{ $(\"Prepare Reply\").item.json.upsell_items }}\n\nPayment Method: {{ $(\"Prepare Reply\").item.json.payment_method }}\nTransaction Code: {{ $(\"Prepare Reply\").item.json.transaction_code }}\n\nMessage: {{ $(\"Extract Message Data\").item.json.messageText }}\n\nAction: Verify on M-Pesa then confirm from dashboard and send receipt.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "7c64a222-82f6-466a-bee4-0cebc047db10",
+      "name": "Payment Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2192,
+        32
+      ],
+      "webhookId": "e7dc5563-13d3-4252-94c9-36c6f97d78ab",
+      "credentials": {
+        "telegramApi": {
+          "id": "45w8KX30auwd8W8B",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "74218519-88dc-4a0f-b197-33d6190c8cc6",
+      "name": "Daily Follow Up Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -512,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "e30dee9b-ec6b-4f92-81a7-f91e2edbded6",
+      "name": "Fetch All Leads",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        880
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst cold = $input.all().map(i => i.json).filter(l => {\n  if (!l.last_contact || l.stage === \"payment_submitted\") return false;\n  return (now - new Date(l.last_contact)) / 3600000 >= 24;\n});\nreturn cold.map(l => ({ json: l }));"
+      },
+      "id": "001e16cc-eb04-4c2f-82e6-ea0591033bc0",
+      "name": "Filter Cold Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.phone }}",
+        "text": "Hi! Amara here from Shwari iPhones. You were looking at an iPhone earlier and we still have stock. Can I help you complete your order?",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "03c092f4-c100-4d26-9767-aac713fb507a",
+      "name": "Send Follow Up",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        880
+      ],
+      "webhookId": "fc032bf4-4dfb-4d56-98af-b36704ded435",
+      "credentials": {
+        "telegramApi": {
+          "id": "45w8KX30auwd8W8B",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-receipt",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "900a9be9-d1d3-48ca-8247-4b47ef3f73f6",
+      "name": "Send Receipt API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -512,
+        1104
+      ],
+      "webhookId": "755e42ac-a7bf-4abd-9835-5330a506ab82"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body;\nconst phone = b.phone || \"N/A\";\nconst email = b.email || \"\";\nconst product = b.product || \"iPhone\";\nconst storage = b.storage || \"\";\nconst condition = b.condition || \"\";\nconst amount = b.amount || \"0\";\nconst transactionCode = b.transactionCode || \"N/A\";\nconst location = b.location || \"N/A\";\nconst paymentMethod = b.paymentMethod || \"M-Pesa\";\nconst orderDate = new Date().toLocaleDateString(\"en-KE\", { year: \"numeric\", month: \"long\", day: \"numeric\" });\nconst orderId = \"SHW-\" + Date.now().toString().slice(-6);\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head><meta charset=\"utf-8\"><style>\nbody { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }\n.container { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n.header { background: #1a1a2e; color: white; padding: 30px; text-align: center; }\n.header h1 { margin: 0; font-size: 24px; letter-spacing: 1px; }\n.header p { margin: 6px 0 0; color: #aaa; font-size: 13px; }\n.body { padding: 30px; }\n.order-id { background: #f0f4ff; border-left: 4px solid #3b82f6; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px; font-size: 13px; color: #555; }\n.order-id strong { color: #1a1a2e; font-size: 16px; display: block; }\n.section-title { font-size: 13px; font-weight: bold; text-transform: uppercase; color: #888; letter-spacing: 1px; margin: 24px 0 12px; border-bottom: 1px solid #eee; padding-bottom: 6px; }\n.row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; color: #333; border-bottom: 1px solid #f5f5f5; }\n.row .label { color: #777; }\n.total-row { display: flex; justify-content: space-between; padding: 14px 0 0; font-size: 17px; font-weight: bold; color: #1a1a2e; margin-top: 8px; }\n.badge { display: inline-block; background: #d1fae5; color: #065f46; font-size: 12px; font-weight: bold; padding: 4px 12px; border-radius: 20px; margin-top: 4px; }\n.footer { background: #f9f9f9; padding: 20px 30px; text-align: center; font-size: 12px; color: #999; border-top: 1px solid #eee; }\n.footer a { color: #3b82f6; text-decoration: none; }\n</style></head>\n<body>\n<div class=\"container\">\n  <div class=\"header\">\n    <h1>Shwari iPhones</h1>\n    <p>Official Purchase Receipt</p>\n  </div>\n  <div class=\"body\">\n    <div class=\"order-id\">\n      Order Reference<br>\n      <strong>${orderId}</strong>\n      <span class=\"badge\">Payment Confirmed</span>\n    </div>\n\n    <div class=\"section-title\">Customer Details</div>\n    <div class=\"row\"><span class=\"label\">Phone / Telegram ID</span><span>${phone}</span></div>\n    <div class=\"row\"><span class=\"label\">Email</span><span>${email}</span></div>\n    <div class=\"row\"><span class=\"label\">Delivery Location</span><span>${location}</span></div>\n\n    <div class=\"section-title\">Order Details</div>\n    <div class=\"row\"><span class=\"label\">Product</span><span>${product}</span></div>\n    <div class=\"row\"><span class=\"label\">Storage</span><span>${storage}</span></div>\n    <div class=\"row\"><span class=\"label\">Condition</span><span>${condition}</span></div>\n    <div class=\"row\"><span class=\"label\">Order Date</span><span>${orderDate}</span></div>\n\n    <div class=\"section-title\">Payment Details</div>\n    <div class=\"row\"><span class=\"label\">Payment Method</span><span>${paymentMethod}</span></div>\n    <div class=\"row\"><span class=\"label\">Transaction Code</span><span>${transactionCode}</span></div>\n    <div class=\"total-row\"><span>Total Paid</span><span>KES ${amount}</span></div>\n\n    <div class=\"section-title\">Delivery Info</div>\n    <div class=\"row\"><span class=\"label\">Estimated Delivery</span><span>Within 24 hours</span></div>\n    <div class=\"row\"><span class=\"label\">We will call you to confirm delivery</span><span></span></div>\n  </div>\n  <div class=\"footer\">\n    Thank you for choosing Shwari iPhones.<br>\n    Questions? WhatsApp us anytime.<br>\n    <a href=\"https://t.me/ShwariIphones\">t.me/ShwariIphones</a>\n  </div>\n</div>\n</body>\n</html>`;\n\nconst subject = \"Your Shwari iPhones Receipt - \" + product + \" (\" + orderId + \")\";\n\nreturn [{ json: { to: email, subject, html, phone, orderId, ...b } }];"
+      },
+      "id": "6eda3655-1d19-43de-8aef-8e16a106ec4c",
+      "name": "Build Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "payments",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "transaction_code",
+              "fieldValue": "={{ $json.transactionCode }}"
+            },
+            {
+              "fieldId": "customer_phone",
+              "fieldValue": "={{ $json.phone }}"
+            },
+            {
+              "fieldId": "customer_email",
+              "fieldValue": "={{ $json.email }}"
+            },
+            {
+              "fieldId": "amount",
+              "fieldValue": "={{ $json.amount }}"
+            },
+            {
+              "fieldId": "product_model",
+              "fieldValue": "={{ $json.product_model }}"
+            },
+            {
+              "fieldId": "product_storage",
+              "fieldValue": "={{ $json.product_storage }}"
+            },
+            {
+              "fieldId": "product_condition",
+              "fieldValue": "={{ $json.product_condition }}"
+            },
+            {
+              "fieldId": "upsell_items",
+              "fieldValue": "={{ $json.upsell_items }}"
+            },
+            {
+              "fieldId": "payment_status",
+              "fieldValue": "confirmed"
+            },
+            {
+              "fieldId": "delivery_location",
+              "fieldValue": "={{ $json.location }}"
+            },
+            {
+              "fieldId": "payment_method",
+              "fieldValue": "={{ $json.paymentMethod }}"
+            }
+          ]
+        }
+      },
+      "id": "03d8d641-576e-44e2-8862-382ac893ab32",
+      "name": "Log Sale",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        160,
+        1104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "bmEsyK8UAE5yZnVm",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "success",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "2",
+              "name": "message",
+              "value": "Receipt sent and Sale logged",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "01c69d46-681b-4fc6-b365-692bf660cb62",
+      "name": "Format Receipt Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        384,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -64,
+        1104
+      ],
+      "id": "7026a47a-b25d-4622-9142-f5617055f396",
+      "name": "Send a message",
+      "webhookId": "15779394-0ca8-47a9-8624-d4751cc78922",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Z5zNHg8Td1kXLCvm",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Message Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Message Data": {
+      "main": [
+        [
+          {
+            "node": "Sales Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Conversation": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard API": {
+      "main": [
+        [
+          {
+            "node": "Get Dashboard Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Dashboard Data": {
+      "main": [
+        [
+          {
+            "node": "Format Dashboard Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead API": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead Record": {
+      "main": [
+        [
+          {
+            "node": "Format Update Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Sales Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Sales Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pricelist Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Sales Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply": {
+      "main": [
+        [
+          {
+            "node": "Log Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing Lead": {
+      "main": [
+        [
+          {
+            "node": "Decide Create or Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Create or Update": {
+      "main": [
+        [
+          {
+            "node": "Update Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Lead Paths": {
+      "main": [
+        [
+          {
+            "node": "Is Payment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Payment?": {
+      "main": [
+        [
+          {
+            "node": "Payment Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payment Alert": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Follow Up Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch All Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter Cold Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Cold Leads": {
+      "main": [
+        [
+          {
+            "node": "Send Follow Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Receipt API": {
+      "main": [
+        [
+          {
+            "node": "Build Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Receipt": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Sale",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Format Receipt Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Sale": {
+      "main": [
+        [
+          {
+            "node": "Format Receipt Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "d0f31cab2ba3c7c7c50d8f1953b68034930b1652fe89932c18d808b9cacc1060"
+  }
+}
