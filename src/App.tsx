@@ -1,37 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  Settings as SettingsIcon,
-  MessageSquare,
-  Smartphone,
-  Activity,
-  RefreshCw,
-  Save,
-  Trash2,
-  Edit2,
-  Plus,
-  Check,
-  X,
-  Play,
-  Flame,
-  UserCheck,
-  ArrowLeft,
-  Bot
+  Settings as SettingsIcon, MessageSquare, Smartphone, Activity,
+  RefreshCw, Save, Trash2, Edit2, Plus, Check, ArrowLeft,
+  DollarSign, Users, Package, TrendingUp, Image, Upload, Play, X,
+  CreditCard, Lock, AlertTriangle, ExternalLink, LogOut, UserPlus, Shield
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, differenceInDays } from 'date-fns';
 
+// =============================================================================
+// TYPES — 1:1 with database schema
+// =============================================================================
 type Phone = {
   id: number;
-  "Phone Model": string;
-  "Specs": string;
-  "Cash Price": number;
-  "Deposit"?: number;
-  "3 Months Plan"?: number;
-  "12 Weeks"?: number;
-  "Deposit_1"?: number;
-  "6 Months Plan"?: number;
-  "24 Weeks"?: number;
+  'Phone Model': string;
+  Specs: string;
+  'Cash Price': string | number;
+  Deposit?: string | number;
+  '12 Weeks'?: string | number;
+  Deposit_1?: string | number;
+  '24 Weeks'?: string | number;
   availability: boolean;
-  notes: string;
+  notes?: string;
+  image_url?: string;
+  updated_at?: string;
+  created_at?: string;
 };
 
 type Lead = {
@@ -47,761 +39,620 @@ type Lead = {
   last_message?: string;
   last_contact: string;
   created_at: string;
+  transaction_code?: string;
   product_model?: string;
   product_storage?: string;
   product_condition?: string;
+  product_price?: string;
   upsell_items?: string;
+  customer_name?: string;
+};
+
+type ConversationLog = {
+  id?: number;
+  customer_phone: string;
+  message?: string;
+  response?: string;
+  created_at: string;
+  email?: string;
+  delivery_location?: string;
+  payment_method?: string;
+  transaction_code?: string;
+  product_model?: string;
+  product_storage?: string;
+  product_condition?: string;
+  product_price?: string;
+  upsell_items?: string;
+  customer_name?: string;
 };
 
 type Payment = {
   id: string;
   customer_phone: string;
   customer_email?: string;
+  customer_name?: string;
   transaction_code: string;
   amount: number;
-  payment_method: string;
+  payment_method?: string;
   delivery_location?: string;
+  payment_status: string;
+  created_at: string;
+  updated_at?: string;
   product_model?: string;
   product_storage?: string;
   product_condition?: string;
   upsell_items?: string;
-  payment_status: string;
-  created_at: string;
-  updated_at?: string;
 };
 
-// Helper to format prices safely
-const formatPrice = (val: any) => {
-  if (!val) return '-';
-  const str = String(val).replace(/[^0-9.]/g, '');
-  const num = parseFloat(str);
-  return isNaN(num) ? val : num.toLocaleString();
+// =============================================================================
+// HELPERS
+// =============================================================================
+const fmt = (val: any): string => {
+  if (val === null || val === undefined || val === '') return '—';
+  const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? String(val) : n.toLocaleString();
 };
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState('overview');
-  const [payments, setPayments] = useState<Payment[]>([]);
+const STAGES: Record<string, string> = {
+  new: 'New', interested: 'Interested', quoted: 'Quoted',
+  location_collected: 'Delivery Set', payment_submitted: 'Payment In',
+  closed: 'Sold', lost: 'Lost',
+};
 
-  useEffect(() => {
-    const fetchPayments = async () => {
-      try {
-        const res = await fetch('/api/payments');
-        if (!res.ok) throw new Error(await res.text());
-        setPayments(await res.json());
-      } catch (e) {
-        console.error('Fetch payments error:', e);
-      }
-    };
-    fetchPayments();
-    const interval = setInterval(fetchPayments, 30000);
-    return () => clearInterval(interval);
-  }, []);
+const urgencyBadge = (u?: string) => {
+  switch (u) {
+    case 'high': return 'badge badge-orange';
+    case 'medium': return 'badge badge-yellow';
+    default: return 'badge badge-neutral';
+  }
+};
 
+const statusBadge = (s: string) =>
+  (s === 'confirmed' || s === 'completed') ? 'badge badge-green' : 'badge badge-yellow';
+
+// =============================================================================
+// NAV
+// =============================================================================
+const NAV = [
+  { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
+  { id: 'pricelist', label: 'Inventory', icon: <Smartphone size={15} /> },
+  { id: 'leads', label: 'Pipeline', icon: <Users size={15} /> },
+  { id: 'payments', label: 'Sales', icon: <DollarSign size={15} /> },
+  { id: 'settings', label: 'Settings', icon: <SettingsIcon size={15} /> },
+];
+
+import { createClient } from '@supabase/supabase-js';
+
+export let supabase: any = null;
+
+// =============================================================================
+// AUTH
+// =============================================================================
+function LoginScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+    if (err) setError(err.message);
+    setLoading(false);
+  };
 
   return (
-    <>
-      <div className="mesh-bg"></div>
-      <div className="flex h-screen text-slate-200 font-sans relative z-0">
-        {/* Sidebar */}
-        <aside className="w-64 glass m-4 mr-0 hidden md:flex flex-col">
-          <div className="p-6 border-b border-white/10">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 glass flex items-center justify-center border-indigo-500/50">
-                <span className="text-xl font-bold text-indigo-400">S</span>
-              </div>
-              <div>
-                <h1 className="text-xl font-medium tracking-tight text-white mb-1">Shwari iPhones</h1>
-                <p className="text-[10px] text-zinc-400 font-medium tracking-widest uppercase">Operating System</p>
-              </div>
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', padding: 20 }}>
+      <div className="card" style={{ width: '100%', maxWidth: 400, padding: 40 }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ width: 48, height: 48, background: '#fff', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <Shield size={24} style={{ color: '#000' }} />
+          </div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>Admin Access</h1>
+          <p style={{ fontSize: 14, color: 'var(--text-4)', marginTop: 8 }}>Secure dashboard login</p>
+        </div>
+
+        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Email Address</label>
+            <input className="inp" type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@brand.com" />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Password</label>
+            <input className="inp" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+          </div>
+          {error && <div style={{ fontSize: 13, color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', padding: '8px 12px', borderRadius: 8 }}>{error}</div>}
+          <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: 8, height: 48, fontSize: 15 }} disabled={loading}>
+            {loading ? 'Authenticating...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// APP WRAPPER (Initializes Supabase)
+// =============================================================================
+export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/public-env').then(r => r.json()).then(d => {
+      if (d.SUPABASE_URL && d.SUPABASE_ANON_KEY) {
+        supabase = createClient(d.SUPABASE_URL, d.SUPABASE_ANON_KEY);
+      }
+      setReady(true);
+    }).catch(() => setReady(true));
+  }, []);
+
+  if (!ready) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#fff' }}>Initializing...</div>;
+  if (!supabase) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#fff' }}>Missing Supabase Config. Please check the backend settings.</div>;
+
+  return <Dashboard />;
+}
+
+// =============================================================================
+// DASHBOARD
+// =============================================================================
+function Dashboard() {
+  const [tab, setTab] = useState('overview');
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [subscription, setSubscription] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    // 1. Load Paystack
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v1/inline.js';
+    script.async = true;
+    document.body.appendChild(script);
+
+    // 2. Auth Listener
+    if (supabase) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setUser(session?.user ?? null);
+        if (session?.user) syncProfile(session.user);
+      });
+
+      const { data: { subscription: authListener } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null);
+        if (session?.user) syncProfile(session.user);
+      });
+      return () => authListener.unsubscribe();
+    }
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/subscription');
+        if (res.ok) setSubscription(await res.json());
+      } catch (e) { console.error(e); }
+
+      try { const r = await fetch('/api/payments'); if (r.ok) setPayments(await r.json()); } catch { }
+      setLoading(false);
+    };
+    if (user) load();
+    else setLoading(false);
+  }, [user]);
+
+  const syncProfile = (u: any) => {
+    fetch('/api/profiles/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: u.id, email: u.email, full_name: u.user_metadata?.full_name || u.email.split('@')[0] })
+    }).catch(console.error);
+  };
+
+  if (loading) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#fff' }}>Loading Shwari...</div>;
+  if (!user) return <LoginScreen />;
+
+  const isExpired = subscription?.status === 'expired';
+  const daysLeft = subscription?.expiry_date ? differenceInDays(new Date(subscription.expiry_date), new Date()) : 30;
+  const showReminder = !isExpired && daysLeft <= 3 && daysLeft >= 0;
+
+  const handlePaymentSuccess = async (ref: string) => {
+    try {
+      const res = await fetch('/api/subscription/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference: ref })
+      });
+      if (res.ok) window.location.reload();
+      else alert('Payment verification failed. Please contact support.');
+    } catch { alert('Network error during verification.'); }
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', background: '#000', overflow: 'hidden' }}>
+      {/* SIDEBAR */}
+      <aside className="sidebar hidden md:flex" style={{ width: 216, flexShrink: 0, flexDirection: 'column' }}>
+        {/* Brand */}
+        <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 28, height: 28, background: '#fff', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <span style={{ fontWeight: 800, fontSize: 13, color: '#000', lineHeight: 1 }}>S</span>
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', letterSpacing: '-0.02em' }}>Shwari iPhones</div>
+              <div className="section-label" style={{ marginTop: 1, fontSize: 9 }}>Operations Hub</div>
             </div>
           </div>
-          <nav className="flex-1 px-4 py-6 space-y-2">
-            <NavItem icon={<Activity />} label="Overview" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-            <NavItem icon={<Smartphone />} label="Pricelist" active={activeTab === 'pricelist'} onClick={() => setActiveTab('pricelist')} />
-            <NavItem icon={<MessageSquare />} label="Leads Pipeline" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
-            <NavItem icon={<Check />} label="Sales Engine" active={activeTab === 'payments'} onClick={() => setActiveTab('payments')} />
-            <NavItem icon={<SettingsIcon />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
-          </nav>
-        </aside>
+        </div>
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto p-4 md:p-8">
-          {activeTab === 'overview' && <OverviewTab onNavigate={setActiveTab} />}
-          {activeTab === 'pricelist' && <PricelistTab />}
-          {activeTab === 'leads' && <LeadsTab />}
-          {activeTab === 'payments' && <PaymentsTab payments={payments} />}
-          {activeTab === 'settings' && <SettingsTab />}
-        </main>
-      </div>
-    </>
-  );
-}
+        {/* Navigation */}
+        <nav style={{ flex: 1, padding: '10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {NAV.map(n => (
+            <button key={n.id} className={`nav-item${tab === n.id ? ' active' : ''}`} onClick={() => setTab(n.id)}>
+              <span style={{ opacity: tab === n.id ? 1 : 0.5 }}>{n.icon}</span>
+              {n.label}
+            </button>
+          ))}
+        </nav>
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center w-full px-4 py-3 rounded-xl transition-colors ${active
-        ? 'bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30'
-        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
-        }`}
-    >
-      <span className="mr-3">{icon}</span>
-      {label}
-    </button>
-  );
-}
-
-function OverviewTab({ onNavigate }: { onNavigate: (t: string) => void }) {
-  const [stats, setStats] = useState<any>({ totalLeads: 0, highValue: 0, inventory: { inStock: 0, outOfStock: 0 }, totalRevenue: 0, totalSales: 0 });
-
-  useEffect(() => {
-    fetch('/api/stats').then(r => r.json()).then(data => {
-      if (!data.error) setStats(data);
-    });
-  }, []);
-
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col gap-6">
-      <header className="flex items-center justify-between mb-2">
-        <h2 className="text-2xl font-light tracking-tight text-white mb-0">System Overview</h2>
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span className="text-sm font-medium text-slate-300">WhatsApp API: Synced</span>
+        {/* Status */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ width: 6, height: 6, background: '#4ade80', borderRadius: '50%', flexShrink: 0, boxShadow: '0 0 5px #4ade8066' }} />
+            <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500 }}>WhatsApp connected</span>
           </div>
         </div>
-      </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard title="Total Revenue" value={stats.totalRevenue || 0} icon={<Activity className="w-6 h-6 text-green-400" />} isCurrency />
-        <StatCard title="Total Sales" value={stats.totalSales || 0} icon={<Check className="w-6 h-6 text-indigo-400" />} />
-        <StatCard title="Total Leads" value={stats.totalLeads || 0} icon={<MessageSquare className="w-6 h-6 text-indigo-400" />} />
-        <StatCard title="Hot Leads" value={stats.highValue || 0} icon={<Flame className="w-6 h-6 text-orange-400" />} />
-      </div>
-
-      <div className="mt-4 glass p-6 border-white/10">
-        <h3 className="text-lg font-bold mb-4 text-white">Quick Actions</h3>
-        <div className="flex space-x-4">
-          <button onClick={() => onNavigate('pricelist')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg font-bold transition-colors flex items-center text-sm shadow-md shadow-indigo-500/20">
-            <Plus className="w-4 h-4 mr-2" /> ADD NEW PHONE
-          </button>
-          <button onClick={() => onNavigate('settings')} className="bg-white/5 hover:bg-white/10 text-white border border-white/10 px-6 py-2.5 rounded-lg font-bold transition-colors flex items-center text-sm">
-            <SettingsIcon className="w-4 h-4 mr-2" /> CONFIGURE INTEGRATIONS
+        <div style={{ padding: '0 12px', marginTop: 'auto', marginBottom: 20 }}>
+          <button onClick={() => supabase?.auth.signOut()} className="nav-item" style={{ width: '100%', color: '#ef4444' }}>
+            <LogOut size={16} /> <span>Sign Out</span>
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
+      </aside>
 
-function StatCard({ title, value, icon, isCurrency }: { title: string, value: number, icon: React.ReactNode, isCurrency?: boolean }) {
-  return (
-    <div className="glass p-5 flex flex-col justify-center">
-      <div className="flex items-center gap-3 mb-2">
-        <div className="p-2 bg-white/5 rounded-lg border border-white/10">{icon}</div>
-        <span className="text-xs text-slate-400 uppercase tracking-wider">{title}</span>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-3xl font-bold text-white">
-          {isCurrency ? `KES ${value.toLocaleString()}` : value.toLocaleString()}
-        </span>
-      </div>
-    </div>
-  );
-}
+      {/* MAIN */}
+      <main style={{ flex: 1, overflow: 'auto', padding: isExpired ? 0 : '28px 32px', paddingBottom: 80, position: 'relative' }} className="md:pb-8">
+        {showReminder && (
+          <div style={{ background: '#f59e0b', color: '#000', padding: '10px 20px', borderRadius: 8, marginBottom: 24, display: 'flex', alignItems: 'center', gap: 12, fontWeight: 600, fontSize: 13 }}>
+            <AlertTriangle size={16} />
+            Your subscription expires in {daysLeft} {daysLeft === 1 ? 'day' : 'days'}. Please renew soon to avoid dashboard lockout.
+          </div>
+        )}
 
-function PricelistTab() {
-  const [phones, setPhones] = useState<Phone[]>([]);
-  const [form, setForm] = useState<Partial<Phone>>({});
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [activeCategory, setActiveCategory] = useState('general_pricelist');
+        {isExpired ? (
+          <Paywall subscription={subscription} onPaymentSuccess={handlePaymentSuccess} />
+        ) : (
+          <>
+            {tab === 'overview' && <OverviewTab onNavigate={setTab} payments={payments} />}
+            {tab === 'pricelist' && <PricelistTab />}
+            {tab === 'leads' && <LeadsTab />}
+            {tab === 'payments' && <PaymentsTab payments={payments} />}
+            {tab === 'settings' && <SettingsTab />}
+          </>
+        )}
+      </main>
 
-  useEffect(() => {
-    load();
-  }, [activeCategory]);
-
-  const load = () => {
-    fetch(`/api/pricelist?category=${activeCategory}`)
-      .then(async r => {
-        const data = await r.json();
-        if (!r.ok || data.error) throw new Error(data.error || 'Failed to load pricelist');
-        setPhones(data);
-      })
-      .catch(err => {
-        console.error('Check your Supabase connection:', err);
-      });
-  };
-
-  const handleSave = async () => {
-    try {
-      const url = editingId ? `/api/pricelist/${editingId}?category=${activeCategory}` : `/api/pricelist?category=${activeCategory}`;
-      const method = editingId ? 'PUT' : 'POST';
-
-      // Validations & defaults
-      const payload = {
-        ...form,
-        availability: form.availability !== false
-      };
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const result = await res.json();
-      if (!res.ok || result.error) throw new Error(result.error || 'Failed to save phone');
-
-      setEditingId(null);
-      setForm({});
-      load();
-    } catch (err: any) {
-      alert(`Error saving phone: ${err.message}`);
-      console.error(err);
-    }
-  };
-
-  const handleDelete = async (id: number) => {
-    if (confirm('Are you sure you want to delete this item?')) {
-      await fetch(`/api/pricelist/${id}?category=${activeCategory}`, { method: 'DELETE' });
-      load();
-    }
-  };
-
-  const isEditing = editingId !== null;
-
-  const categories = [
-    { id: 'general_pricelist', name: 'General Pricelist' },
-    { id: 'lipa_mdogo_mdogo', name: 'Lipa Mdogo Mdogo' }
-  ];
-
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col gap-6">
-      <h2 className="text-2xl font-bold tracking-tight text-white mb-2">Pricelist Manager</h2>
-
-      {/* Category Tabs */}
-      <div className="flex overflow-x-auto gap-2 pb-2 scrollbar-hide">
-        {categories.map(cat => (
-          <button
-            key={cat.id}
-            className={`whitespace-nowrap px-4 py-2 rounded-lg text-sm font-bold transition-colors ${activeCategory === cat.id ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 border border-white/10'}`}
-            onClick={() => setActiveCategory(cat.id)}
-          >
-            {cat.name}
+      {/* MOBILE NAV */}
+      <nav className="md:hidden" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#050505', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-around', padding: '8px 0', zIndex: 50 }}>
+        {NAV.slice(0, 4).map(n => (
+          <button key={n.id} onClick={() => setTab(n.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 12px', color: tab === n.id ? '#fff' : '#444' }}>
+            {n.icon}
+            <span style={{ fontSize: 9, letterSpacing: '0.05em', fontWeight: 600, textTransform: 'uppercase' }}>{n.label}</span>
           </button>
         ))}
-      </div>
-      {/* Editor Form */}
-      <div className="glass p-6">
-        <h3 className="text-lg font-bold mb-4 text-white border-b border-white/10 pb-2">{isEditing ? 'Edit Phone' : 'Add New Phone'}</h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 text-sm">
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Model (e.g. iPhone 14)" value={form["Phone Model"] || ''} onChange={e => setForm({ ...form, "Phone Model": e.target.value })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Specs (e.g. 128GB Blue)" value={form["Specs"] || ''} onChange={e => setForm({ ...form, "Specs": e.target.value })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Cash Price (KES)" type="number" value={form["Cash Price"] || ''} onChange={e => setForm({ ...form, "Cash Price": Number(e.target.value) })} />
-
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Deposit" type="number" value={form["Deposit"] || ''} onChange={e => setForm({ ...form, "Deposit": Number(e.target.value) })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="3 Months Plan" type="number" value={form["3 Months Plan"] || ''} onChange={e => setForm({ ...form, "3 Months Plan": Number(e.target.value) })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="12 Weeks" type="number" value={form["12 Weeks"] || ''} onChange={e => setForm({ ...form, "12 Weeks": Number(e.target.value) })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Deposit 1" type="number" value={form["Deposit_1"] || ''} onChange={e => setForm({ ...form, "Deposit_1": Number(e.target.value) })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="6 Months Plan" type="number" value={form["6 Months Plan"] || ''} onChange={e => setForm({ ...form, "6 Months Plan": Number(e.target.value) })} />
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="24 Weeks" type="number" value={form["24 Weeks"] || ''} onChange={e => setForm({ ...form, "24 Weeks": Number(e.target.value) })} />
-
-          <input className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500 placeholder-slate-500" placeholder="Notes (e.g. sealed, scratch)" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} />
-          <label className="flex items-center space-x-2 px-2 text-slate-300">
-            <input type="checkbox" className="rounded bg-black/20 border border-white/10 text-indigo-600 focus:ring-indigo-500 w-4 h-4" checked={form.availability !== false} onChange={e => setForm({ ...form, availability: e.target.checked })} />
-            <span className="font-medium">In Stock</span>
-          </label>
-        </div>
-        <div className="flex space-x-3 mt-4">
-          <button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 justify-center rounded-lg font-bold text-sm transition-colors flex items-center shadow-md shadow-indigo-500/20">
-            <Save className="w-4 h-4 mr-2" /> {isEditing ? 'SAVE CHANGES' : 'ADD PHONE'}
-          </button>
-          {isEditing && (
-            <button onClick={() => { setEditingId(null); setForm({}); }} className="bg-white/5 hover:bg-white/10 text-white border border-white/10 px-5 py-2 justify-center rounded-lg font-bold text-sm transition-colors">
-              CANCEL
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="glass overflow-hidden flex-1 overflow-x-auto">
-        <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
-          <thead>
-            <tr className="bg-white/5 border-b border-white/10">
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Model</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Specs</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Cash Price</th>
-              {activeCategory === 'lipa_mdogo_mdogo' && (
-                <>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Deposit</th>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">3 Mo Plan</th>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">12 Weeks</th>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Deposit 1</th>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">6 Mo Plan</th>
-                  <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">24 Weeks</th>
-                </>
-              )}
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Status</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {phones.map(p => (
-              <tr key={p.id} className="hover:bg-white/5 transition-colors">
-                <td className="py-4 px-6 font-medium text-white">{p["Phone Model"]}</td>
-                <td className="py-4 px-6 text-slate-300">{p["Specs"]}</td>
-                <td className="py-4 px-6 text-white font-mono">{formatPrice(p["Cash Price"])}</td>
-                {activeCategory === 'lipa_mdogo_mdogo' && (
-                  <>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["Deposit"])}</td>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["3 Months Plan"])}</td>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["12 Weeks"])}</td>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["Deposit_1"])}</td>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["6 Months Plan"])}</td>
-                    <td className="py-4 px-6 text-slate-300 font-mono">{formatPrice(p["24 Weeks"])}</td>
-                  </>
-                )}
-                <td className="py-4 px-6">
-                  <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${p.availability ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
-                    {p.availability ? 'In Stock' : 'Out of Stock'}
-                  </span>
-                </td>
-                <td className="py-4 px-6 text-right">
-                  <button onClick={() => { setEditingId(p.id); setForm(p); }} className="text-indigo-400 hover:text-indigo-300 hover:bg-white/5 p-2 rounded-lg transition-colors mr-2">
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-300 hover:bg-white/5 p-2 rounded-lg transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {phones.length === 0 && (
-              <tr><td colSpan={5} className="py-8 text-center text-slate-500">No phones in the pricelist yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      </nav>
     </div>
   );
 }
 
-function LeadsTab() {
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const [conversations, setConversations] = useState<any[]>([]);
-  const [loadingConversations, setLoadingConversations] = useState(false);
-  const [receiptForm, setReceiptForm] = useState({ transactionCode: '', amount: '', storage: '', condition: '' });
-  const [sendingReceipt, setSendingReceipt] = useState(false);
+// =============================================================================
+// OVERVIEW
+// =============================================================================
+function OverviewTab({ onNavigate, payments }: { onNavigate: (t: string) => void; payments: Payment[] }) {
+  const [stats, setStats] = useState<any>({});
+  useEffect(() => { fetch('/api/stats').then(r => r.json()).then(d => { if (!d.error) setStats(d); }).catch(() => { }); }, []);
 
-  const handleSendReceipt = async () => {
-    if (!selectedLead) return;
-    if (!selectedLead.email || !selectedLead.email.includes('@')) {
-      alert("Cannot send receipt: Customer email is missing or invalid. Please collect it in the chat first.");
-      return;
-    }
-    if (!receiptForm.transactionCode || !receiptForm.amount) {
-      alert("Please enter Transaction Code and Amount to process.");
-      return;
-    }
+  const kpis = [
+    { label: 'Revenue', value: `KES ${(stats.totalRevenue || 0).toLocaleString()}`, sub: 'Confirmed sales', icon: <TrendingUp size={15} /> },
+    { label: 'Sales Closed', value: stats.totalSales || 0, sub: 'All time', icon: <Check size={15} /> },
+    { label: 'Active Leads', value: stats.totalLeads || 0, sub: 'In pipeline', icon: <Users size={15} /> },
+    { label: 'In Stock', value: stats.inventory?.inStock || 0, sub: 'Listed items', icon: <Package size={15} /> },
+  ];
 
-    setSendingReceipt(true);
-    try {
-      // 1. Record the sale in the Sales Engine database
-      await fetch('/api/payments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transaction_code: receiptForm.transactionCode,
-          customer_phone: selectedLead.phone,
-          customer_email: selectedLead.email,
-          amount: parseFloat(receiptForm.amount),
-          payment_status: 'completed',
-          payment_method: selectedLead.payment_method || 'M-Pesa',
-          delivery_location: selectedLead.delivery_location || 'Store Pickup',
-          product_model: selectedLead.product_model || selectedLead.interest || 'Unknown',
-          product_storage: receiptForm.storage,
-          product_condition: receiptForm.condition,
-          upsell_items: selectedLead.upsell_items || ''
-        })
-      });
-
-      // 2. Send webhook for email receipt
-      const res = await fetch("https://builtwithaiautomations.app.n8n.cloud/webhook/send-receipt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: selectedLead.email,
-          phone: selectedLead.phone || '',
-          product: selectedLead.product_model || selectedLead.interest || 'iPhone',
-          location: selectedLead.delivery_location || '',
-          paymentMethod: selectedLead.payment_method || '',
-          transactionCode: receiptForm.transactionCode,
-          amount: receiptForm.amount,
-          storage: receiptForm.storage,
-          condition: receiptForm.condition,
-          product_model: selectedLead.product_model || selectedLead.interest || 'iPhone',
-          product_storage: receiptForm.storage,
-          product_condition: receiptForm.condition,
-          upsell_items: selectedLead.upsell_items || ''
-        })
-      });
-
-      if (res.ok) {
-        alert("Receipt formally sent to Customer!");
-        await updateStage(selectedLead.phone, "payment_submitted");
-      } else {
-        const errText = await res.text();
-        console.error("n8n Webhook Error:", errText);
-        alert(`Failed to send receipt (n8n Error 500). Please check your n8n execution logs for the "Send a message" node. It might be a Gmail authentication issue.`);
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Network Error: Could not connect to n8n. Check if the webhook URL is correct and active.");
-    } finally {
-      setSendingReceipt(false);
-    }
-  };
-
-  const handleConfirmPaymentNoReceipt = async () => {
-    if (!selectedLead) return;
-    if (!receiptForm.transactionCode || !receiptForm.amount) {
-      alert("Please enter Transaction Code and Amount to process.");
-      return;
-    }
-
-    try {
-      await fetch('/api/payments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transaction_code: receiptForm.transactionCode,
-          customer_phone: selectedLead.phone,
-          customer_email: selectedLead.email || '',
-          amount: parseFloat(receiptForm.amount),
-          payment_status: 'confirmed',
-          payment_method: selectedLead.payment_method || 'M-Pesa',
-          delivery_location: selectedLead.delivery_location || 'Store Pickup',
-          product_model: selectedLead.product_model || selectedLead.interest || 'Unknown',
-          product_storage: receiptForm.storage,
-          product_condition: receiptForm.condition,
-          upsell_items: selectedLead.upsell_items || ''
-        })
-      });
-      await updateStage(selectedLead.phone, "payment_submitted");
-      alert("Payment recorded successfully!");
-    } catch (e) {
-      console.error(e);
-      alert("Error saving payment to the database.");
-    }
-  };
-
-  const fetchLeads = () => {
-    setLoading(true);
-    fetch('/api/leads')
-      .then(r => r.json())
-      .then(data => {
-        if (!data.error) setLeads(data);
-      })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    fetchLeads();
-    const interval = setInterval(fetchLeads, 30000); // 30 seconds
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleSelectLead = (lead: Lead) => {
-    setSelectedLead(lead);
-    setLoadingConversations(true);
-    fetch(`/api/leads/${lead.phone}/conversations`)
-      .then(r => r.json())
-      .then(data => {
-        if (!data.error) setConversations(data);
-      })
-      .finally(() => setLoadingConversations(false));
-  };
-
-  const updateStage = async (phone: string, stage: string) => {
-    await fetch(`/api/leads/${phone}/stage`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage })
-    });
-    fetchLeads();
-  };
-
-  const getUrgencyColor = (u: string) => {
-    switch (u) {
-      case 'high': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
-      case 'medium': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
-      default: return 'bg-slate-500/20 text-slate-400 border-slate-500/30';
-    }
-  };
+  const recent = payments.slice(0, 6);
 
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col gap-6 h-full">
-      {!selectedLead ? (
-        <>
-          <div className="flex justify-between items-center mb-2">
-            <h2 className="text-2xl font-bold tracking-tight text-white mb-0">Leads Pipeline</h2>
-            <button onClick={fetchLeads} className={`flex items-center text-xs font-bold text-white bg-white/5 border border-white/10 px-4 py-2 rounded-lg hover:bg-white/10 transition-colors uppercase tracking-widest`}>
-              <RefreshCw className={`w-3 h-3 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          </div>
+    <div style={{ maxWidth: 900, display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* Header */}
+      <div>
+        <h1 className="page-title">Overview</h1>
+        <p className="body-text" style={{ marginTop: 4 }}>{format(new Date(), 'EEEE, MMMM d, yyyy')}</p>
+      </div>
 
-          <div className="grid grid-cols-1 gap-4">
-            {leads.map(lead => (
-              <div key={lead.id} onClick={() => handleSelectLead(lead)} className="glass cursor-pointer overflow-hidden flex flex-col border border-white/10 hover:border-indigo-500/30 hover:bg-white/5 transition-all group">
-                <div className="p-6 flex flex-col md:flex-row gap-6 items-center">
-                  {/* Contact Info */}
-                  <div className="md:w-72 flex flex-col">
-                    <div className="flex items-center gap-3 mb-1">
-                      <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-400 border border-indigo-500/20">
-                        <UserCheck size={20} />
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+        {kpis.map((k, i) => (
+          <div className="kpi-card" key={i}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <span className="kpi-label">{k.label}</span>
+              <span style={{ color: 'var(--text-4)' }}>{k.icon}</span>
+            </div>
+            <div className="kpi-value">{k.value}</div>
+            <div className="kpi-sub">{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="card" style={{ padding: '20px 24px' }}>
+        <p className="section-label" style={{ marginBottom: 14 }}>Quick Actions</p>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn-primary" onClick={() => onNavigate('pricelist')}><Plus size={14} /> Add Phone</button>
+          <button className="btn-ghost" onClick={() => onNavigate('leads')}><Users size={14} /> View Pipeline</button>
+          <button className="btn-ghost" onClick={() => onNavigate('settings')}><SettingsIcon size={14} /> Settings</button>
+        </div>
+      </div>
+
+      {/* Recent Sales */}
+      {recent.length > 0 && (
+        <div className="card" style={{ overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+            <p className="section-label">Recent Sales</p>
+          </div>
+          <table className="tbl">
+            <thead><tr><th>Customer</th><th>Product</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody>
+              {recent.map(p => (
+                <tr key={p.id}>
+                  <td className="primary">{p.customer_name || p.customer_phone}</td>
+                  <td>{p.product_model || '—'}{p.product_storage ? ` · ${p.product_storage}` : ''}</td>
+                  <td className="primary" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>KES {fmt(p.amount)}</td>
+                  <td><span className={statusBadge(p.payment_status)}>{p.payment_status === 'confirmed' ? 'Sold' : p.payment_status}</span></td>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-3)' }}>{format(new Date(p.created_at), 'MMM d, HH:mm')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// PRICELIST / INVENTORY
+// =============================================================================
+function PricelistTab() {
+  const [phones, setPhones] = useState<Phone[]>([]);
+  const [form, setForm] = useState<Partial<Phone> & { photoFile?: File }>({});
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [previewId, setPreviewId] = useState<number | null>(null);
+  const [category, setCategory] = useState('general_pricelist');
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { load(); }, [category]);
+
+  const load = () =>
+    fetch(`/api/pricelist?category=${category}`).then(r => r.json()).then(d => { if (!d.error) setPhones(d); }).catch(() => { });
+
+  const reset = () => { setForm({}); setEditingId(null); setPreviewId(null); if (fileRef.current) fileRef.current.value = ''; };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const url = editingId ? `/api/pricelist/${editingId}?category=${category}` : `/api/pricelist?category=${category}`;
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => {
+        if (k === 'photoFile' && v) fd.append('photo', v as File);
+        else if (k !== 'photoFile' && v !== undefined && v !== null) fd.append(k, String(v));
+      });
+      fd.set('availability', form.availability !== false ? 'true' : 'false');
+      const r = await fetch(url, { method: editingId ? 'PUT' : 'POST', body: fd });
+      const json = await r.json();
+      if (!r.ok || json.error) throw new Error(json.error || 'Save failed');
+      reset(); load();
+    } catch (e: any) { alert(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const del = async (id: number) => {
+    if (!confirm('Delete this product?')) return;
+    await fetch(`/api/pricelist/${id}?category=${category}`, { method: 'DELETE' });
+    load();
+  };
+
+  const isLipa = category === 'lipa_mdogo_mdogo';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 className="page-title">Inventory</h1>
+          <p className="body-text" style={{ marginTop: 4 }}>{phones.length} products in {isLipa ? 'Lipa Mdogo Mdogo' : 'General'} pricelist</p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[['general_pricelist', 'General'], ['lipa_mdogo_mdogo', 'Lipa Mdogo']].map(([id, label]) => (
+            <button key={id} onClick={() => { setCategory(id); setPreviewId(null); setEditingId(null); }} style={{
+              background: category === id ? '#fff' : 'transparent',
+              color: category === id ? '#000' : 'var(--text-3)',
+              border: `1px solid ${category === id ? '#fff' : 'var(--border-2)'}`,
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all 0.15s'
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {previewId ? (() => {
+        const p = phones.find(x => x.id === previewId);
+        if (!p) return null;
+        return (
+          <div className="card" style={{ padding: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 300px', maxWidth: 400 }}>
+              {p.image_url ? (
+                <img src={p.image_url} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 12, border: '1px solid var(--border)' }} alt={p['Phone Model']} />
+              ) : (
+                <div style={{ width: '100%', aspectRatio: '1', background: 'var(--surface-2)', borderRadius: 12, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-4)' }}>
+                  <Image size={48} />
+                </div>
+              )}
+            </div>
+            <div style={{ flex: '2 1 300px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--white)', letterSpacing: '-0.03em', lineHeight: 1.2 }}>{p['Phone Model']}</h2>
+                  <p style={{ color: 'var(--text-3)', fontSize: 14, marginTop: 4 }}>{p.Specs}</p>
+                </div>
+                <button className="btn-icon" onClick={() => setPreviewId(null)}><X size={15} /></button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: -4 }}>
+                <span className={`badge ${p.availability ? 'badge-green' : 'badge-red'}`}>{p.availability ? 'In Stock' : 'Out of Stock'}</span>
+              </div>
+
+              <div style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginTop: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Pricing Details</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Cash Price</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>KES {fmt(p['Cash Price'])}</div>
+                  </div>
+                  {isLipa && (
+                    <>
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Deposit</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>{fmt(p.Deposit)}</div>
                       </div>
                       <div>
-                        <h4 className="font-bold text-white text-lg">{lead.phone}</h4>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {lead.email && <span className="text-[10px] bg-white/5 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/20 font-mono">{lead.email}</span>}
-                          {lead.delivery_location && <span className="text-[10px] bg-indigo-500/20 text-white px-2 py-0.5 rounded border border-indigo-500/30 uppercase font-bold">{lead.delivery_location}</span>}
-                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-4)' }}>12 Weeks</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>{fmt(p['12 Weeks'])}</div>
                       </div>
-                    </div>
-
-                    <div className="mt-4 space-y-2">
-                      <div className="flex justify-between text-[11px] uppercase tracking-wider text-slate-500 font-bold">
-                        <span>Product Interest</span>
-                        <span className="text-indigo-300">{lead.product_model ? `${lead.product_model} ${lead.product_storage || ''}` : (lead.interest || 'Unknown')}</span>
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Deposit 1</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>{fmt(p.Deposit_1)}</div>
                       </div>
-                      {lead.upsell_items && lead.upsell_items !== 'None' && (
-                        <div className="flex justify-between text-[11px] uppercase tracking-wider text-slate-500 font-bold">
-                          <span>Upsells</span>
-                          <span className="text-green-400">{lead.upsell_items}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between text-[11px] uppercase tracking-wider text-slate-500 font-bold">
-                        <span>Delivery Location</span>
-                        <span className="text-slate-300">{lead.delivery_location || 'Not set'}</span>
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-4)' }}>24 Weeks</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>{fmt(p['24 Weeks'])}</div>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Conversation Snapshot */}
-                  <div className="flex-1 flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Last Conversation Snippet</span>
-                      <span className="text-[10px] text-slate-600 font-mono uppercase">{format(new Date(lead.last_contact), 'MMM dd, HH:mm')}</span>
-                    </div>
-                    <div className="bg-black/20 p-4 rounded-xl border border-white/5 relative">
-                      <p className="text-sm text-slate-300 italic line-clamp-2">“{lead.last_message || "Awaiting first message..."}”</p>
-                    </div>
-                    {lead.payment_method && (
-                      <div className="mt-2 text-[11px] bg-green-500/5 text-green-400 p-2 rounded border border-green-500/10 font-mono">
-                        <span className="font-bold mr-2 uppercase">Payment:</span>
-                        {lead.payment_method}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Status & Priority */}
-                  <div className="md:w-56 flex flex-col gap-3 items-end justify-between border-t md:border-t-0 md:border-l border-white/10 pt-4 md:pt-0 md:pl-6">
-                    <div className="flex flex-col gap-2 items-end w-full">
-                      <span className={`text-[10px] font-bold px-3 py-1 rounded-full border shadow-sm ${getUrgencyColor(lead.urgency || 'low')}`}>
-                        {lead.urgency?.toUpperCase() || 'LOW'} PRIORITY
-                      </span>
-                      <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-white/5 text-slate-400 border border-white/10">
-                        INTENT: {lead.intent?.toUpperCase() || 'VIEWING'}
-                      </span>
-                    </div>
-
-                    <div className="w-full space-y-2" onClick={e => e.stopPropagation()}>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block text-right">Update Stage</label>
-                      <select
-                        value={lead.stage}
-                        onChange={(e) => updateStage(lead.phone, e.target.value)}
-                        className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:ring-2 focus:ring-indigo-500 transition-all font-bold"
-                      >
-                        <option value="new">New Lead</option>
-                        <option value="interested">Interested / Exploring</option>
-                        <option value="quoted">Price Quoted</option>
-                        <option value="location_collected">Delivery Set</option>
-                        <option value="payment_submitted">Payment Received</option>
-                        <option value="closed">Sale Completed</option>
-                        <option value="lost">Lost / No Response</option>
-                      </select>
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
               </div>
-            ))}
-            {leads.length === 0 && (
-              <div className="py-16 text-center glass border border-white/10">
-                <MessageSquare className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-                <p className="text-slate-400">No leads captured yet.</p>
+
+              {p.notes && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Notes</div>
+                  <p style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5, background: 'var(--surface-2)', padding: 12, borderRadius: 8, border: '1px solid var(--border)' }}>{p.notes}</p>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 'auto', paddingTop: 16 }}>
+                <button className="btn-primary" onClick={() => { setForm(p); setEditingId(p.id); setPreviewId(null); }}><Edit2 size={14} /> Edit Product</button>
+                <button className="btn-ghost" onClick={() => del(p.id)} style={{ color: '#ef4444', borderColor: '#451a1a' }}><Trash2 size={14} /> Delete</button>
               </div>
+            </div>
+          </div>
+        );
+      })() : editingId || Object.keys(form).length > 0 ? (
+        /* Form */
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <p className="section-label">{editingId ? 'Edit Product' : 'Add New Product'}</p>
+            <button className="btn-icon" onClick={reset}><X size={13} /></button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8, marginBottom: 12 }}>
+            <input className="inp" placeholder="Model (e.g. iPhone 15 Pro)" value={form['Phone Model'] || ''} onChange={e => setForm({ ...form, 'Phone Model': e.target.value })} />
+            <input className="inp" placeholder="Specs (e.g. 256GB Black)" value={form.Specs || ''} onChange={e => setForm({ ...form, Specs: e.target.value })} />
+            <input className="inp" placeholder="Cash Price (KES)" type="number" value={form['Cash Price'] || ''} onChange={e => setForm({ ...form, 'Cash Price': e.target.value })} />
+            {isLipa && <>
+              <input className="inp" placeholder="Deposit" type="number" value={form.Deposit || ''} onChange={e => setForm({ ...form, Deposit: e.target.value })} />
+              <input className="inp" placeholder="12 Weeks" type="number" value={form['12 Weeks'] || ''} onChange={e => setForm({ ...form, '12 Weeks': e.target.value })} />
+              <input className="inp" placeholder="Deposit 1" type="number" value={form.Deposit_1 || ''} onChange={e => setForm({ ...form, Deposit_1: e.target.value })} />
+              <input className="inp" placeholder="24 Weeks" type="number" value={form['24 Weeks'] || ''} onChange={e => setForm({ ...form, '24 Weeks': e.target.value })} />
+            </>}
+            <input className="inp" placeholder="Notes (optional)" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} />
+          </div>
+
+          {/* Photo upload + availability row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: 'none' }} onChange={e => setForm({ ...form, photoFile: e.target.files?.[0] })} />
+            <button className="btn-ghost" type="button" onClick={() => fileRef.current?.click()} style={{ fontSize: 12 }}>
+              <Upload size={12} />{form.photoFile ? form.photoFile.name : form.image_url ? 'Replace Photo' : 'Upload Photo (JPG/PNG)'}
+            </button>
+            {form.image_url && !form.photoFile && (
+              <img src={form.image_url} style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--border)' }} alt="" />
             )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--text-2)', cursor: 'pointer', marginLeft: 'auto', userSelect: 'none' }}>
+              <input type="checkbox" checked={form.availability !== false} onChange={e => setForm({ ...form, availability: e.target.checked })} style={{ accentColor: '#fff', width: 14, height: 14, cursor: 'pointer' }} />
+              In Stock
+            </label>
           </div>
-        </>
+
+          <div style={{ marginTop: 16 }}>
+            <button className="btn-primary" onClick={save} disabled={saving}>
+              {saving ? 'Saving…' : editingId ? <><Save size={13} /> Save Changes</> : <><Plus size={13} /> Add Product</>}
+            </button>
+          </div>
+        </div>
       ) : (
-        /* INDIVIDUAL LEAD DETAIL VIEW */
-        <div className="flex flex-col h-full gap-4 w-full">
-          {/* Header */}
-          <div className="flex items-center justify-between glass p-4 border border-indigo-500/30 rounded-2xl">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setSelectedLead(null)}
-                className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-slate-300 transition-colors border border-white/10"
-              >
-                <ArrowLeft size={18} />
-              </button>
-              <div>
-                <h2 className="text-xl font-bold tracking-tight text-white mb-0 flex items-center gap-2">
-                  {selectedLead.phone}
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shadow-sm ${getUrgencyColor(selectedLead.urgency || 'low')}`}>
-                    {selectedLead.urgency?.toUpperCase() || 'LOW'} PRIORITY
-                  </span>
-                </h2>
-                <div className="flex items-center gap-4 mt-1">
-                  <p className="text-xs text-indigo-400 font-mono italic">{selectedLead.email || 'No email provided'}</p>
-                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">• INTENT: {selectedLead.intent || 'VIEWING'}</span>
-                  {selectedLead.product_model && <span className="text-[10px] text-green-400 uppercase font-bold tracking-widest">• {selectedLead.product_model} {selectedLead.product_storage} ({selectedLead.product_condition})</span>}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedLead.stage}
-                onChange={(e) => {
-                  updateStage(selectedLead.phone, e.target.value);
-                  setSelectedLead({ ...selectedLead, stage: e.target.value });
-                }}
-                className="bg-indigo-900/40 border border-indigo-500/30 rounded-lg px-4 py-2 text-xs text-indigo-100 focus:ring-2 focus:ring-indigo-500 transition-all font-bold uppercase"
-              >
-                <option value="new">New Lead</option>
-                <option value="interested">Interested / Exploring</option>
-                <option value="quoted">Price Quoted</option>
-                <option value="location_collected">Delivery Set</option>
-                <option value="payment_submitted">Payment Received</option>
-                <option value="closed">Sale Completed</option>
-                <option value="lost">Lost / No Response</option>
-              </select>
-            </div>
+        /* Table */
+        <div className="card" style={{ overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <p className="section-label">All Products</p>
+            <button className="btn-primary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => { setForm({}); setEditingId(null); setPreviewId(null); setForm({ availability: true }); }}><Plus size={12} /> Add New</button>
           </div>
-
-          <div className="flex flex-col md:flex-row h-full gap-4 overflow-hidden min-h-[500px]">
-            {/* Left Panel: Details */}
-            <div className="w-full md:w-80 glass flex flex-col p-6 overflow-y-auto">
-              <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Lead Information</h3>
-
-              <div className="space-y-4">
-                <div className="glass p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider block mb-1">Product Interest</span>
-                  <p className="text-white text-sm font-medium">{selectedLead.product_model ? `${selectedLead.product_model} ${selectedLead.product_storage || ''}` : selectedLead.interest || 'Unknown'}</p>
-                </div>
-
-                <div className="glass p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold tracking-wider block mb-1">Delivery Location</span>
-                  <p className="text-white text-sm font-medium">{selectedLead.delivery_location || 'Not specified'}</p>
-                </div>
-
-                <div className="glass p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold tracking-wider block mb-1">Payment Method</span>
-                  <p className="text-green-400 font-mono text-sm">{selectedLead.payment_method || 'Not determined'}</p>
-                </div>
-
-                <div className="glass p-3 rounded-xl border border-white/5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold tracking-wider block mb-1">Last Contact</span>
-                  <p className="text-slate-300 font-mono text-sm">{format(new Date(selectedLead.last_contact), 'MMM dd, yyyy HH:mm')}</p>
-                </div>
-              </div>
-
-              {/* Admin Actions */}
-              <div className="mt-6 border-t border-white/10 pt-4">
-                <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-4">Admin Actions & Receipt</h3>
-
-                <div className="space-y-3 mb-4">
-                  <input placeholder="Transaction Code (e.g. QHJ82XZ)" className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white" value={receiptForm.transactionCode} onChange={e => setReceiptForm({ ...receiptForm, transactionCode: e.target.value })} />
-                  <input placeholder="Amount Paid (KES) (e.g. 50000)" type="number" className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white" value={receiptForm.amount} onChange={e => setReceiptForm({ ...receiptForm, amount: e.target.value })} />
-                  <div className="flex gap-2">
-                    <input placeholder="Storage (e.g 128GB)" className="w-1/2 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white" value={receiptForm.storage} onChange={e => setReceiptForm({ ...receiptForm, storage: e.target.value })} />
-                    <input placeholder="Condition (e.g New)" className="w-1/2 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white" value={receiptForm.condition} onChange={e => setReceiptForm({ ...receiptForm, condition: e.target.value })} />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2 drop-shadow-lg z-50">
-                  <button onClick={handleConfirmPaymentNoReceipt} className="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-white font-medium py-2 px-4 rounded-lg text-xs uppercase tracking-wider transition-all shadow-md">Record Payment (Save to OS)</button>
-                  <button onClick={handleSendReceipt} disabled={sendingReceipt} className="w-full bg-slate-100 hover:bg-white text-black font-semibold py-2 px-4 rounded-lg text-xs uppercase tracking-wider transition-all flex items-center justify-center shadow-lg disabled:opacity-50">
-                    {sendingReceipt ? 'Processing...' : 'Verify & Send Email Receipt'}
-                  </button>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Right Panel: Conversation */}
-            <div className="flex-1 glass flex flex-col border border-indigo-500/20 rounded-2xl overflow-hidden relative">
-              <div className="p-4 border-b border-white/10 bg-black/20 flex justify-between items-center">
-                <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                  <MessageSquare size={16} className="text-indigo-400" /> Conversation Log
-                </h3>
-                {loadingConversations && <RefreshCw size={14} className="text-slate-400 animate-spin" />}
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
-                {conversations.length === 0 && !loadingConversations && (
-                  <div className="m-auto text-center text-slate-500">
-                    <MessageSquare size={32} className="mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No recorded conversation yet.</p>
-                  </div>
-                )}
-                {conversations.map((row, i) => (
-                  <React.Fragment key={i}>
-                    {/* Customer Bubble */}
-                    {row.message && (
-                      <div className="flex flex-col max-w-[80%] self-start items-start">
-                        <div className="flex items-center gap-2 px-1 mb-1">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Customer</span>
-                          <span className="text-[9px] text-slate-600 font-mono">{format(new Date(row.created_at), 'HH:mm')}</span>
-                        </div>
-                        <div className="p-4 rounded-2xl text-sm bg-white/10 text-slate-200 border border-white/10 rounded-tl-sm">
-                          <p className="whitespace-pre-wrap">{row.message}</p>
-                        </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Specs</th>
+                  <th>Cash Price</th>
+                  {isLipa && <><th>Deposit</th><th>12W Plan</th><th>24W Plan</th></>}
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {phones.map(p => (
+                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setPreviewId(p.id)}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {p.image_url
+                          ? <img src={p.image_url} style={{ width: 36, height: 36, borderRadius: 7, objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }} alt={p['Phone Model']} />
+                          : <div style={{ width: 36, height: 36, background: 'var(--surface-2)', borderRadius: 7, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <Image size={14} style={{ color: 'var(--text-4)' }} />
+                          </div>
+                        }
+                        <span style={{ color: 'var(--text)', fontWeight: 500, fontSize: 13 }}>{p['Phone Model']}</span>
                       </div>
-                    )}
-
-                    {/* AI Agent Bubble */}
-                    {row.response && (
-                      <div className="flex flex-col max-w-[80%] self-end items-end mt-2">
-                        <div className="flex items-center gap-2 px-1 mb-1">
-                          <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Sales Agent</span>
-                          <span className="text-[9px] text-zinc-600 font-mono">{format(new Date(row.created_at), 'HH:mm')}</span>
-                        </div>
-                        <div className="p-4 rounded-2xl text-sm bg-indigo-600 text-white rounded-tr-sm shadow-md shadow-indigo-500/20">
-                          <p className="whitespace-pre-wrap">{row.response}</p>
-                          {(row.product_model || row.delivery_location || row.payment_method || row.email) && (
-                            <div className="mt-3 pt-3 border-t border-white/20 flex flex-wrap gap-2">
-                              {row.product_model && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded uppercase font-bold">Product: {row.product_model} {row.product_storage}</span>}
-                              {row.delivery_location && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded uppercase font-bold">Loc: {row.delivery_location}</span>}
-                              {row.payment_method && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded uppercase font-bold">Pay: {row.payment_method}</span>}
-                              {row.transaction_code && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded font-mono font-bold">{row.transaction_code}</span>}
-                              {row.email && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded font-mono">{row.email}</span>}
-                              {row.upsell_items && <span className="text-[9px] bg-white/20 px-2 py-0.5 rounded">Upsell: {row.upsell_items}</span>}
-                            </div>
-                          )}
-                        </div>
+                    </td>
+                    <td>{p.Specs}</td>
+                    <td style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontWeight: 600 }}>KES {fmt(p['Cash Price'])}</td>
+                    {isLipa && <>
+                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p.Deposit)}</td>
+                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['12 Weeks'])}</td>
+                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['24 Weeks'])}</td>
+                    </>}
+                    <td><span className={`badge ${p.availability ? 'badge-green' : 'badge-red'}`}>{p.availability ? 'In Stock' : 'Out of Stock'}</span></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setForm(p); setPreviewId(null); }}><Edit2 size={13} /></button>
+                        <button className="btn-icon danger" onClick={(e) => { e.stopPropagation(); del(p.id); }}><Trash2 size={13} /></button>
                       </div>
-                    )}
-                  </React.Fragment>
+                    </td>
+                  </tr>
                 ))}
-              </div>
-            </div>
+                {phones.length === 0 && (
+                  <tr><td colSpan={isLipa ? 8 : 6}>
+                    <div className="empty-state"><Package size={28} /><p>No products yet. Add your first product above.</p></div>
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -809,153 +660,428 @@ function LeadsTab() {
   );
 }
 
-function SettingsTab() {
-  const [config, setConfig] = useState<any>({});
-  const [saving, setSaving] = useState(false);
-  const [n8nStatus, setN8nStatus] = useState<string>('');
+// =============================================================================
+// LEADS / PIPELINE
+// =============================================================================
+function LeadsTab() {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Lead | null>(null);
+  const [convos, setConvos] = useState<ConversationLog[]>([]);
+  const [loadingConvos, setLoadingConvos] = useState(false);
+  const [receiptForm, setReceiptForm] = useState({ code: '', amount: '', storage: '', condition: '' });
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then(data => setConfig(data));
-  }, []);
+    if (selected) setReceiptForm({ code: selected.transaction_code || '', amount: selected.product_price || '', storage: selected.product_storage || '', condition: selected.product_condition || '' });
+  }, [selected]);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
-    });
-    setSaving(false);
-    alert('Settings saved successfully!');
+  const fetchLeads = () => {
+    setLoading(true);
+    fetch('/api/leads').then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
   };
 
-  const triggerN8n = async () => {
-    setN8nStatus('Triggering...');
+  useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 30000); return () => clearInterval(id); }, []);
+
+  const selectLead = (l: Lead) => {
+    setSelected(l); setLoadingConvos(true);
+    fetch(`/api/leads/${encodeURIComponent(l.phone)}/conversations`)
+      .then(r => r.json()).then(d => { if (!d.error) setConvos(d); }).finally(() => setLoadingConvos(false));
+  };
+
+  const updateStage = async (phone: string, stage: string) => {
+    await fetch(`/api/leads/${encodeURIComponent(phone)}/stage`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage }) });
+    fetchLeads();
+  };
+
+  const recordPayment = async (sendEmail: boolean) => {
+    if (!selected) return;
+    if (!receiptForm.code || !receiptForm.amount) { alert('Enter transaction code and amount.'); return; }
+    setBusy(true);
     try {
-      const res = await fetch('/api/n8n/trigger', { method: 'POST', body: JSON.stringify({ source: 'manual_dashboard_trigger' }), headers: { 'Content-Type': 'application/json' } });
-      const data = await res.json();
-      if (data.error) setN8nStatus('Error: ' + data.error);
-      else setN8nStatus('Triggered successfully!');
-    } catch (err: any) {
-      setN8nStatus('Failed: ' + err.message);
-    }
-    setTimeout(() => setN8nStatus(''), 5000);
+      await fetch('/api/payments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transaction_code: receiptForm.code, customer_phone: selected.phone,
+          customer_email: selected.email || '', customer_name: selected.customer_name || '',
+          amount: parseFloat(receiptForm.amount), payment_status: sendEmail ? 'completed' : 'confirmed',
+          payment_method: selected.payment_method || 'M-Pesa',
+          delivery_location: selected.delivery_location || 'Store Pickup',
+          product_model: selected.product_model || selected.interest || '',
+          product_storage: receiptForm.storage, product_condition: receiptForm.condition,
+          upsell_items: selected.upsell_items || '',
+        }),
+      });
+      if (sendEmail && selected.email?.includes('@')) {
+        const r = await fetch('https://builtwithaiautomations.app.n8n.cloud/webhook/send-receipt', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: selected.email, phone: selected.phone, name: selected.customer_name, product: selected.product_model, transactionCode: receiptForm.code, amount: receiptForm.amount }),
+        });
+        alert(r.ok ? 'Receipt sent!' : 'Payment saved. Receipt email failed — check N8N logs.');
+      } else {
+        alert('Payment recorded.');
+      }
+      await updateStage(selected.phone, 'payment_submitted');
+    } catch (e: any) { alert('Error: ' + e.message); }
+    finally { setBusy(false); }
   };
 
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-4xl flex flex-col gap-6">
-      <h2 className="text-2xl font-bold tracking-tight text-white mb-2">System Settings</h2>
-
-      <form onSubmit={handleSave} className="space-y-6">
-
-        {/* DB Section */}
-        <div className="glass p-6">
-          <h3 className="text-lg font-bold text-white mb-4 border-b border-white/10 pb-2">Supabase Settings</h3>
-          <div className="space-y-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] uppercase tracking-wider text-slate-400">Database Connection String</label>
-              <input type="password" required className="bg-black/20 border border-white/10 rounded px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 font-mono" value={config.SUPABASE_DATABASE_URL || ''} onChange={e => setConfig({ ...config, SUPABASE_DATABASE_URL: e.target.value })} />
+  // ── DETAIL VIEW ──
+  if (selected) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px)', gap: 16, maxWidth: 1100 }}>
+        {/* Header bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button className="btn-icon" onClick={() => { setSelected(null); setConvos([]); }}><ArrowLeft size={15} /></button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: '-0.02em' }}>{selected.customer_name || selected.phone}</span>
+              <span className={urgencyBadge(selected.urgency)}>{selected.urgency || 'low'}</span>
+              <span className="badge badge-neutral">{STAGES[selected.stage] || selected.stage}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 12, marginTop: 3, flexWrap: 'wrap' }}>
+              {selected.customer_name && <span className="mono" style={{ color: 'var(--text-3)', fontSize: 11 }}>{selected.phone}</span>}
+              {selected.email && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{selected.email}</span>}
             </div>
           </div>
+          <select className="inp" defaultValue={selected.stage} style={{ width: 'auto', fontSize: 12 }}
+            onChange={e => { updateStage(selected.phone, e.target.value); setSelected({ ...selected, stage: e.target.value }); }}>
+            {Object.entries(STAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
         </div>
 
-        {/* n8n Section */}
-        <div className="glass-accent p-6 flex flex-col gap-4">
-          <h3 className="text-lg font-bold text-indigo-100 flex items-center gap-2 mb-2 border-b border-indigo-500/30 pb-2">n8n Automation</h3>
-          <div className="space-y-4 mb-2">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] uppercase tracking-wider text-indigo-300">Webhook URL Template</label>
-              <input type="text" placeholder="https://your-n8n-domain/webhook/{id}" className="bg-black/20 border border-indigo-500/30 rounded px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-400 font-mono" value={config.N8N_API_URL || ''} onChange={e => setConfig({ ...config, N8N_API_URL: e.target.value })} />
-              <p className="text-[10px] text-indigo-300 mt-1">Use {'{id}'} where the workflow ID goes.</p>
+        <div style={{ flex: 1, display: 'flex', gap: 16, overflow: 'hidden', minHeight: 0 }}>
+          {/* Left: Details + Payment */}
+          <div className="card" style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 20 }}>
+            <p className="section-label" style={{ marginBottom: 14 }}>Lead Details</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {[
+                { label: 'Product', v: selected.product_model ? `${selected.product_model} ${selected.product_storage || ''}`.trim() : selected.interest },
+                { label: 'Condition', v: selected.product_condition },
+                { label: 'Price', v: selected.product_price ? `KES ${parseFloat(selected.product_price).toLocaleString()}` : undefined },
+                { label: 'Delivery', v: selected.delivery_location },
+                { label: 'Payment', v: selected.payment_method },
+                { label: 'Intent', v: selected.intent },
+                { label: 'Upsells', v: selected.upsell_items },
+                { label: 'Last Contact', v: format(new Date(selected.last_contact), 'MMM d, HH:mm') },
+              ].filter(f => f.v).map(f => (
+                <div key={f.label}>
+                  <div className="section-label" style={{ marginBottom: 2, fontSize: 9 }}>{f.label}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{f.v}</div>
+                </div>
+              ))}
             </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] uppercase tracking-wider text-indigo-300">Workflow ID</label>
-              <input type="text" className="bg-black/20 border border-indigo-500/30 rounded px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-400 font-mono" value={config.N8N_WORKFLOW_ID || ''} onChange={e => setConfig({ ...config, N8N_WORKFLOW_ID: e.target.value })} />
-            </div>
-          </div>
 
-          <div className="bg-indigo-900/40 rounded-lg p-4 border border-indigo-500/30 flex items-center justify-between">
-            <div>
-              <p className="font-bold text-indigo-100 text-sm">Trigger Workflow</p>
-              <p className="text-[11px] text-indigo-200/70">Manually trigger the connected n8n workflow for testing.</p>
-            </div>
-            <div className="flex items-center space-x-4">
-              {n8nStatus && <span className="text-[10px] font-bold text-indigo-300 uppercase">{n8nStatus}</span>}
-              <button type="button" onClick={triggerN8n} className="bg-indigo-500 hover:bg-indigo-400 text-white px-4 py-2 rounded text-xs font-bold transition-all uppercase tracking-widest shadow-lg shadow-indigo-500/20 flex items-center">
-                <Play className="w-3 h-3 mr-2" /> Run Now
+            <hr className="divider" style={{ margin: '18px 0' }} />
+            <p className="section-label" style={{ marginBottom: 12 }}>Record Payment</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input className="inp" placeholder="Transaction Code" value={receiptForm.code} onChange={e => setReceiptForm({ ...receiptForm, code: e.target.value })} />
+              <input className="inp" placeholder="Amount (KES)" type="number" value={receiptForm.amount} onChange={e => setReceiptForm({ ...receiptForm, amount: e.target.value })} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="inp" placeholder="Storage" value={receiptForm.storage} onChange={e => setReceiptForm({ ...receiptForm, storage: e.target.value })} />
+                <input className="inp" placeholder="Condition" value={receiptForm.condition} onChange={e => setReceiptForm({ ...receiptForm, condition: e.target.value })} />
+              </div>
+              <button className="btn-primary" style={{ marginTop: 4 }} disabled={busy} onClick={() => recordPayment(false)}>
+                {busy ? 'Saving…' : 'Save Payment'}
+              </button>
+              <button className="btn-ghost" disabled={busy} onClick={() => recordPayment(true)}>
+                Send Email Receipt
               </button>
             </div>
           </div>
+
+          {/* Right: Conversation */}
+          <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <p className="section-label">Conversation Log</p>
+              {loadingConvos && <RefreshCw size={12} className="spin" style={{ color: 'var(--text-4)' }} />}
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {convos.length === 0 && !loadingConvos && (
+                <div className="empty-state"><MessageSquare size={24} /><p>No conversation logs yet.</p></div>
+              )}
+              {convos.map((row, i) => (
+                <React.Fragment key={i}>
+                  {row.message && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                        Customer · {format(new Date(row.created_at), 'HH:mm')}
+                      </span>
+                      <div className="bubble-customer">{row.message}</div>
+                    </div>
+                  )}
+                  {row.response && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', alignSelf: 'flex-end' }}>
+                      <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                        Bot · {format(new Date(row.created_at), 'HH:mm')}
+                      </span>
+                      <div className="bubble-agent">
+                        <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{row.response}</p>
+                        {(row.product_model || row.delivery_location || row.payment_method) && (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #e5e5e5', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {row.product_model && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>📱 {row.product_model} {row.product_storage}</span>}
+                            {row.delivery_location && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>📍 {row.delivery_location}</span>}
+                            {row.payment_method && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>💳 {row.payment_method}</span>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
         </div>
+      </div>
+    );
+  }
 
-        <div className="flex justify-end pt-2 pb-8">
-          <button type="submit" disabled={saving} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-8 py-3 rounded-lg text-sm font-bold transition-all flex items-center shadow-md shadow-indigo-500/20">
-            <Save className="w-4 h-4 mr-2" /> {saving ? 'SAVING...' : 'SAVE ALL SETTINGS'}
-          </button>
-        </div>
-
-      </form>
-    </div>
-  );
-}
-
-function PaymentsTab({ payments }: { payments: Payment[] }) {
+  // ── LIST VIEW ──
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
-      <div className="flex items-center justify-between">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 920 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <h2 className="text-2xl font-bold text-white mb-1">Sales Engine</h2>
-          <p className="text-slate-400 text-sm">Automated sales tracking and revenue history.</p>
+          <h1 className="page-title">Pipeline</h1>
+          <p className="body-text" style={{ marginTop: 4 }}>{leads.length} contacts tracked</p>
         </div>
+        <button className="btn-ghost" onClick={fetchLeads} style={{ fontSize: 12 }}>
+          <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+        </button>
       </div>
 
-      <div className="glass overflow-hidden">
-        <table className="w-full text-left whitespace-nowrap">
-          <thead>
-            <tr className="border-b border-white/10 bg-white/5">
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Code</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Customer</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Product</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Amount</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Status</th>
-              <th className="py-3 px-6 font-medium text-slate-400 uppercase tracking-wider text-xs">Time</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5 text-sm">
-            {payments.map(py => (
-              <tr key={py.id} className="hover:bg-white/5 transition-colors border-b border-white/5 last:border-0">
-                <td className="py-4 px-6 font-mono text-indigo-300 text-xs">{py.transaction_code}</td>
-                <td className="py-4 px-6">
-                  <div className="flex flex-col">
-                    <span className="text-white font-medium">{py.customer_phone}</span>
-                    <span className="text-[10px] text-slate-500 font-mono italic">{py.customer_email || 'No email'}</span>
-                  </div>
-                </td>
-                <td className="py-4 px-6">
-                  <div className="flex flex-col">
-                    <span className="text-white text-xs font-bold">{py.product_model || 'Store Product'}</span>
-                    <span className="text-[10px] text-indigo-400 uppercase font-medium">{py.product_storage} {py.product_condition}</span>
-                  </div>
-                </td>
-                <td className="py-4 px-6 text-green-400 font-mono font-bold">KES {formatPrice(py.amount)}</td>
-                <td className="py-4 px-6">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] uppercase font-black border tracking-widest ${py.payment_status === 'confirmed' || py.payment_status === 'completed' ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'}`}>
-                    {py.payment_status === 'confirmed' ? 'SOLD' : py.payment_status.toUpperCase()}
-                  </span>
-                </td>
-                <td className="py-4 px-6 text-slate-500 font-mono text-xs">
-                  {format(new Date(py.created_at), 'MMM dd, HH:mm')}
-                </td>
-              </tr>
-            ))}
-            {payments.length === 0 && (
-              <tr><td colSpan={7} className="py-12 text-center text-slate-500 italic">No payments recorded yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+      {leads.length === 0 && (
+        <div className="card"><div className="empty-state"><MessageSquare size={28} /><p>No leads yet. They will appear here when customers message on WhatsApp.</p></div></div>
+      )}
+
+      {leads.map(lead => (
+        <div key={lead.id} className="lead-card" onClick={() => selectLead(lead)}>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            {/* Identity */}
+            <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, fontSize: 14, color: '#fff' }}>{lead.customer_name || lead.phone}</span>
+                <span className={urgencyBadge(lead.urgency)}>{lead.urgency || 'low'}</span>
+              </div>
+              {lead.customer_name && <div className="mono" style={{ color: 'var(--text-3)', fontSize: 11, marginBottom: 4 }}>{lead.phone}</div>}
+              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                {lead.product_model ? `${lead.product_model} ${lead.product_storage || ''}`.trim() : lead.interest || 'No product specified'}
+              </div>
+              {lead.delivery_location && <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>📍 {lead.delivery_location}</div>}
+            </div>
+
+            {/* Last message */}
+            <div style={{ flex: '2 1 300px', minWidth: 0 }}>
+              <div className="section-label" style={{ marginBottom: 6, fontSize: 9 }}>Last Message</div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-3)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.5 }}>
+                "{lead.last_message || 'No messages logged'}"
+              </p>
+            </div>
+
+            {/* Stage + actions */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>{format(new Date(lead.last_contact), 'MMM d, HH:mm')}</span>
+              <span className="badge badge-neutral">{STAGES[lead.stage] || lead.stage}</span>
+              <select className="inp" value={lead.stage} style={{ fontSize: 12, width: 'auto', padding: '5px 28px 5px 8px' }}
+                onClick={e => e.stopPropagation()}
+                onChange={e => { e.stopPropagation(); updateStage(lead.phone, e.target.value); }}>
+                {Object.entries(STAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// =============================================================================
+// SALES
+// =============================================================================
+function PaymentsTab({ payments }: { payments: Payment[] }) {
+  const confirmed = payments.filter(p => p.payment_status === 'confirmed' || p.payment_status === 'completed');
+  const total = confirmed.reduce((s, p) => s + Number(p.amount), 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100 }}>
+      <div>
+        <h1 className="page-title">Sales</h1>
+        <p className="body-text" style={{ marginTop: 4 }}>{confirmed.length} completed · KES {total.toLocaleString()} total revenue</p>
+      </div>
+      <div className="card" style={{ overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tbl">
+            <thead><tr><th>Code</th><th>Customer</th><th>Product</th><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody>
+              {payments.map(p => (
+                <tr key={p.id}>
+                  <td className="mono" style={{ color: 'var(--text-3)', fontSize: 11 }}>{p.transaction_code}</td>
+                  <td>
+                    <div style={{ color: 'var(--text)', fontWeight: 500, fontSize: 13 }}>{p.customer_name || p.customer_phone}</div>
+                    {p.customer_email && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.customer_email}</div>}
+                  </td>
+                  <td>
+                    <div style={{ color: 'var(--text)', fontSize: 13 }}>{p.product_model || '—'}</div>
+                    {(p.product_storage || p.product_condition) && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{[p.product_storage, p.product_condition].filter(Boolean).join(' · ')}</div>
+                    )}
+                  </td>
+                  <td style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontWeight: 700 }}>KES {fmt(p.amount)}</td>
+                  <td style={{ fontSize: 12, color: 'var(--text-2)' }}>{p.payment_method || '—'}</td>
+                  <td><span className={statusBadge(p.payment_status)}>{p.payment_status === 'confirmed' ? 'Sold' : p.payment_status}</span></td>
+                  <td className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{format(new Date(p.created_at), 'MMM d, HH:mm')}</td>
+                </tr>
+              ))}
+              {payments.length === 0 && (
+                <tr><td colSpan={7}><div className="empty-state"><DollarSign size={28} /><p>No sales recorded yet.</p></div></td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
+// =============================================================================
+// SETTINGS (CLIENT VIEW)
+// =============================================================================
+function SettingsTab() {
+  const [brand, setBrand] = useState('Shwari Agent');
+  const [users, setUsers] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    try {
+      const bRes = await fetch('/api/app-settings');
+      const bData = await bRes.json();
+      if (bData.brand_name) setBrand(bData.brand_name);
+
+      const uRes = await fetch('/api/profiles');
+      setUsers(await uRes.json());
+    } catch { }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const saveBrand = async () => {
+    setSaving(true);
+    await fetch('/api/app-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'brand_name', value: brand })
+    });
+    setSaving(false);
+  };
+
+  const removeUser = async (id: string) => {
+    if (!confirm('Revoke access for this user?')) return;
+    await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+    load();
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 800 }}>
+      <section>
+        <h1 className="page-title">General Settings</h1>
+        <p className="body-text">Manage your brand identity and public profile.</p>
+
+        <div className="card" style={{ marginTop: 24, padding: 24 }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Brand Name</label>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <input className="inp" value={brand} onChange={e => setBrand(e.target.value)} style={{ fontSize: 16 }} />
+            <button className="btn-primary" onClick={saveBrand} disabled={saving}>{saving ? '...' : 'Update'}</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+          <div>
+            <h2 style={{ fontSize: 20, color: '#fff', fontWeight: 600 }}>Team Access</h2>
+            <p className="body-text" style={{ marginTop: 4 }}>Manage who has access to this dashboard.</p>
+          </div>
+          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => alert('Refer to Supabase Auth to invite new users.')}><UserPlus size={14} /> Invite User</button>
+        </div>
+
+        <div className="card" style={{ marginTop: 20, overflow: 'hidden' }}>
+          {users.map((u, i) => (
+            <div key={u.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: i < users.length - 1 ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 32, height: 32, background: 'var(--border)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#fff' }}>
+                  {u.full_name?.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>{u.full_name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-4)' }}>{u.email}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <span style={{ fontSize: 10, background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{u.role}</span>
+                <button className="btn-ghost" style={{ color: '#ef4444', padding: 8 }} onClick={() => removeUser(u.id)}><LogOut size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div style={{ background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.1)', padding: 20, borderRadius: 12, display: 'flex', gap: 16 }}>
+        <Shield size={20} style={{ color: '#ef4444', flexShrink: 0 }} />
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>Security locked</div>
+          <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.5 }}>Technical configurations (API keys, Webhook URLs) are managed by the system administrator and are hidden for security.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// PAYWALL
+// =============================================================================
+function Paywall({ subscription, onPaymentSuccess }: { subscription: any, onPaymentSuccess: (ref: string) => void }) {
+  const payWithPaystack = () => {
+    // We expect the script to have loaded from the App useEffect
+    if (!(window as any).PaystackPop) {
+      alert('Paystack is still loading. Please wait a moment.');
+      return;
+    }
+
+    const handler = (window as any).PaystackPop.setup({
+      key: subscription?.paystack_public_key || (subscription as any).PAYSTACK_PUBLIC_KEY || 'pk_test_xxxxxxxxxxxxxxxxxxxxxxxx',
+      email: 'admin@shwaridevices.com',
+      amount: 1800000, // 18,000 * 100
+      currency: 'KES',
+      ref: 'SUB_' + Math.floor((Math.random() * 1000000000) + 1),
+      callback: function (response: any) {
+        onPaymentSuccess(response.reference);
+      },
+      onClose: function () {
+        alert('Payment window closed.');
+      }
+    });
+    handler.openIframe();
+  };
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, textAlign: 'center', background: 'radial-gradient(circle at center, #111 0%, #000 100%)' }}>
+      <div style={{ background: 'rgba(255,255,255,0.03)', padding: 48, borderRadius: 32, border: '1px solid rgba(255,255,255,0.08)', maxWidth: 500 }}>
+        <div style={{ width: 64, height: 64, background: 'rgba(239, 68, 68, 0.1)', borderRadius: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px' }}>
+          <Lock size={32} style={{ color: '#ef4444' }} />
+        </div>
+        <h1 style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 12 }}>Dashboard Locked</h1>
+        <p style={{ color: 'var(--text-3)', fontSize: 16, lineHeight: 1.6, marginBottom: 32 }}>
+          Your subscription expired on <b>{subscription?.expiry_date ? format(new Date(subscription.expiry_date), 'PPP') : 'Unknown Date'}</b>.
+          The Shwari Agent is still processing messages, but you must renew to access your leads and inventory.
+        </p>
+        <div className="card" style={{ background: 'rgba(255,255,255,0.05)', padding: 20, marginBottom: 32, textAlign: 'left' }}>
+          <div style={{ fontSize: 12, textTransform: 'uppercase', color: 'var(--text-4)', fontWeight: 700, letterSpacing: '0.1em' }}>Renewal Fee</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: '#fff', marginTop: 4 }}>18,000 KES <span style={{ fontSize: 14, color: 'var(--text-3)', fontWeight: 400 }}>/ month</span></div>
+        </div>
+        <button onClick={payWithPaystack} className="btn-primary" style={{ width: '100%', height: 56, fontSize: 16, fontWeight: 700, gap: 10 }}>
+          <CreditCard size={18} /> Renew Subscription Now
+        </button>
+        <p style={{ marginTop: 24, fontSize: 12, color: 'var(--text-4)' }}>Secured by Paystack. Access is restored instantly after payment.</p>
+      </div>
+    </div>
+  );
+}

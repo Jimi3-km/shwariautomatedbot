@@ -5,8 +5,15 @@ import 'dotenv/config';
 export let config = {
   PORT: process.env.PORT || '3000',
   SUPABASE_DATABASE_URL: process.env.SUPABASE_DATABASE_URL || '',
+  SUPABASE_URL: process.env.SUPABASE_URL || '',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
   // Dashboard & N8N Webhook integrations
   N8N_API_URL: process.env.N8N_API_URL || '',
+  // Paystack & Billing
+  PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY || '',
+  PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
+  SUBSCRIPTION_PRICE: 18000,
 };
 
 export function updateConfig(newConfig: Record<string, string>) {

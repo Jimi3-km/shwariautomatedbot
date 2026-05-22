@@ -2,9 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import 'dotenv/config';
-import { getPool, initDb } from './src/db.js';
+import { getPool, initDb, resetPool } from './src/db.js';
 import { config, updateConfig } from './src/config.js';
 import axios from 'axios';
+import multer from 'multer';
+import { createClient } from '@supabase/supabase-js';
+
+const upload = multer({ storage: multer.memoryStorage() });
+const supabase = config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY)
+  : null;
 
 const app = express();
 const PORT = parseInt(config.PORT, 10) || 3000;
@@ -26,9 +33,136 @@ app.get('/api/settings', (req, res) => {
   res.json(config);
 });
 
-app.post('/api/settings', (req, res) => {
-  updateConfig(req.body);
+app.get('/api/public-env', (req, res) => {
+  res.json({ SUPABASE_URL: config.SUPABASE_URL, SUPABASE_ANON_KEY: config.SUPABASE_ANON_KEY });
+});
+
+app.post('/api/settings', async (req, res) => {
+  // Only developer should set these via ENV or manual SQL, but we keep a restricted update
+  const allowedKeys = ['N8N_API_URL'];
+  const update: any = {};
+  for (const k of allowedKeys) if (req.body[k]) update[k] = req.body[k];
+  updateConfig(update);
+  await resetPool();
   res.json({ success: true, config });
+});
+
+// ----------------------------------------------------
+// APP SETTINGS (BRAND)
+// ----------------------------------------------------
+app.get('/api/app-settings', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT * FROM app_settings');
+    const settings = rows.reduce((acc: any, curr: any) => ({ ...acc, [curr.key]: curr.value }), {});
+    res.json(settings);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/app-settings', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { key, value } = req.body;
+    await pool.query('INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()', [key, value]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ----------------------------------------------------
+// PROFILES / USERS
+// ----------------------------------------------------
+app.get('/api/profiles', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT * FROM profiles ORDER BY created_at ASC');
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/profiles/sync', async (req, res) => {
+  try {
+    const { id, email, full_name } = req.body;
+    const pool = getPool();
+    await pool.query('INSERT INTO profiles (id, email, full_name) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name, updated_at = NOW()', [id, email, full_name]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/profiles/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    await pool.query('DELETE FROM profiles WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ----------------------------------------------------
+// SUBSCRIPTION / PAYWALL API
+// ----------------------------------------------------
+async function getSubscriptionStatus() {
+  const pool = getPool();
+  // Check first row
+  const { rows } = await pool.query('SELECT * FROM subscriptions LIMIT 1');
+  if (rows.length === 0) return null;
+
+  let sub = rows[0];
+  const now = new Date();
+  const expiry = new Date(sub.expiry_date);
+
+  // Auto-expire if past date
+  if (sub.status === 'active' && expiry < now) {
+    await pool.query("UPDATE subscriptions SET status = 'expired' WHERE id = $1", [sub.id]);
+    sub.status = 'expired';
+  }
+  return sub;
+}
+
+app.get('/api/subscription', async (req, res) => {
+  try {
+    const sub = await getSubscriptionStatus();
+    res.json(sub);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/subscription/verify', async (req, res) => {
+  const { reference } = req.body;
+  if (!reference) return res.status(400).json({ error: 'Reference required' });
+
+  try {
+    const pool = getPool();
+    // 1. Verify with Paystack
+    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: { Authorization: `Bearer ${config.PAYSTACK_SECRET_KEY}` }
+    });
+
+    if (response.data.status && response.data.data.status === 'success') {
+      const amountPaid = response.data.data.amount / 100; // in KES
+
+      // Basic validation: Check if amount >= 18000
+      if (amountPaid < config.SUBSCRIPTION_PRICE) {
+        return res.status(400).json({ error: `Insufficient amount. Expected ${config.SUBSCRIPTION_PRICE}` });
+      }
+
+      // 2. Extend subscription (30 days from now or extend existing)
+      const currentSub = await getSubscriptionStatus();
+      const newExpiry = new Date();
+      newExpiry.setDate(newExpiry.getDate() + 30);
+
+      const result = await pool.query(
+        "UPDATE subscriptions SET status = 'active', expiry_date = $1, last_payment_date = NOW(), paystack_reference = $2 WHERE id = $3 RETURNING *",
+        [newExpiry, reference, currentSub.id]
+      );
+
+      res.json({ success: true, subscription: result.rows[0] });
+    } else {
+      res.status(400).json({ error: 'Transaction verification failed' });
+    }
+  } catch (e) {
+    console.error('Paystack verification error:', e);
+    res.status(500).json({ error: 'Verification error' });
+  }
 });
 
 // ----------------------------------------------------
@@ -39,6 +173,11 @@ const getTableName = (category: any) => validTables.includes(category as string)
 
 app.get('/api/pricelist', async (req, res) => {
   try {
+    const sub = await getSubscriptionStatus();
+    if (sub && sub.status === 'expired') {
+      return res.status(402).json({ error: 'Payment Required' });
+    }
+
     const tableName = getTableName(req.query.category);
     const pool = getPool();
     const { rows } = await pool.query(`SELECT * FROM ${tableName} ORDER BY id ASC`);
@@ -49,15 +188,28 @@ app.get('/api/pricelist', async (req, res) => {
   }
 });
 
-app.post('/api/pricelist', async (req, res) => {
+app.post('/api/pricelist', upload.single('photo'), async (req, res) => {
   try {
     const tableName = getTableName(req.query.category);
     const pool = getPool();
 
-    const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "3 Months Plan": p3m, "12 Weeks": w12, "Deposit_1": dep1, "6 Months Plan": p6m, "24 Weeks": w24, availability, notes } = req.body;
+    let final_image_url = req.body.image_url;
+    if (req.file && supabase) {
+      const fileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+      const { data, error } = await supabase.storage.from('product-images').upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+      });
+      if (!error) {
+        final_image_url = supabase.storage.from('product-images').getPublicUrl(fileName).data.publicUrl;
+      } else {
+        console.error('Supabase upload error:', error);
+      }
+    }
+
+    const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "12 Weeks": w12, "Deposit_1": dep1, "24 Weeks": w24, availability, notes } = req.body;
     const result = await pool.query(
-      `INSERT INTO ${tableName} ("Phone Model", "Specs", "Cash Price", "Deposit", "3 Months Plan", "12 Weeks", "Deposit_1", "6 Months Plan", "24 Weeks", availability, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [phone_model, specs, cash_price, deposit, p3m, w12, dep1, p6m, w24, availability, notes]
+      `INSERT INTO ${tableName} ("Phone Model", "Specs", "Cash Price", "Deposit", "12 Weeks", "Deposit_1", "24 Weeks", availability, notes, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [phone_model, specs, cash_price, deposit, w12, dep1, w24, availability, notes, final_image_url]
     );
     res.json(result.rows[0]);
   } catch (e) {
@@ -66,16 +218,29 @@ app.post('/api/pricelist', async (req, res) => {
   }
 });
 
-app.put('/api/pricelist/:id', async (req, res) => {
+app.put('/api/pricelist/:id', upload.single('photo'), async (req, res) => {
   try {
     const tableName = getTableName(req.query.category);
     const { id } = req.params;
     const pool = getPool();
 
-    const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "3 Months Plan": p3m, "12 Weeks": w12, "Deposit_1": dep1, "6 Months Plan": p6m, "24 Weeks": w24, availability, notes } = req.body;
+    let final_image_url = req.body.image_url;
+    if (req.file && supabase) {
+      const fileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+      const { data, error } = await supabase.storage.from('product-images').upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+      });
+      if (!error) {
+        final_image_url = supabase.storage.from('product-images').getPublicUrl(fileName).data.publicUrl;
+      } else {
+        console.error('Supabase upload error:', error);
+      }
+    }
+
+    const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "12 Weeks": w12, "Deposit_1": dep1, "24 Weeks": w24, availability, notes } = req.body;
     const result = await pool.query(
-      `UPDATE ${tableName} SET "Phone Model"=$1, "Specs"=$2, "Cash Price"=$3, "Deposit"=$4, "3 Months Plan"=$5, "12 Weeks"=$6, "Deposit_1"=$7, "6 Months Plan"=$8, "24 Weeks"=$9, availability=$10, notes=$11, updated_at=CURRENT_TIMESTAMP WHERE id=$12 RETURNING *`,
-      [phone_model, specs, cash_price, deposit, p3m, w12, dep1, p6m, w24, availability, notes, id]
+      `UPDATE ${tableName} SET "Phone Model"=$1, "Specs"=$2, "Cash Price"=$3, "Deposit"=$4, "12 Weeks"=$5, "Deposit_1"=$6, "24 Weeks"=$7, availability=$8, notes=$9, image_url=$10, updated_at=CURRENT_TIMESTAMP WHERE id=$11 RETURNING *`,
+      [phone_model, specs, cash_price, deposit, w12, dep1, w24, availability, notes, final_image_url, id]
     );
     res.json(result.rows[0]);
   } catch (e) {
@@ -102,9 +267,15 @@ app.delete('/api/pricelist/:id', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/leads', async (req, res) => {
   try {
+    const sub = await getSubscriptionStatus();
+    if (sub && sub.status === 'expired') {
+      return res.status(402).json({ error: 'Payment Required' });
+    }
+
     const pool = getPool();
     const { rows } = await pool.query(`
         SELECT l.*, 
+               (SELECT customer_name FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.customer_name IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_customer_name,
                (SELECT product_model FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_model IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_model,
                (SELECT product_storage FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_storage IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_storage,
                (SELECT delivery_location FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.delivery_location IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_delivery_location,
@@ -116,6 +287,7 @@ app.get('/api/leads', async (req, res) => {
 
     const processedRows = rows.map((r: any) => ({
       ...r,
+      customer_name: r.derived_customer_name || r.customer_name,
       delivery_location: r.derived_delivery_location || r.delivery_location,
       payment_method: r.derived_payment_method || r.payment_method,
       email: r.derived_email || r.email
@@ -128,6 +300,11 @@ app.get('/api/leads', async (req, res) => {
 
 app.get('/api/stats', async (req, res) => {
   try {
+    const sub = await getSubscriptionStatus();
+    if (sub && sub.status === 'expired') {
+      return res.status(402).json({ error: 'Payment Required' });
+    }
+
     const pool = getPool();
 
     let inStockTotal = 0;
@@ -240,6 +417,7 @@ app.post('/api/payments', async (req, res) => {
       `INSERT INTO payments (
           transaction_code, 
           customer_phone, 
+          customer_name,
           customer_email,
           amount, 
           payment_status, 
@@ -250,7 +428,7 @@ app.post('/api/payments', async (req, res) => {
           product_condition,
           upsell_items
         ) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
          ON CONFLICT (transaction_code) DO UPDATE SET
           payment_status = EXCLUDED.payment_status,
           updated_at = NOW()
@@ -258,6 +436,7 @@ app.post('/api/payments', async (req, res) => {
       [
         transaction_code,
         customer_phone,
+        req.body.customer_name || '',
         customer_email,
         amount,
         payment_status || 'pending',
