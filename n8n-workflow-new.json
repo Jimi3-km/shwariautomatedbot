@@ -1,0 +1,79 @@
+{
+    "nodes": [
+        {
+            "parameters": {
+                "path": "dashboard-data",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "c18543be-21b2-4d75-b47d-30c3e2b0d392",
+            "name": "Dashboard API",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2.1,
+            "position": [
+                -880,
+                1024
+            ],
+            "webhookId": "106f2a14-545a-4912-8da4-f49a13adcd12"
+        },
+        {
+            "parameters": {
+                "operation": "getAll",
+                "tableId": "leads",
+                "returnAll": true,
+                "filterType": "none"
+            },
+            "id": "143d6007-a171-4148-87b8-96ce94fa1213",
+            "name": "Get Dashboard Data",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                -656,
+                1024
+            ],
+            "credentials": {
+                "supabaseApi": {
+                    "id": "yIayqtqJTyKRcZws",
+                    "name": "Supabase account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const leads = $input.all().map(item => item.json);\n\nconst stats = {\n  total: leads.length,\n  highValue: leads.filter(l => l.urgency === \"high\").length,\n  mediumValue: leads.filter(l => l.urgency === \"medium\").length,\n  lowValue: leads.filter(l => l.urgency === \"low\").length,\n  byIntent: {\n    pricing: leads.filter(l => l.intent === \"pricing\").length,\n    serious_buyer: leads.filter(l => l.intent === \"serious_buyer\").length,\n    availability: leads.filter(l => l.intent === \"availability\").length,\n    browsing: leads.filter(l => l.intent === \"browsing\").length,\n    spam: leads.filter(l => l.intent === \"spam\").length\n  },\n  byStage: {\n    new: leads.filter(l => l.stage === \"new\").length,\n    engaged: leads.filter(l => l.stage === \"engaged\").length,\n    hot: leads.filter(l => l.stage === \"hot\").length,\n    closed: leads.filter(l => l.stage === \"closed\").length\n  }\n};\n\nreturn [{\n  json: {\n    success: true,\n    timestamp: new Date().toISOString(),\n    stats: stats,\n    leads: leads.slice(0, 50)\n  }\n}];"
+            },
+            "id": "c507c510-e75f-422c-8967-713163f85dd3",
+            "name": "Format Dashboard Response",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                -432,
+                1024
+            ]
+        }
+    ],
+    "connections": {
+        "Dashboard API": {
+            "main": [
+                [
+                    {
+                        "node": "Get Dashboard Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Dashboard Data": {
+            "main": [
+                [
+                    {
+                        "node": "Format Dashboard Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

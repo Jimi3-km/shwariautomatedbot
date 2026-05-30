@@ -26,6 +26,21 @@ type Phone = {
   created_at?: string;
 };
 
+type Accessory = {
+  id: string;
+  brand: string;
+  accessory_name: string;
+  price: number;
+  currency: string;
+  stock: number;
+  description?: string;
+  image_url?: string;
+  is_featured: boolean;
+  is_available: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 type Lead = {
   id: number;
   phone: string;
@@ -116,7 +131,7 @@ const statusBadge = (s: string) =>
 const NAV = [
   { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
   { id: 'pricelist', label: 'Inventory', icon: <Smartphone size={15} /> },
-  { id: 'leads', label: 'Pipeline', icon: <Users size={15} /> },
+  { id: 'leads', label: 'Leads', icon: <Users size={15} /> },
   { id: 'payments', label: 'Sales', icon: <DollarSign size={15} /> },
   { id: 'settings', label: 'Settings', icon: <SettingsIcon size={15} /> },
 ];
@@ -124,6 +139,24 @@ const NAV = [
 import { createClient } from '@supabase/supabase-js';
 
 export let supabase: any = null;
+
+// =============================================================================
+// AUTH FETCH — wraps fetch with JWT bearer token
+// =============================================================================
+async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
+  const headers: any = { ...(opts.headers || {}) };
+  if (supabase) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+  }
+  // Don't set Content-Type for FormData (browser sets multipart boundary)
+  if (!(opts.body instanceof FormData) && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return fetch(url, { ...opts, headers });
+}
 
 // =============================================================================
 // AUTH
@@ -203,6 +236,8 @@ function Dashboard() {
   const [subscription, setSubscription] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [brandName, setBrandName] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     // 1. Load Paystack
@@ -213,12 +248,12 @@ function Dashboard() {
 
     // 2. Auth Listener
     if (supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
+      supabase.auth.getSession().then(({ data: { session } }: any) => {
         setUser(session?.user ?? null);
         if (session?.user) syncProfile(session.user);
       });
 
-      const { data: { subscription: authListener } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: { subscription: authListener } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
         setUser(session?.user ?? null);
         if (session?.user) syncProfile(session.user);
       });
@@ -226,40 +261,82 @@ function Dashboard() {
     }
   }, []);
 
+  const fetchPayments = async () => {
+    try {
+      const r = await authFetch('/api/payments');
+      if (r.ok) setPayments(await r.json());
+    } catch { }
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/api/subscription');
+        const res = await authFetch('/api/subscription');
         if (res.ok) setSubscription(await res.json());
       } catch (e) { console.error(e); }
 
-      try { const r = await fetch('/api/payments'); if (r.ok) setPayments(await r.json()); } catch { }
+      await fetchPayments();
+
+      // Load brand settings
+      try {
+        const br = await authFetch('/api/app-settings');
+        if (br.ok) {
+          const data = await br.json();
+          const name = data.brand_name || '';
+          setBrandName(name);
+          if (!name || name === 'Shwari Agent' || !data.brand_phone) setShowOnboarding(true);
+        }
+      } catch { }
+
       setLoading(false);
     };
-    if (user) load();
+    if (user) {
+      load();
+      const id = setInterval(fetchPayments, 60000); // Refresh sales every minute
+      return () => clearInterval(id);
+    }
     else setLoading(false);
   }, [user]);
 
-  const syncProfile = (u: any) => {
-    fetch('/api/profiles/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: u.id, email: u.email, full_name: u.user_metadata?.full_name || u.email.split('@')[0] })
-    }).catch(console.error);
+  const syncProfile = async (u: any) => {
+    try {
+      await authFetch('/api/profiles/sync', {
+        method: 'POST',
+        body: JSON.stringify({ id: u.id, email: u.email, full_name: u.user_metadata?.full_name || u.email.split('@')[0] })
+      });
+    } catch (e) { console.error(e); }
   };
 
-  if (loading) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#fff' }}>Loading Shwari...</div>;
-  if (!user) return <LoginScreen />;
+  const completeOnboarding = async (data: { name: string, phone: string, address: string }) => {
+    await authFetch('/api/app-settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: 'brand_name', value: data.name })
+    });
+    await authFetch('/api/app-settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: 'brand_phone', value: data.phone })
+    });
+    await authFetch('/api/app-settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: 'brand_address', value: data.address })
+    });
+    setBrandName(data.name);
+    setShowOnboarding(false);
+  };
 
-  const isExpired = subscription?.status === 'expired';
-  const daysLeft = subscription?.expiry_date ? differenceInDays(new Date(subscription.expiry_date), new Date()) : 30;
-  const showReminder = !isExpired && daysLeft <= 3 && daysLeft >= 0;
+  if (loading) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#fff' }}>Loading Dashboard...</div>;
+  if (!user) return <LoginScreen />;
+  if (showOnboarding) return <OnboardingScreen onComplete={completeOnboarding} defaultName={brandName} userEmail={user.email} />;
+
+  const isGodmode = user?.email === 'jameskoikai04@gmail.com';
+  const isExpired = !isGodmode && subscription?.status === 'expired';
+  const daysLeft = isGodmode ? 9999 : (subscription?.expiry_date ? differenceInDays(new Date(subscription.expiry_date), new Date()) : 30);
+  const showReminder = !isGodmode && !isExpired && daysLeft <= 3 && daysLeft >= 0;
 
   const handlePaymentSuccess = async (ref: string) => {
     try {
-      const res = await fetch('/api/subscription/verify', {
+      const res = await authFetch('/api/subscription/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reference: ref })
       });
       if (res.ok) window.location.reload();
@@ -275,10 +352,13 @@ function Dashboard() {
         <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 28, height: 28, background: '#fff', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <span style={{ fontWeight: 800, fontSize: 13, color: '#000', lineHeight: 1 }}>S</span>
+              <span style={{ fontWeight: 800, fontSize: 13, color: '#000', lineHeight: 1 }}>{(brandName || 'S').charAt(0).toUpperCase()}</span>
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', letterSpacing: '-0.02em' }}>Shwari iPhones</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', letterSpacing: '-0.02em' }}>{brandName || 'Dashboard'}</div>
+                {isGodmode && <span style={{ fontSize: 9, background: '#fff', color: '#000', padding: '1px 5px', borderRadius: 4, fontWeight: 800, textTransform: 'uppercase' }}>Unlimited</span>}
+              </div>
               <div className="section-label" style={{ marginTop: 1, fontSize: 9 }}>Operations Hub</div>
             </div>
           </div>
@@ -302,9 +382,10 @@ function Dashboard() {
           </div>
         </div>
 
-        <div style={{ padding: '0 12px', marginTop: 'auto', marginBottom: 20 }}>
-          <button onClick={() => supabase?.auth.signOut()} className="nav-item" style={{ width: '100%', color: '#ef4444' }}>
-            <LogOut size={16} /> <span>Sign Out</span>
+        {/* Logout */}
+        <div style={{ padding: '8px 16px 16px' }}>
+          <button className="btn-ghost" style={{ width: '100%', fontSize: 12, justifyContent: 'center' }} onClick={async () => { await supabase.auth.signOut(); setUser(null); }}>
+            <LogOut size={13} /> Sign Out
           </button>
         </div>
       </aside>
@@ -345,11 +426,70 @@ function Dashboard() {
 }
 
 // =============================================================================
+// ONBOARDING SCREEN
+// =============================================================================
+function OnboardingScreen({ onComplete, defaultName, userEmail }: { onComplete: (data: { name: string, phone: string, address: string }) => void, defaultName: string, userEmail: string }) {
+  const [name, setName] = useState(defaultName || '');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setLoading(true);
+    await onComplete({ name, phone, address });
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', padding: 20 }}>
+      <div className="card" style={{ width: '100%', maxWidth: 500, padding: 40 }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ width: 48, height: 48, background: '#fff', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <Smartphone size={24} style={{ color: '#000' }} />
+          </div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>Welcome to Shwari</h1>
+          <p style={{ fontSize: 14, color: 'var(--text-4)', marginTop: 8 }}>Let's set up your business profile</p>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Business Name</label>
+            <input className="inp" required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Shwari iPhones" style={{ fontSize: 16 }} />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Contact Phone</label>
+              <input className="inp" required value={phone} onChange={e => setPhone(e.target.value)} placeholder="+254..." />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Business City</label>
+              <input className="inp" required value={address} onChange={e => setAddress(e.target.value)} placeholder="Nairobi" />
+            </div>
+          </div>
+
+          <div style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 12, border: '1px solid var(--border)' }}>
+            <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>Account Email</p>
+            <p style={{ fontSize: 14, color: '#fff', fontWeight: 500 }}>{userEmail}</p>
+          </div>
+
+          <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: 8, height: 48, fontSize: 15 }} disabled={loading}>
+            {loading ? 'Setting up...' : 'Complete Setup'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // OVERVIEW
 // =============================================================================
 function OverviewTab({ onNavigate, payments }: { onNavigate: (t: string) => void; payments: Payment[] }) {
   const [stats, setStats] = useState<any>({});
-  useEffect(() => { fetch('/api/stats').then(r => r.json()).then(d => { if (!d.error) setStats(d); }).catch(() => { }); }, []);
+  useEffect(() => { authFetch('/api/stats').then(r => r.json()).then(d => { if (!d.error) setStats(d); }).catch(() => { }); }, []);
 
   const kpis = [
     { label: 'Revenue', value: `KES ${(stats.totalRevenue || 0).toLocaleString()}`, sub: 'Confirmed sales', icon: <TrendingUp size={15} /> },
@@ -422,10 +562,10 @@ function OverviewTab({ onNavigate, payments }: { onNavigate: (t: string) => void
 // PRICELIST / INVENTORY
 // =============================================================================
 function PricelistTab() {
-  const [phones, setPhones] = useState<Phone[]>([]);
-  const [form, setForm] = useState<Partial<Phone> & { photoFile?: File }>({});
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [previewId, setPreviewId] = useState<number | null>(null);
+  const [phones, setPhones] = useState<any[]>([]);
+  const [form, setForm] = useState<any>({});
+  const [editingId, setEditingId] = useState<string | number | null>(null);
+  const [previewId, setPreviewId] = useState<string | number | null>(null);
   const [category, setCategory] = useState('general_pricelist');
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -433,7 +573,7 @@ function PricelistTab() {
   useEffect(() => { load(); }, [category]);
 
   const load = () =>
-    fetch(`/api/pricelist?category=${category}`).then(r => r.json()).then(d => { if (!d.error) setPhones(d); }).catch(() => { });
+    authFetch(`/api/pricelist?category=${category}`).then(r => r.json()).then(d => { if (!d.error) setPhones(d); }).catch(() => { });
 
   const reset = () => { setForm({}); setEditingId(null); setPreviewId(null); if (fileRef.current) fileRef.current.value = ''; };
 
@@ -446,8 +586,13 @@ function PricelistTab() {
         if (k === 'photoFile' && v) fd.append('photo', v as File);
         else if (k !== 'photoFile' && v !== undefined && v !== null) fd.append(k, String(v));
       });
-      fd.set('availability', form.availability !== false ? 'true' : 'false');
-      const r = await fetch(url, { method: editingId ? 'PUT' : 'POST', body: fd });
+      // Handle boolean availability/stock
+      if (category === 'accessories') {
+        fd.set('is_available', form.is_available !== false ? 'true' : 'false');
+      } else {
+        fd.set('availability', form.availability !== false ? 'true' : 'false');
+      }
+      const r = await authFetch(url, { method: editingId ? 'PUT' : 'POST', body: fd });
       const json = await r.json();
       if (!r.ok || json.error) throw new Error(json.error || 'Save failed');
       reset(); load();
@@ -455,13 +600,20 @@ function PricelistTab() {
     finally { setSaving(false); }
   };
 
-  const del = async (id: number) => {
-    if (!confirm('Delete this product?')) return;
-    await fetch(`/api/pricelist/${id}?category=${category}`, { method: 'DELETE' });
+  const del = async (id: string | number) => {
+    if (!confirm('Delete this item?')) return;
+    await authFetch(`/api/pricelist/${id}?category=${category}`, { method: 'DELETE' });
     load();
   };
 
   const isLipa = category === 'lipa_mdogo_mdogo';
+  const isAcc = category === 'accessories';
+
+  const categoryLabels: Record<string, string> = {
+    general_pricelist: 'General',
+    lipa_mdogo_mdogo: 'Lipa Mdogo',
+    accessories: 'Accessories'
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100 }}>
@@ -469,10 +621,10 @@ function PricelistTab() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 className="page-title">Inventory</h1>
-          <p className="body-text" style={{ marginTop: 4 }}>{phones.length} products in {isLipa ? 'Lipa Mdogo Mdogo' : 'General'} pricelist</p>
+          <p className="body-text" style={{ marginTop: 4 }}>{phones.length} products in {categoryLabels[category]} pricelist</p>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          {[['general_pricelist', 'General'], ['lipa_mdogo_mdogo', 'Lipa Mdogo']].map(([id, label]) => (
+          {Object.entries(categoryLabels).map(([id, label]) => (
             <button key={id} onClick={() => { setCategory(id); setPreviewId(null); setEditingId(null); }} style={{
               background: category === id ? '#fff' : 'transparent',
               color: category === id ? '#000' : 'var(--text-3)',
@@ -487,11 +639,14 @@ function PricelistTab() {
       {previewId ? (() => {
         const p = phones.find(x => x.id === previewId);
         if (!p) return null;
+        const title = isAcc ? p.accessory_name : p['Phone Model'];
+        const sub = isAcc ? p.brand : p.Specs;
+
         return (
           <div className="card" style={{ padding: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 300px', maxWidth: 400 }}>
               {p.image_url ? (
-                <img src={p.image_url} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 12, border: '1px solid var(--border)' }} alt={p['Phone Model']} />
+                <img src={p.image_url} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 12, border: '1px solid var(--border)' }} alt={title} />
               ) : (
                 <div style={{ width: '100%', aspectRatio: '1', background: 'var(--surface-2)', borderRadius: 12, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-4)' }}>
                   <Image size={48} />
@@ -501,23 +656,30 @@ function PricelistTab() {
             <div style={{ flex: '2 1 300px', display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--white)', letterSpacing: '-0.03em', lineHeight: 1.2 }}>{p['Phone Model']}</h2>
-                  <p style={{ color: 'var(--text-3)', fontSize: 14, marginTop: 4 }}>{p.Specs}</p>
+                  <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--white)', letterSpacing: '-0.03em', lineHeight: 1.2 }}>{title}</h2>
+                  <p style={{ color: 'var(--text-3)', fontSize: 14, marginTop: 4 }}>{sub}</p>
                 </div>
                 <button className="btn-icon" onClick={() => setPreviewId(null)}><X size={15} /></button>
               </div>
 
               <div style={{ display: 'flex', gap: 8, marginTop: -4 }}>
-                <span className={`badge ${p.availability ? 'badge-green' : 'badge-red'}`}>{p.availability ? 'In Stock' : 'Out of Stock'}</span>
+                <span className={`badge ${((isAcc ? p.is_available : p.availability) !== false) ? 'badge-green' : 'badge-red'}`}>{((isAcc ? p.is_available : p.availability) !== false) ? 'In Stock' : 'Out of Stock'}</span>
+                {isAcc && p.is_featured && <span className="badge badge-purple">Featured</span>}
               </div>
 
               <div style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginTop: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Pricing Details</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px' }}>
                   <div>
-                    <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Cash Price</div>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>KES {fmt(p['Cash Price'])}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-4)' }}>{isAcc ? 'Price' : 'Cash Price'}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>KES {fmt(isAcc ? p.price : p['Cash Price'])}</div>
                   </div>
+                  {isAcc && (
+                    <div>
+                      <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Stock Status</div>
+                      <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>{p.stock} Units</div>
+                    </div>
+                  )}
                   {isLipa && (
                     <>
                       <div>
@@ -541,10 +703,10 @@ function PricelistTab() {
                 </div>
               </div>
 
-              {p.notes && (
+              {(p.notes || p.description) && (
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Notes</div>
-                  <p style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5, background: 'var(--surface-2)', padding: 12, borderRadius: 8, border: '1px solid var(--border)' }}>{p.notes}</p>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Notes & Info</div>
+                  <p style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5, background: 'var(--surface-2)', padding: 12, borderRadius: 8, border: '1px solid var(--border)' }}>{p.notes || p.description}</p>
                 </div>
               )}
 
@@ -564,16 +726,27 @@ function PricelistTab() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8, marginBottom: 12 }}>
-            <input className="inp" placeholder="Model (e.g. iPhone 15 Pro)" value={form['Phone Model'] || ''} onChange={e => setForm({ ...form, 'Phone Model': e.target.value })} />
-            <input className="inp" placeholder="Specs (e.g. 256GB Black)" value={form.Specs || ''} onChange={e => setForm({ ...form, Specs: e.target.value })} />
-            <input className="inp" placeholder="Cash Price (KES)" type="number" value={form['Cash Price'] || ''} onChange={e => setForm({ ...form, 'Cash Price': e.target.value })} />
+            {!isAcc ? (
+              <>
+                <input className="inp" placeholder="Model (Phone Model)" value={form['Phone Model'] || ''} onChange={e => setForm({ ...form, 'Phone Model': e.target.value })} />
+                <input className="inp" placeholder="Specs (Features)" value={form.Specs || ''} onChange={e => setForm({ ...form, Specs: e.target.value })} />
+                <input className="inp" placeholder="Cash Price (KES)" type="number" value={form['Cash Price'] || ''} onChange={e => setForm({ ...form, 'Cash Price': e.target.value })} />
+              </>
+            ) : (
+              <>
+                <input className="inp" placeholder="Brand (e.g. Apple)" value={form.brand || ''} onChange={e => setForm({ ...form, brand: e.target.value })} />
+                <input className="inp" placeholder="Accessory Name" value={form.accessory_name || ''} onChange={e => setForm({ ...form, accessory_name: e.target.value })} />
+                <input className="inp" placeholder="Price (KES)" type="number" value={form.price || ''} onChange={e => setForm({ ...form, price: e.target.value })} />
+                <input className="inp" placeholder="Stock Quantity" type="number" value={form.stock || ''} onChange={e => setForm({ ...form, stock: e.target.value })} />
+              </>
+            )}
             {isLipa && <>
-              <input className="inp" placeholder="Deposit" type="number" value={form.Deposit || ''} onChange={e => setForm({ ...form, Deposit: e.target.value })} />
-              <input className="inp" placeholder="12 Weeks" type="number" value={form['12 Weeks'] || ''} onChange={e => setForm({ ...form, '12 Weeks': e.target.value })} />
-              <input className="inp" placeholder="Deposit 1" type="number" value={form.Deposit_1 || ''} onChange={e => setForm({ ...form, Deposit_1: e.target.value })} />
-              <input className="inp" placeholder="24 Weeks" type="number" value={form['24 Weeks'] || ''} onChange={e => setForm({ ...form, '24 Weeks': e.target.value })} />
+              <input className="inp" placeholder="Initial Deposit" type="number" value={form.Deposit || ''} onChange={e => setForm({ ...form, Deposit: e.target.value })} />
+              <input className="inp" placeholder="12 Weeks Plan" type="number" value={form['12 Weeks'] || ''} onChange={e => setForm({ ...form, '12 Weeks': e.target.value })} />
+              <input className="inp" placeholder="Deposit 1 (Alt)" type="number" value={form.Deposit_1 || ''} onChange={e => setForm({ ...form, Deposit_1: e.target.value })} />
+              <input className="inp" placeholder="24 Weeks Plan" type="number" value={form['24 Weeks'] || ''} onChange={e => setForm({ ...form, '24 Weeks': e.target.value })} />
             </>}
-            <input className="inp" placeholder="Notes (optional)" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} />
+            <input className="inp" placeholder={isAcc ? "Description" : "Notes (optional)"} value={isAcc ? (form.description || '') : (form.notes || '')} onChange={e => setForm({ ...form, [isAcc ? 'description' : 'notes']: e.target.value })} />
           </div>
 
           {/* Photo upload + availability row */}
@@ -585,10 +758,18 @@ function PricelistTab() {
             {form.image_url && !form.photoFile && (
               <img src={form.image_url} style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--border)' }} alt="" />
             )}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--text-2)', cursor: 'pointer', marginLeft: 'auto', userSelect: 'none' }}>
-              <input type="checkbox" checked={form.availability !== false} onChange={e => setForm({ ...form, availability: e.target.checked })} style={{ accentColor: '#fff', width: 14, height: 14, cursor: 'pointer' }} />
-              In Stock
-            </label>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 16 }}>
+              {isAcc && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--text-2)', cursor: 'pointer', userSelect: 'none' }}>
+                  <input type="checkbox" checked={form.is_featured === 'true' || form.is_featured === true} onChange={e => setForm({ ...form, is_featured: e.target.checked })} style={{ accentColor: '#fff', width: 14, height: 14, cursor: 'pointer' }} />
+                  Featured
+                </label>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--text-2)', cursor: 'pointer', userSelect: 'none' }}>
+                <input type="checkbox" checked={(isAcc ? form.is_available : form.availability) !== false} onChange={e => setForm({ ...form, [isAcc ? 'is_available' : 'availability']: e.target.checked })} style={{ accentColor: '#fff', width: 14, height: 14, cursor: 'pointer' }} />
+                In Stock
+              </label>
+            </div>
           </div>
 
           <div style={{ marginTop: 16 }}>
@@ -601,54 +782,64 @@ function PricelistTab() {
         /* Table */
         <div className="card" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <p className="section-label">All Products</p>
-            <button className="btn-primary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => { setForm({}); setEditingId(null); setPreviewId(null); setForm({ availability: true }); }}><Plus size={12} /> Add New</button>
+            <p className="section-label">All {categoryLabels[category]} Items</p>
+            <button className="btn-primary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => { setForm({}); setEditingId(null); setPreviewId(null); setForm({ [isAcc ? 'is_available' : 'availability']: true }); }}><Plus size={12} /> Add New</button>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Specs</th>
-                  <th>Cash Price</th>
+                  <th>{isAcc ? 'Accessory' : 'Product'}</th>
+                  <th>{isAcc ? 'Brand' : 'Specs'}</th>
+                  <th>Price</th>
                   {isLipa && <><th>Deposit</th><th>12W Plan</th><th>24W Plan</th></>}
+                  {isAcc && <th>Stock</th>}
                   <th>Status</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {phones.map(p => (
-                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setPreviewId(p.id)}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {p.image_url
-                          ? <img src={p.image_url} style={{ width: 36, height: 36, borderRadius: 7, objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }} alt={p['Phone Model']} />
-                          : <div style={{ width: 36, height: 36, background: 'var(--surface-2)', borderRadius: 7, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            <Image size={14} style={{ color: 'var(--text-4)' }} />
-                          </div>
-                        }
-                        <span style={{ color: 'var(--text)', fontWeight: 500, fontSize: 13 }}>{p['Phone Model']}</span>
-                      </div>
-                    </td>
-                    <td>{p.Specs}</td>
-                    <td style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontWeight: 600 }}>KES {fmt(p['Cash Price'])}</td>
-                    {isLipa && <>
-                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p.Deposit)}</td>
-                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['12 Weeks'])}</td>
-                      <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['24 Weeks'])}</td>
-                    </>}
-                    <td><span className={`badge ${p.availability ? 'badge-green' : 'badge-red'}`}>{p.availability ? 'In Stock' : 'Out of Stock'}</span></td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setForm(p); setPreviewId(null); }}><Edit2 size={13} /></button>
-                        <button className="btn-icon danger" onClick={(e) => { e.stopPropagation(); del(p.id); }}><Trash2 size={13} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {phones.map(p => {
+                  const title = isAcc ? p.accessory_name : p['Phone Model'];
+                  const subtitle = isAcc ? p.brand : p.Specs;
+                  const price = isAcc ? p.price : p['Cash Price'];
+                  const available = (isAcc ? p.is_available : p.availability) !== false;
+
+                  return (
+                    <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setPreviewId(p.id)}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {p.image_url
+                            ? <img src={p.image_url} style={{ width: 36, height: 36, borderRadius: 7, objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }} alt={title} />
+                            : <div style={{ width: 36, height: 36, background: 'var(--surface-2)', borderRadius: 7, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              <Image size={14} style={{ color: 'var(--text-4)' }} />
+                            </div>
+                          }
+                          <span style={{ color: 'var(--text)', fontWeight: 500, fontSize: 13 }}>{title}</span>
+                          {isAcc && p.is_featured && <span style={{ fontSize: 8, background: 'var(--success)', color: '#000', padding: '1px 4px', borderRadius: 3, fontWeight: 800 }}>HOT</span>}
+                        </div>
+                      </td>
+                      <td>{subtitle}</td>
+                      <td style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontWeight: 600 }}>KES {fmt(price)}</td>
+                      {isLipa && <>
+                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p.Deposit)}</td>
+                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['12 Weeks'])}</td>
+                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(p['24 Weeks'])}</td>
+                      </>}
+                      {isAcc && <td>{p.stock}</td>}
+                      <td><span className={`badge ${available ? 'badge-green' : 'badge-red'}`}>{available ? 'In Stock' : 'Out of Stock'}</span></td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setForm(p); setPreviewId(null); }}><Edit2 size={13} /></button>
+                          <button className="btn-icon danger" onClick={(e) => { e.stopPropagation(); del(p.id); }}><Trash2 size={13} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {phones.length === 0 && (
-                  <tr><td colSpan={isLipa ? 8 : 6}>
-                    <div className="empty-state"><Package size={28} /><p>No products yet. Add your first product above.</p></div>
+                  <tr><td colSpan={isLipa ? 8 : (isAcc ? 7 : 6)}>
+                    <div className="empty-state"><Package size={28} /><p>No {categoryLabels[category]} items yet.</p></div>
                   </td></tr>
                 )}
               </tbody>
@@ -661,7 +852,7 @@ function PricelistTab() {
 }
 
 // =============================================================================
-// LEADS / PIPELINE
+// LEADS
 // =============================================================================
 function LeadsTab() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -678,19 +869,19 @@ function LeadsTab() {
 
   const fetchLeads = () => {
     setLoading(true);
-    fetch('/api/leads').then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
+    authFetch('/api/leads').then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
   };
 
   useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 30000); return () => clearInterval(id); }, []);
 
   const selectLead = (l: Lead) => {
     setSelected(l); setLoadingConvos(true);
-    fetch(`/api/leads/${encodeURIComponent(l.phone)}/conversations`)
+    authFetch(`/api/leads/${encodeURIComponent(l.phone)}/conversations`)
       .then(r => r.json()).then(d => { if (!d.error) setConvos(d); }).finally(() => setLoadingConvos(false));
   };
 
   const updateStage = async (phone: string, stage: string) => {
-    await fetch(`/api/leads/${encodeURIComponent(phone)}/stage`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage }) });
+    await authFetch(`/api/leads/${encodeURIComponent(phone)}/stage`, { method: 'PUT', body: JSON.stringify({ stage }) });
     fetchLeads();
   };
 
@@ -699,8 +890,8 @@ function LeadsTab() {
     if (!receiptForm.code || !receiptForm.amount) { alert('Enter transaction code and amount.'); return; }
     setBusy(true);
     try {
-      await fetch('/api/payments', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      await authFetch('/api/payments', {
+        method: 'POST',
         body: JSON.stringify({
           transaction_code: receiptForm.code, customer_phone: selected.phone,
           customer_email: selected.email || '', customer_name: selected.customer_name || '',
@@ -713,9 +904,20 @@ function LeadsTab() {
         }),
       });
       if (sendEmail && selected.email?.includes('@')) {
-        const r = await fetch('https://builtwithaiautomations.app.n8n.cloud/webhook/send-receipt', {
+        const r = await fetch('https://shwariaccessories.app.n8n.cloud/webhook/send-receipt', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: selected.email, phone: selected.phone, name: selected.customer_name, product: selected.product_model, transactionCode: receiptForm.code, amount: receiptForm.amount }),
+          body: JSON.stringify({
+            email: selected.email,
+            phone: selected.phone,
+            name: selected.customer_name,
+            product: selected.product_model,
+            transactionCode: receiptForm.code,
+            amount: receiptForm.amount,
+            storage: receiptForm.storage,
+            condition: receiptForm.condition,
+            location: selected.delivery_location,
+            paymentMethod: selected.payment_method
+          }),
         });
         alert(r.ok ? 'Receipt sent!' : 'Payment saved. Receipt email failed — check N8N logs.');
       } else {
@@ -839,15 +1041,15 @@ function LeadsTab() {
   // ── LIST VIEW ──
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 920 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <div>
-          <h1 className="page-title">Pipeline</h1>
-          <p className="body-text" style={{ marginTop: 4 }}>{leads.length} contacts tracked</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.04em' }}>Leads</h1>
+        <div style={{ background: 'var(--surface-2)', padding: '4px 12px', borderRadius: 20, fontSize: 13, border: '1px solid var(--border)' }}>
+          {leads.length} total active leads
         </div>
-        <button className="btn-ghost" onClick={fetchLeads} style={{ fontSize: 12 }}>
-          <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
-        </button>
       </div>
+      <button className="btn-ghost" onClick={fetchLeads} style={{ fontSize: 12, width: 'fit-content', marginBottom: 10 }}>
+        <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+      </button>
 
       {leads.length === 0 && (
         <div className="card"><div className="empty-state"><MessageSquare size={28} /><p>No leads yet. They will appear here when customers message on WhatsApp.</p></div></div>
@@ -947,35 +1149,46 @@ function PaymentsTab({ payments }: { payments: Payment[] }) {
 // =============================================================================
 function SettingsTab() {
   const [brand, setBrand] = useState('Shwari Agent');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
   const [users, setUsers] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
     try {
-      const bRes = await fetch('/api/app-settings');
+      const bRes = await authFetch('/api/app-settings');
       const bData = await bRes.json();
       if (bData.brand_name) setBrand(bData.brand_name);
+      if (bData.brand_phone) setPhone(bData.brand_phone);
+      if (bData.brand_address) setAddress(bData.brand_address);
 
-      const uRes = await fetch('/api/profiles');
+      const uRes = await authFetch('/api/profiles');
       setUsers(await uRes.json());
     } catch { }
   };
 
   useEffect(() => { load(); }, []);
 
-  const saveBrand = async () => {
+  const saveSettings = async () => {
     setSaving(true);
-    await fetch('/api/app-settings', {
+    await authFetch('/api/app-settings', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: 'brand_name', value: brand })
+    });
+    await authFetch('/api/app-settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: 'brand_phone', value: phone })
+    });
+    await authFetch('/api/app-settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: 'brand_address', value: address })
     });
     setSaving(false);
   };
 
   const removeUser = async (id: string) => {
     if (!confirm('Revoke access for this user?')) return;
-    await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+    await authFetch(`/api/profiles/${id}`, { method: 'DELETE' });
     load();
   };
 
@@ -985,12 +1198,24 @@ function SettingsTab() {
         <h1 className="page-title">General Settings</h1>
         <p className="body-text">Manage your brand identity and public profile.</p>
 
-        <div className="card" style={{ marginTop: 24, padding: 24 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Brand Name</label>
-          <div style={{ display: 'flex', gap: 12 }}>
+        <div className="card" style={{ marginTop: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Business Name</label>
             <input className="inp" value={brand} onChange={e => setBrand(e.target.value)} style={{ fontSize: 16 }} />
-            <button className="btn-primary" onClick={saveBrand} disabled={saving}>{saving ? '...' : 'Update'}</button>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Contact Phone</label>
+              <input className="inp" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+254..." />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Business Address</label>
+              <input className="inp" value={address} onChange={e => setAddress(e.target.value)} placeholder="Nairobi, Kenya" />
+            </div>
+          </div>
+          <button className="btn-primary" onClick={saveSettings} disabled={saving} style={{ alignSelf: 'flex-start', marginTop: 8 }}>
+            {saving ? 'Saving...' : 'Save Business Profile'}
+          </button>
         </div>
       </section>
 

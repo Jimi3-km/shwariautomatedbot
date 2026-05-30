@@ -9,8 +9,9 @@ import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 
 const upload = multer({ storage: multer.memoryStorage() });
-const supabase = config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY)
+const supabaseToken = config.SUPABASE_SERVICE_ROLE_KEY || config.SUPABASE_ANON_KEY;
+const supabase = config.SUPABASE_URL && supabaseToken
+  ? createClient(config.SUPABASE_URL, supabaseToken)
   : null;
 
 const app = express();
@@ -18,26 +19,91 @@ const PORT = parseInt(config.PORT, 10) || 3000;
 console.log(`🚀 Starting Shwari Server...`);
 console.log(`📁 DB URL detected: ${config.SUPABASE_DATABASE_URL ? 'YES' : 'NO'}`);
 
+// ----------------------------------------------------
+// AUTH MIDDLEWARE — verifies Supabase JWT
+// ----------------------------------------------------
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // If Supabase is not configured yet, allow through (for initial setup)
+  if (!supabase) return next();
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Missing token' });
+  }
+
+  const token = authHeader.substring(7);
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+  }
+
+  (req as any).user = user;
+  next();
+}
+
 app.use(express.json());
 app.use(cors());
 
 // Initialize DB safely
-initDb().catch(err => {
+initDb().then(async () => {
+  console.log('✅ Database initialized.');
+  // Ensure Godmode user exists in Supabase
+  if (supabase) {
+    const email = 'jameskoikai04@gmail.com';
+    const password = 'Godmode!';
+    const { data: { users }, error: listError } = await (supabase.auth.admin as any).listUsers();
+    if (!listError) {
+      const exists = users.find((u: any) => u.email === email);
+      if (!exists) {
+        console.log(`👤 Creating Godmode user: ${email}...`);
+        const { error: createError } = await (supabase.auth.admin as any).createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: 'James Koikai' }
+        });
+        if (createError) console.error('❌ Failed to create Godmode user:', createError.message);
+        else console.log('✅ Godmode user created.');
+      } else {
+        console.log('✅ Godmode user found.');
+      }
+    }
+  }
+
+  // ── Sync Summary ──
+  const pool = getPool();
+  try {
+    const { rows: leads } = await pool.query('SELECT count(*) FROM leads');
+    const { rows: gPr } = await pool.query('SELECT count(*) FROM general_pricelist');
+    const { rows: lPr } = await pool.query('SELECT count(*) FROM lipa_mdogo_mdogo');
+    console.log(`📊 SYNC SUMMARY: ${leads[0].count} Leads, ${gPr[0].count} General Prods, ${lPr[0].count} Lipa Prods`);
+  } catch (syncErr) {
+    console.error('⚠️ Sync summary error:', syncErr);
+  }
+}).catch(err => {
   console.error('❌ Failed to initialize database during startup:', err);
 });
 
 // ----------------------------------------------------
 // SETTINGS API
 // ----------------------------------------------------
-app.get('/api/settings', (req, res) => {
-  res.json(config);
+app.get('/api/settings', requireAuth, (req, res) => {
+  // Only return non-sensitive config for display purposes
+  const { PORT: _p, SUPABASE_DATABASE_URL: _db, SUPABASE_SERVICE_ROLE_KEY: _srk, PAYSTACK_SECRET_KEY: _psk, ...safeConfig } = config as any;
+  res.json(safeConfig);
+});
+
+// Dead stub for old route — replaced above
+app.get('/api/settings_noop', (req, res) => {
+  res.json({});
 });
 
 app.get('/api/public-env', (req, res) => {
   res.json({ SUPABASE_URL: config.SUPABASE_URL, SUPABASE_ANON_KEY: config.SUPABASE_ANON_KEY });
 });
 
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', requireAuth, async (req, res) => {
   // Only developer should set these via ENV or manual SQL, but we keep a restricted update
   const allowedKeys = ['N8N_API_URL'];
   const update: any = {};
@@ -50,7 +116,7 @@ app.post('/api/settings', async (req, res) => {
 // ----------------------------------------------------
 // APP SETTINGS (BRAND)
 // ----------------------------------------------------
-app.get('/api/app-settings', async (req, res) => {
+app.get('/api/app-settings', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
     const { rows } = await pool.query('SELECT * FROM app_settings');
@@ -59,7 +125,7 @@ app.get('/api/app-settings', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-app.post('/api/app-settings', async (req, res) => {
+app.post('/api/app-settings', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
     const { key, value } = req.body;
@@ -71,7 +137,7 @@ app.post('/api/app-settings', async (req, res) => {
 // ----------------------------------------------------
 // PROFILES / USERS
 // ----------------------------------------------------
-app.get('/api/profiles', async (req, res) => {
+app.get('/api/profiles', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
     const { rows } = await pool.query('SELECT * FROM profiles ORDER BY created_at ASC');
@@ -79,7 +145,7 @@ app.get('/api/profiles', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-app.post('/api/profiles/sync', async (req, res) => {
+app.post('/api/profiles/sync', requireAuth, async (req, res) => {
   try {
     const { id, email, full_name } = req.body;
     const pool = getPool();
@@ -88,7 +154,7 @@ app.post('/api/profiles/sync', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-app.delete('/api/profiles/:id', async (req, res) => {
+app.delete('/api/profiles/:id', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
     await pool.query('DELETE FROM profiles WHERE id = $1', [req.params.id]);
@@ -99,9 +165,13 @@ app.delete('/api/profiles/:id', async (req, res) => {
 // ----------------------------------------------------
 // SUBSCRIPTION / PAYWALL API
 // ----------------------------------------------------
-async function getSubscriptionStatus() {
+async function getSubscriptionStatus(userEmail?: string) {
+  // GODMODE BYPASS: Always return active for the specific admin email
+  if (userEmail === 'jameskoikai04@gmail.com') {
+    return { status: 'active', expiry_date: '2099-12-31T23:59:59.999Z', plan: 'unlimited' };
+  }
+
   const pool = getPool();
-  // Check first row
   const { rows } = await pool.query('SELECT * FROM subscriptions LIMIT 1');
   if (rows.length === 0) return null;
 
@@ -109,17 +179,17 @@ async function getSubscriptionStatus() {
   const now = new Date();
   const expiry = new Date(sub.expiry_date);
 
-  // Auto-expire if past date
-  if (sub.status === 'active' && expiry < now) {
+  if (now > expiry && sub.status !== 'expired') {
     await pool.query("UPDATE subscriptions SET status = 'expired' WHERE id = $1", [sub.id]);
     sub.status = 'expired';
   }
   return sub;
 }
 
-app.get('/api/subscription', async (req, res) => {
+app.get('/api/subscription', requireAuth, async (req, res) => {
   try {
-    const sub = await getSubscriptionStatus();
+    const userEmail = (req as any).user?.email;
+    const sub = await getSubscriptionStatus(userEmail);
     res.json(sub);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -168,19 +238,21 @@ app.post('/api/subscription/verify', async (req, res) => {
 // ----------------------------------------------------
 // PRICELIST API
 // ----------------------------------------------------
-const validTables = ['general_pricelist', 'lipa_mdogo_mdogo'];
+const validTables = ['general_pricelist', 'lipa_mdogo_mdogo', 'accessories'];
 const getTableName = (category: any) => validTables.includes(category as string) ? category : 'general_pricelist';
 
-app.get('/api/pricelist', async (req, res) => {
+app.get('/api/pricelist', requireAuth, async (req, res) => {
   try {
-    const sub = await getSubscriptionStatus();
+    const userEmail = (req as any).user?.email;
+    const sub = await getSubscriptionStatus(userEmail);
     if (sub && sub.status === 'expired') {
       return res.status(402).json({ error: 'Payment Required' });
     }
 
     const tableName = getTableName(req.query.category);
     const pool = getPool();
-    const { rows } = await pool.query(`SELECT * FROM ${tableName} ORDER BY id ASC`);
+    const orderBy = tableName === 'accessories' ? 'brand ASC, accessory_name ASC' : 'id ASC';
+    const { rows } = await pool.query(`SELECT * FROM ${tableName} ORDER BY ${orderBy}`);
     res.json(rows);
   } catch (e) {
     console.error('GET /api/pricelist error:', e);
@@ -188,7 +260,7 @@ app.get('/api/pricelist', async (req, res) => {
   }
 });
 
-app.post('/api/pricelist', upload.single('photo'), async (req, res) => {
+app.post('/api/pricelist', requireAuth, upload.single('photo'), async (req, res) => {
   try {
     const tableName = getTableName(req.query.category);
     const pool = getPool();
@@ -206,10 +278,25 @@ app.post('/api/pricelist', upload.single('photo'), async (req, res) => {
       }
     }
 
+    if (tableName === 'accessories') {
+      const { brand, accessory_name, price, stock, description, is_featured, is_available } = req.body;
+      const result = await pool.query(
+        `INSERT INTO accessories (brand, accessory_name, price, stock, description, image_url, is_featured, is_available) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [brand, accessory_name, price, stock || 0, description, final_image_url, is_featured === 'true', is_available !== 'false']
+      );
+      return res.json(result.rows[0]);
+    }
+
     const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "12 Weeks": w12, "Deposit_1": dep1, "24 Weeks": w24, availability, notes } = req.body;
+    // Map availability to n8n's stock_status
+    const stock_status = availability ? 'in_stock' : 'out_of_stock';
     const result = await pool.query(
-      `INSERT INTO ${tableName} ("Phone Model", "Specs", "Cash Price", "Deposit", "12 Weeks", "Deposit_1", "24 Weeks", availability, notes, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [phone_model, specs, cash_price, deposit, w12, dep1, w24, availability, notes, final_image_url]
+      `INSERT INTO ${tableName} (
+        "Phone Model", "Specs", "Cash Price", "Deposit", "12 Weeks", "Deposit_1", "24 Weeks", 
+        model, full_price, lipa_mdogo_deposit, lipa_mdogo_weekly, stock_status, availability, notes, image_url
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [phone_model, specs, cash_price, deposit, w12, dep1, w24, phone_model, cash_price, deposit, w12, stock_status, availability, notes, final_image_url]
     );
     res.json(result.rows[0]);
   } catch (e) {
@@ -218,7 +305,7 @@ app.post('/api/pricelist', upload.single('photo'), async (req, res) => {
   }
 });
 
-app.put('/api/pricelist/:id', upload.single('photo'), async (req, res) => {
+app.put('/api/pricelist/:id', requireAuth, upload.single('photo'), async (req, res) => {
   try {
     const tableName = getTableName(req.query.category);
     const { id } = req.params;
@@ -237,10 +324,27 @@ app.put('/api/pricelist/:id', upload.single('photo'), async (req, res) => {
       }
     }
 
+    if (tableName === 'accessories') {
+      const { brand, accessory_name, price, stock, description, is_featured, is_available } = req.body;
+      const result = await pool.query(
+        `UPDATE accessories SET 
+          brand=$1, accessory_name=$2, price=$3, stock=$4, description=$5, image_url=$6, 
+          is_featured=$7, is_available=$8, updated_at=NOW() 
+        WHERE id=$9 RETURNING *`,
+        [brand, accessory_name, price, stock || 0, description, final_image_url, is_featured === 'true', is_available !== 'false', id]
+      );
+      return res.json(result.rows[0]);
+    }
+
     const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "12 Weeks": w12, "Deposit_1": dep1, "24 Weeks": w24, availability, notes } = req.body;
+    const stock_status = availability ? 'in_stock' : 'out_of_stock';
     const result = await pool.query(
-      `UPDATE ${tableName} SET "Phone Model"=$1, "Specs"=$2, "Cash Price"=$3, "Deposit"=$4, "12 Weeks"=$5, "Deposit_1"=$6, "24 Weeks"=$7, availability=$8, notes=$9, image_url=$10, updated_at=CURRENT_TIMESTAMP WHERE id=$11 RETURNING *`,
-      [phone_model, specs, cash_price, deposit, w12, dep1, w24, availability, notes, final_image_url, id]
+      `UPDATE ${tableName} SET 
+        "Phone Model"=$1, "Specs"=$2, "Cash Price"=$3, "Deposit"=$4, "12 Weeks"=$5, "Deposit_1"=$6, "24 Weeks"=$7, 
+        model=$8, full_price=$9, lipa_mdogo_deposit=$10, lipa_mdogo_weekly=$11, stock_status=$12,
+        availability=$13, notes=$14, image_url=$15, updated_at=CURRENT_TIMESTAMP 
+      WHERE id=$16 RETURNING *`,
+      [phone_model, specs, cash_price, deposit, w12, dep1, w24, phone_model, cash_price, deposit, w12, stock_status, availability, notes, final_image_url, id]
     );
     res.json(result.rows[0]);
   } catch (e) {
@@ -249,7 +353,7 @@ app.put('/api/pricelist/:id', upload.single('photo'), async (req, res) => {
   }
 });
 
-app.delete('/api/pricelist/:id', async (req, res) => {
+app.delete('/api/pricelist/:id', requireAuth, async (req, res) => {
   try {
     const tableName = getTableName(req.query.category);
     const { id } = req.params;
@@ -265,9 +369,10 @@ app.delete('/api/pricelist/:id', async (req, res) => {
 // DASHBOARD DATA
 // Direct connections to Supabase (via pg) to fetch leads.
 // ----------------------------------------------------
-app.get('/api/leads', async (req, res) => {
+app.get('/api/leads', requireAuth, async (req, res) => {
   try {
-    const sub = await getSubscriptionStatus();
+    const userEmail = (req as any).user?.email;
+    const sub = await getSubscriptionStatus(userEmail);
     if (sub && sub.status === 'expired') {
       return res.status(402).json({ error: 'Payment Required' });
     }
@@ -298,9 +403,10 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', requireAuth, async (req, res) => {
   try {
-    const sub = await getSubscriptionStatus();
+    const userEmail = (req as any).user?.email;
+    const sub = await getSubscriptionStatus(userEmail);
     if (sub && sub.status === 'expired') {
       return res.status(402).json({ error: 'Payment Required' });
     }
@@ -311,8 +417,9 @@ app.get('/api/stats', async (req, res) => {
     let outStockTotal = 0;
 
     for (const t of validTables) {
-      const inRes = await pool.query(`SELECT COUNT(*) FROM ${t} WHERE availability=true`);
-      const outRes = await pool.query(`SELECT COUNT(*) FROM ${t} WHERE availability=false`);
+      const availCol = t === 'accessories' ? 'is_available' : 'availability';
+      const inRes = await pool.query(`SELECT COUNT(*) FROM ${t} WHERE ${availCol}=true`);
+      const outRes = await pool.query(`SELECT COUNT(*) FROM ${t} WHERE ${availCol}=false`);
       inStockTotal += parseInt(inRes.rows[0].count);
       outStockTotal += parseInt(outRes.rows[0].count);
     }
@@ -358,7 +465,7 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-app.put('/api/leads/:phone/stage', async (req, res) => {
+app.put('/api/leads/:phone/stage', requireAuth, async (req, res) => {
   try {
     const { phone } = req.params;
     const { stage, email, delivery_location, payment_method } = req.body;
@@ -373,11 +480,16 @@ app.put('/api/leads/:phone/stage', async (req, res) => {
   }
 });
 
-app.get('/api/leads/:phone/conversations', async (req, res) => {
+app.get('/api/leads/:phone/conversations', requireAuth, async (req, res) => {
   try {
     const { phone } = req.params;
     const pool = getPool();
-    const { rows } = await pool.query('SELECT * FROM conversation_logs WHERE customer_phone = $1 ORDER BY created_at ASC', [phone]);
+    // Use fuzzy phone match to handle + prefix discrepancies
+    const cleanPhone = phone.replace(/\D/g, '');
+    const { rows } = await pool.query(
+      "SELECT * FROM conversation_logs WHERE REPLACE(customer_phone, '+', '') = $1 OR customer_phone = $2 ORDER BY created_at ASC",
+      [cleanPhone, phone]
+    );
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -387,7 +499,7 @@ app.get('/api/leads/:phone/conversations', async (req, res) => {
 // ----------------------------------------------------
 // PAYMENTS API
 // ----------------------------------------------------
-app.get('/api/payments', async (req, res) => {
+app.get('/api/payments', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
     const { rows } = await pool.query('SELECT * FROM payments ORDER BY created_at DESC');
@@ -397,7 +509,7 @@ app.get('/api/payments', async (req, res) => {
   }
 });
 
-app.post('/api/payments', async (req, res) => {
+app.post('/api/payments', requireAuth, async (req, res) => {
   try {
     const {
       transaction_code,

@@ -48,17 +48,24 @@ export async function initDb() {
             await p.query(`
                 CREATE TABLE IF NOT EXISTS ${table} (
                     id SERIAL PRIMARY KEY,
-                    "Phone Model" VARCHAR(100) NOT NULL,
-                    "Specs" TEXT,
-                    "Cash Price" TEXT NOT NULL,
-                    "Deposit" TEXT,
+                    "Phone Model" VARCHAR(100) NOT NULL, -- Dashboard key
+                    "Specs" TEXT,                        -- Dashboard key
+                    "Cash Price" TEXT NOT NULL,         -- Dashboard key
+                    "Deposit" TEXT,                      -- Dashboard key
                     "12 Weeks" TEXT,
                     "Deposit_1" TEXT,
                     "24 Weeks" TEXT,
-                    "full_price" TEXT,
-                    "lipa_mdogo_deposit" TEXT,
-                    "lipa_mdogo_weekly" TEXT,
-                    "lipa_mdogo_duration_weeks" TEXT,
+                    
+                    -- n8n / AI Agent Keys (Clean Mapping)
+                    model VARCHAR(100),
+                    storage VARCHAR(50),
+                    condition VARCHAR(50),
+                    full_price TEXT,
+                    lipa_mdogo_deposit TEXT,
+                    lipa_mdogo_weekly TEXT,
+                    lipa_mdogo_duration_weeks TEXT,
+                    stock_status VARCHAR(50) DEFAULT 'in_stock',
+                    
                     availability BOOLEAN DEFAULT TRUE,
                     notes TEXT,
                     image_url TEXT,
@@ -66,16 +73,20 @@ export async function initDb() {
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             `);
-            // ── Safe column repair: add any columns missing from older tables ──
+            // ── Safe column repair ──
             const missingCols: [string, string][] = [
                 ['"Deposit"', 'TEXT'],
                 ['"12 Weeks"', 'TEXT'],
                 ['"Deposit_1"', 'TEXT'],
                 ['"24 Weeks"', 'TEXT'],
-                ['"full_price"', 'TEXT'],
-                ['"lipa_mdogo_deposit"', 'TEXT'],
-                ['"lipa_mdogo_weekly"', 'TEXT'],
-                ['"lipa_mdogo_duration_weeks"', 'TEXT'],
+                ['model', 'VARCHAR(100)'],
+                ['storage', 'VARCHAR(50)'],
+                ['condition', 'VARCHAR(50)'],
+                ['full_price', 'TEXT'],
+                ['lipa_mdogo_deposit', 'TEXT'],
+                ['lipa_mdogo_weekly', 'TEXT'],
+                ['lipa_mdogo_duration_weeks', 'TEXT'],
+                ['stock_status', "VARCHAR(50) DEFAULT 'in_stock'"],
                 ['notes', 'TEXT'],
                 ['image_url', 'TEXT'],
                 ['availability', 'BOOLEAN DEFAULT TRUE'],
@@ -85,6 +96,14 @@ export async function initDb() {
             for (const [col, type] of missingCols) {
                 await p.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type};`);
             }
+
+            // ── Data Migration: Sync legacy to n8n columns ──
+            // Handle both NULL and empty strings
+            await p.query(`UPDATE ${table} SET model = "Phone Model" WHERE model IS NULL OR model = '';`);
+            await p.query(`UPDATE ${table} SET full_price = "Cash Price" WHERE full_price IS NULL OR full_price = '';`);
+            await p.query(`UPDATE ${table} SET lipa_mdogo_deposit = "Deposit" WHERE lipa_mdogo_deposit IS NULL OR lipa_mdogo_deposit = '';`);
+            await p.query(`UPDATE ${table} SET lipa_mdogo_weekly = "12 Weeks" WHERE lipa_mdogo_weekly IS NULL OR lipa_mdogo_weekly = '';`);
+
             // Availability index for agent lookups
             await p.query(`CREATE INDEX IF NOT EXISTS idx_${table}_availability ON ${table}(availability);`);
         }
@@ -180,12 +199,36 @@ export async function initDb() {
             );
         `);
 
-        // Seed initial subscription if empty
+        // Seed or Reset subscription to start from today (30 days period)
         const { rows: subRows } = await p.query('SELECT count(*) FROM subscriptions');
         if (parseInt(subRows[0].count) === 0) {
-            console.log('🌱 Seeding initial subscription plan...');
-            await p.query("INSERT INTO subscriptions (status, expiry_date) VALUES ('active', NOW() + INTERVAL '7 days')");
+            console.log('🌱 Seeding initial 30-day subscription plan...');
+            await p.query("INSERT INTO subscriptions (status, expiry_date) VALUES ('active', NOW() + INTERVAL '30 days')");
+        } else {
+            console.log('🔄 Resetting subscription period to 30 days from today...');
+            await p.query("UPDATE subscriptions SET expiry_date = NOW() + INTERVAL '30 days', status = 'active' WHERE id = (SELECT id FROM subscriptions LIMIT 1)");
         }
+
+        // Accessories Table
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS accessories (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                brand TEXT NOT NULL,
+                accessory_name TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                currency TEXT DEFAULT 'KES',
+                stock INTEGER DEFAULT 0,
+                description TEXT,
+                image_url TEXT,
+                is_featured BOOLEAN DEFAULT FALSE,
+                is_available BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_accessories_brand ON accessories(brand);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_accessories_price ON accessories(price);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_accessories_name ON accessories(accessory_name);`);
 
         // ── Profiles & Settings ──
         await p.query(`
@@ -194,8 +237,11 @@ export async function initDb() {
                 full_name TEXT,
                 email TEXT UNIQUE,
                 role TEXT DEFAULT 'admin',
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
+            ALTER TABLE profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT,
