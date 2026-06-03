@@ -210,13 +210,15 @@
         .kc-header {
             display: flex;
             justify-content: space-between;
-            font-size: 0.875rem;
-            margin-bottom: 8px;
+            align-items: center;
+            margin-bottom: 10px;
         }
 
         .kc-phone {
-            font-weight: bold;
-            font-family: monospace;
+            font-weight: 800;
+            color: white;
+            font-size: 1.05rem;
+            letter-spacing: -0.02em;
         }
 
         .kc-time {
@@ -765,6 +767,8 @@
                 <div class="m-grid">
                     <div class="m-section">
                         <h3>Customer Intel</h3>
+                        <div class="info-row"><span class="info-label">Name</span><span class="info-val"
+                                id="r-name"></span></div>
                         <div class="info-row"><span class="info-label">Phone</span><span class="info-val"
                                 id="r-phone"></span></div>
                         <div class="info-row"><span class="info-label">Email</span><span class="info-val"
@@ -829,6 +833,8 @@
         const UPDATE_LEAD_URL = N8N_BASE + "/update-lead";
         const SEND_RECEIPT_URL = N8N_BASE + "/send-receipt";
 
+        const isG = n => ['hello', 'hi', 'hey', 'jambo', 'mambo', 'habari'].includes((n || '').toLowerCase().trim());
+
         let currentLeads = [];
         let sortDir = -1; // -1 for desc
         let currentFocusPhone = null;
@@ -891,7 +897,7 @@
                 document.getElementById(colId).querySelector('.col-content').innerHTML += `
                 <div class="kc kc-${(l.urgency || 'low').toLowerCase()}" onclick="openModal('${l.phone}')">
                     <div class="kc-header">
-                        <span class="kc-phone">${mask(l.phone)}</span>
+                        <span class="kc-phone">${(l.customer_name && !isG(l.customer_name)) ? l.customer_name : l.phone}</span>
                         <span class="kc-time">${tAgo(l.last_contact)}</span>
                     </div>
                     <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px;">
@@ -934,7 +940,7 @@
                 const u = (l.urgency || 'low').toLowerCase(), s = stData(l.stage);
                 return `
                 <tr class="${u === 'high' ? 'high-urgency' : ''}">
-                    <td style="font-family:monospace;font-weight:bold">${mask(l.phone)}</td>
+                    <td style="font-family:monospace;font-weight:bold">${(l.customer_name && !isG(l.customer_name)) ? l.customer_name : l.phone}</td>
                     <td>${l.email || '-'}</td>
                     <td><span class="pill ${s.c}">${s.l}</span></td>
                     <td><span class="badge ${intCol(l.intent)}">${l.intent || '-'}</span></td>
@@ -971,6 +977,7 @@
             if (!l) return;
 
             // Populate Read-Only Core Fields
+            document.getElementById('r-name').textContent = l.customer_name || 'Not Captured';
             document.getElementById('r-phone').textContent = l.phone || 'Unknown';
             document.getElementById('r-email').textContent = l.email || 'Not Provided';
             document.getElementById('r-stage').textContent = stData(l.stage).l;

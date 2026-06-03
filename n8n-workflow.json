@@ -386,7 +386,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const originalOutput = $input.item.json.output || \"\";\nconst customerPhone = $('Extract Message Data').first().json.customerPhone;\nconst chatId = $('Extract Message Data').first().json.chatId;\nconst messageText = $('Extract Message Data').first().json.messageText || \"\";\n\nlet responseText = originalOutput;\nlet dataBlock = \"\";\n\nconst splitParts = originalOutput.split(\"---DATA---\");\nif (splitParts.length > 1) {\n    responseText = splitParts[0].trim();\n    dataBlock = splitParts[1].split(\"---END---\")[0].trim();\n}\n\n// Helper to extract keys from dataBlock safely\nfunction ext(key) {\n    if (!dataBlock) return null;\n    const regex = new RegExp(`${key}:\\\\s*(.*)`, 'i');\n    const match = dataBlock.match(regex);\n    let val = match ? match[1].trim() : null;\n    return (val && val.toLowerCase() !== 'null' && val !== '') ? val : null;\n}\n\nreturn {\n  json: {\n    responseText,\n    customerPhone,\n    chatId,\n    customer_name: ext('NAME'),\n    intent: ext('INTENT') || 'browsing',\n    urgency: ext('URGENCY') || 'low',\n    email: ext('EMAIL'),\n    delivery_location: ext('LOCATION'),\n    payment_method: ext('PAYMENT_METHOD'),\n    transaction_code: ext('TRANSACTION_CODE'),\n    product_model: ext('MODEL'),\n    product_storage: ext('STORAGE'),\n    product_condition: ext('CONDITION'),\n    product_price: ext('PRICE') ? ext('PRICE').replace(/[^0-9.]/g, '') : null,\n    upsell_items: ext('UPSELLS')\n  }\n};"
+        "jsCode": "const originalOutput = $input.item.json.output || \"\";\nconst customerPhone = $('Extract Message Data').first().json.customerPhone;\nconst chatId = $('Extract Message Data').first().json.chatId;\nconst messageText = $('Extract Message Data').first().json.messageText || \"\";\n\nlet responseText = originalOutput;\nlet dataBlock = \"\";\n\nconst splitParts = originalOutput.split(\"---DATA---\");\nif (splitParts.length > 1) {\n    responseText = splitParts[0].trim();\n    dataBlock = splitParts[1].split(\"---END---\")[0].trim();\n}\n\nfunction ext(key) {\n    if (!dataBlock) return null;\n    const regex = new RegExp(`${key}:\\\\s*(.*)`, 'i');\n    const match = dataBlock.match(regex);\n    let val = match ? match[1].trim() : null;\n    if (!val || val.toLowerCase() === 'null' || val === '') return null;\n    if (key === 'NAME' && ['hello','hi','hey','jambo','mambo','habari'].includes(val.toLowerCase())) return null;\n    return val;\n}\n\nreturn {\n  json: {\n    responseText,\n    customerPhone,\n    chatId,\n    customer_name: ext('NAME'),\n    intent: ext('INTENT') || 'browsing',\n    urgency: ext('URGENCY') || 'low',\n    email: ext('EMAIL'),\n    delivery_location: ext('LOCATION'),\n    payment_method: ext('PAYMENT_METHOD'),\n    transaction_code: ext('TRANSACTION_CODE'),\n    product_model: ext('MODEL'),\n    product_storage: ext('STORAGE'),\n    product_condition: ext('CONDITION'),\n    product_price: ext('PRICE') ? ext('PRICE').replace(/[^0-9.]/g, '') : null,\n    upsell_items: ext('UPSELLS')\n  }\n};"
       },
       "id": "743deb7a-c149-4e39-af83-382ac893ab32",
       "name": "Prepare Reply",
@@ -575,6 +575,10 @@
             {
               "fieldId": "upsell_items",
               "fieldValue": "={{ $(\"Prepare Reply\").item.json.upsell_items || $(\"Check Existing Lead\").item.json.upsell_items }}"
+            },
+            {
+              "fieldId": "customer_name",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.customer_name || $(\"Check Existing Lead\").item.json.customer_name }}"
             }
           ]
         }
@@ -669,6 +673,10 @@
             {
               "fieldId": "upsell_items",
               "fieldValue": "={{ $(\"Prepare Reply\").item.json.upsell_items }}"
+            },
+            {
+              "fieldId": "customer_name",
+              "fieldValue": "={{ $(\"Prepare Reply\").item.json.customer_name }}"
             }
           ]
         }

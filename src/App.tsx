@@ -1059,16 +1059,33 @@ function LeadsTab() {
         <div key={lead.id} className="lead-card" onClick={() => selectLead(lead)}>
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
             {/* Identity */}
-            <div style={{ flex: '1 1 220px', minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 600, fontSize: 14, color: '#fff' }}>{lead.customer_name || lead.phone}</span>
-                <span className={urgencyBadge(lead.urgency)}>{lead.urgency || 'low'}</span>
+            <div style={{ flex: '1 1 250px', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 700, fontSize: 18, color: '#fff', letterSpacing: '-0.03em' }}>
+                  {(lead.customer_name && !['hello', 'hi', 'hey', 'jambo', 'mambo'].includes(lead.customer_name.toLowerCase().trim()))
+                    ? lead.customer_name
+                    : lead.phone}
+                </span>
+                <span className={urgencyBadge(lead.urgency)} style={{ fontSize: 10, padding: '2px 8px' }}>{lead.urgency || 'low'}</span>
               </div>
-              {lead.customer_name && <div className="mono" style={{ color: 'var(--text-3)', fontSize: 11, marginBottom: 4 }}>{lead.phone}</div>}
-              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                {lead.product_model ? `${lead.product_model} ${lead.product_storage || ''}`.trim() : lead.interest || 'No product specified'}
+
+              {(lead.customer_name && !['hello', 'hi', 'hey', 'jambo', 'mambo'].includes(lead.customer_name.toLowerCase().trim())) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-3)', fontSize: 12, marginBottom: 8 }}>
+                  <Smartphone size={12} />
+                  <span className="mono">{lead.phone}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 500 }}>
+                  {lead.product_model ? `${lead.product_model} ${lead.product_storage || ''}`.trim() : lead.interest || 'No product specified'}
+                </div>
+                {lead.delivery_location && (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span>📍</span> {lead.delivery_location}
+                  </div>
+                )}
               </div>
-              {lead.delivery_location && <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>📍 {lead.delivery_location}</div>}
             </div>
 
             {/* Last message */}
