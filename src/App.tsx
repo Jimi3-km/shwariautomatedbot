@@ -993,14 +993,20 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
         body: JSON.stringify({ message: humanReply })
       });
       if (res.ok) {
+        const newMessage = {
+          direction: 'outgoing-human',
+          message: humanReply,
+          timestamp: new Date().toISOString(),
+          agent_name: 'Admin'
+        };
+        setConvos([...convos, newMessage]);
         setHumanReply('');
-        const cRes = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`);
-        const cData = await cRes.json();
-        if (!cData.error) setConvos(cData);
-        if (selected.bot_status !== 'human') {
-          setSelected({ ...selected, bot_status: 'human' });
-          fetchLeads(inbox);
-        }
+        // Sync with server after a short delay
+        setTimeout(() => {
+          authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`)
+            .then(r => r.json())
+            .then(d => { if (!d.error) setConvos(d); });
+        }, 3000);
       }
     } finally {
       setReplying(false);
@@ -1038,11 +1044,20 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
       });
 
       if (res.ok) {
+        const newMessage = {
+          direction: 'outgoing-human',
+          message: `[PHOTO] ${humanReply}`.trim(),
+          timestamp: new Date().toISOString(),
+          agent_name: 'Admin'
+        };
+        setConvos([...convos, newMessage]);
         setPhotoFile(null);
         setHumanReply('');
-        const cRes = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`);
-        const cData = await cRes.json();
-        if (!cData.error) setConvos(cData);
+        setTimeout(() => {
+          authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`)
+            .then(r => r.json())
+            .then(d => { if (!d.error) setConvos(d); });
+        }, 4000);
       } else {
         alert('Failed to send photo');
       }
@@ -1204,27 +1219,36 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
                     <p>No conversation logs yet.</p>
                   </div>
                 )}
-                {convos.map((row, i) => (
-                  <React.Fragment key={i}>
-                    {row.direction === 'incoming' ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                        <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                          {displayName(selected)} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
-                        </span>
-                        <div className="bubble-customer">{row.message}</div>
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', alignSelf: 'flex-end' }}>
-                        <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                          {row.direction === 'outgoing-human' ? 'Staff' : 'Agent'} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
-                        </span>
-                        <div className="bubble-agent" style={{ background: row.direction === 'outgoing-human' ? '#dcf8c6' : 'var(--white)' }}>
-                          <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{row.message}</p>
+                {convos.map((row, i) => {
+                  const isAdmin = row.direction === 'outgoing-human' || row.agent_name === 'Admin';
+                  const isPhoto = row.message?.startsWith('[PHOTO]') || row.message?.startsWith('http') && (row.message.match(/\.(jpg|jpeg|png|gif|webp)/i));
+                  const displayMessage = isPhoto && row.message.startsWith('[PHOTO]') ? row.message.replace('[PHOTO]', '').trim() : row.message;
+                  const photoUrl = isPhoto ? (row.message.startsWith('http') ? row.message : null) : null; // In real use, n8n might save the URL
+
+                  return (
+                    <React.Fragment key={i}>
+                      {row.direction === 'incoming' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                          <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                            {displayName(selected)} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
+                          </span>
+                          <div className="bubble-customer">{row.message}</div>
                         </div>
-                      </div>
-                    )}
-                  </React.Fragment>
-                ))}
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', alignSelf: 'flex-end' }}>
+                          <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                            {isAdmin ? 'Admin' : 'Agent'} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
+                          </span>
+                          <div className="bubble-agent" style={{ background: isAdmin ? '#dcf8c6' : 'var(--white)' }}>
+                            {isPhoto && photoUrl && <img src={photoUrl} alt="Sent" style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 8 }} />}
+                            {(!isPhoto || displayMessage) && <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{displayMessage}</p>}
+                            {isPhoto && !photoUrl && <div style={{ fontSize: 11, fontStyle: 'italic', opacity: 0.8 }}>🖼️ Photo Sent</div>}
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </div>
 
               {/* Human Chat Input (WhatsApp Style - Bottom aligned) */}

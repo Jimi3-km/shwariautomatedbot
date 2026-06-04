@@ -14,6 +14,15 @@ const supabase = config.SUPABASE_URL && supabaseToken
   ? createClient(config.SUPABASE_URL, supabaseToken)
   : null;
 
+const GREETINGS = ['hello', 'hi', 'hey', 'jambo', 'mambo', 'hujambo', 'karibu', 'sawa', 'okay', 'ok', 'yes', 'no', 'thanks', 'thank', 'user'];
+function cleanName(n: any, phone: string): string {
+  if (!n) return phone;
+  const s = String(n).trim();
+  // Filter out greetings, short strings (noise), and numeric names
+  if (!s || s.length < 2 || GREETINGS.includes(s.toLowerCase()) || /^\d+$/.test(s)) return phone;
+  return s;
+}
+
 const app = express();
 const PORT = parseInt(config.PORT, 10) || 3000;
 
@@ -455,7 +464,7 @@ app.get('/api/leads', requireAuth, async (req, res) => {
 
     const processedRows = rows.map((r: any) => ({
       ...r,
-      customer_name: r.derived_customer_name || r.customer_name,
+      customer_name: cleanName(r.customer_name || r.derived_customer_name, r.phone),
       delivery_location: r.derived_delivery_location || r.delivery_location,
       payment_method: r.derived_payment_method || r.payment_method,
       email: r.derived_email || r.email
@@ -521,23 +530,42 @@ app.put('/api/leads/:phone/mode', requireAuth, async (req, res) => {
 
 // Helper: send a text message via WhatsApp Cloud API
 async function sendWhatsAppText(toPhone: string, message: string, overrideId?: string) {
-  const phoneNumberId = overrideId || config.WHATSAPP_ID_STUDENTS;
-  const token = phoneNumberId === config.WHATSAPP_ID_ACCESSORIES
+  const pid = String(overrideId || config.WHATSAPP_ID_STUDENTS).trim();
+  const aid = String(config.WHATSAPP_ID_ACCESSORIES || '').trim();
+  const isAccessories = pid === aid;
+
+  const token = isAccessories
     ? config.WHATSAPP_TOKEN_ACCESSORIES
     : config.WHATSAPP_TOKEN_STUDENTS;
 
-  if (!token) throw new Error(`WhatsApp token for ID ${phoneNumberId} not configured in .env`);
+  const url = `https://graph.facebook.com/v25.0/${pid}/messages`;
+  console.log(`[WhatsApp Trace] to=${toPhone} | target=${isAccessories ? 'ACCESSORIES' : 'STUDENTS'} | URL=${url} | token=${token?.substring(0, 10)}...`);
+
+  if (!token) throw new Error(`WhatsApp token for ID ${pid} not configured in .env`);
   const cleanTo = toPhone.replace(/\D/g, '');
+  const payload = { messaging_product: 'whatsapp', to: cleanTo, type: 'text', text: { body: message } };
+
+  console.log({
+    target: isAccessories ? 'ACCESSORIES' : 'STUDENTS',
+    phoneId: pid,
+    tokenPrefix: token?.slice(0, 10),
+    url,
+    payload
+  });
+
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-      { messaging_product: 'whatsapp', to: cleanTo, type: 'text', text: { body: message } },
+      url,
+      payload,
       { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
     );
+    console.log(`✅ WhatsApp Text Sent successfully to ${toPhone}`);
     return response;
   } catch (err: any) {
     if (err.response) {
       console.error('WhatsApp API Error (Text):', JSON.stringify(err.response.data, null, 2));
+    } else {
+      console.error('WhatsApp Network Error (Text):', err.message);
     }
     throw err;
   }
@@ -545,21 +573,39 @@ async function sendWhatsAppText(toPhone: string, message: string, overrideId?: s
 
 // Helper: upload media to WhatsApp and get media_id
 async function uploadWhatsAppMedia(buffer: Buffer, mimeType: string, filename: string, phoneNumberId: string) {
-  const token = phoneNumberId === config.WHATSAPP_ID_ACCESSORIES
+  const pid = String(phoneNumberId || '').trim();
+  const aid = String(config.WHATSAPP_ID_ACCESSORIES || '').trim();
+  const isAccessories = pid === aid;
+
+  const token = isAccessories
     ? config.WHATSAPP_TOKEN_ACCESSORIES
     : config.WHATSAPP_TOKEN_STUDENTS;
 
-  if (!token) throw new Error(`WhatsApp token for ID ${phoneNumberId} not configured in .env`);
+  const mIdMask = token?.substring(0, 10);
+  const url = `https://graph.facebook.com/v25.0/${pid}/media`;
+  console.log(`[WhatsApp Trace Media] target=${isAccessories ? 'ACCESSORIES' : 'STUDENTS'} | URL=${url} | token=${mIdMask}...`);
+
+  if (!token) throw new Error(`WhatsApp token for ID ${pid} not configured in .env`);
   const FormData = (await import('form-data')).default;
   const form = new FormData();
   form.append('file', buffer, { filename, contentType: mimeType });
   form.append('messaging_product', 'whatsapp');
+
+  console.log({
+    target: isAccessories ? 'ACCESSORIES' : 'STUDENTS',
+    phoneId: pid,
+    tokenPrefix: token?.slice(0, 10),
+    url,
+    payload: `FormData with file: ${filename}, type: ${mimeType}`
+  });
+
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/v18.0/${phoneNumberId}/media`,
+      url,
       form,
       { headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` } }
     );
+    console.log(`✅ WhatsApp Media Uploaded: ${response.data.id}`);
     return response.data.id;
   } catch (err: any) {
     if (err.response) {
@@ -593,9 +639,17 @@ app.post('/api/leads/:phone/reply', requireAuth, async (req, res) => {
         : config.N8N_WEBHOOK_STUDENTS;
 
       if (webhookUrl) {
+        // Note: keeping action as 'human-send-message' but ensure n8n doesn't lock the bot
         await axios.post(
           webhookUrl,
-          { customerPhone: phone, message, phoneNumberId: leadInboxId, action: 'human-send-message' },
+          {
+            customerPhone: phone,
+            message,
+            phoneNumberId: leadInboxId,
+            action: 'human-send-message',
+            agent_name: 'Admin',
+            direction: 'outgoing-human'
+          },
           { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
         );
       }
@@ -603,11 +657,22 @@ app.post('/api/leads/:phone/reply', requireAuth, async (req, res) => {
       console.warn('n8n log failed (message still sent):', logErr?.message);
     }
 
+    // 3. Directly save to database to guarantee persistence on reload
+    try {
+      await pool.query(
+        `INSERT INTO conversations (customer_phone, message, direction, channel, timestamp, phone_number_id) 
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        ['+' + cleanPhone, message, 'outgoing-human', 'whatsapp', leadInboxId]
+      );
+    } catch (dbErr: any) {
+      console.error('Failed to save manual reply to database:', dbErr?.message);
+    }
+
     res.json({ success: true, bot_status: 'human' });
   } catch (e: any) {
-    const details = e.response?.data || e.message;
-    console.error('send-human-reply error:', JSON.stringify(details, null, 2));
-    res.status(502).json({ error: 'Human reply failed', detail: details });
+    const errorDetail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
+    console.error('reply error details:', errorDetail);
+    res.status(502).json({ error: 'Reply failed', detail: errorDetail });
   }
 });
 
@@ -623,11 +688,26 @@ app.post('/api/leads/:phone/photo', requireAuth, upload.single('photo'), async (
     const pool = getPool();
     const cleanPhone = phone.replace(/\D/g, '');
     const { rows } = await pool.query('SELECT inbox_number FROM leads WHERE REPLACE(phone, \'+\', \'\') = $1 OR phone = $2', [cleanPhone, phone]);
-    const leadInboxId = rows[0]?.inbox_number || config.WHATSAPP_ID_STUDENTS;
+    const leadInboxId = rows[0]?.inbox_number;
 
-    const token = leadInboxId === config.WHATSAPP_ID_ACCESSORIES
+    if (!leadInboxId) {
+      console.error(`[Photo Send] No inbox_number found for phone=${phone}. Cannot determine WhatsApp account.`);
+      return res.status(400).json({ error: 'Lead has no inbox_number — cannot determine which WhatsApp account to use.' });
+    }
+
+    const isAccessoriesPhoto = String(leadInboxId).trim() === String(config.WHATSAPP_ID_ACCESSORIES).trim();
+    const token = isAccessoriesPhoto
       ? config.WHATSAPP_TOKEN_ACCESSORIES
       : config.WHATSAPP_TOKEN_STUDENTS;
+
+    const sendUrl = `https://graph.facebook.com/v25.0/${leadInboxId}/messages`;
+
+    console.log({
+      target: isAccessoriesPhoto ? 'ACCESSORIES' : 'STUDENTS',
+      phoneId: leadInboxId,
+      tokenPrefix: token?.slice(0, 10),
+      url: sendUrl,
+    });
 
     if (!token) {
       return res.status(400).json({ error: `WhatsApp token for ID ${leadInboxId} not set in .env` });
@@ -638,22 +718,80 @@ app.post('/api/leads/:phone/photo', requireAuth, upload.single('photo'), async (
 
     // 2. Send the image message
     const cleanTo = phone.replace(/\D/g, '');
+    const imagePayload = {
+      messaging_product: 'whatsapp',
+      to: cleanTo,
+      type: 'image',
+      image: { id: mediaId, caption }
+    };
     await axios.post(
-      `https://graph.facebook.com/v18.0/${leadInboxId}/messages`,
-      {
-        messaging_product: 'whatsapp',
-        to: cleanTo,
-        type: 'image',
-        image: { id: mediaId, caption }
-      },
+      sendUrl,
+      imagePayload,
       { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
     );
 
+    // 3. Notify n8n
+    try {
+      const webhookUrl = isAccessoriesPhoto
+        ? config.N8N_WEBHOOK_ACCESSORIES
+        : config.N8N_WEBHOOK_STUDENTS;
+
+      if (webhookUrl) {
+        await axios.post(
+          webhookUrl,
+          {
+            customerPhone: phone,
+            message: `[PHOTO] ${caption}`,
+            phoneNumberId: leadInboxId,
+            action: 'human-send-photo',
+            agent_name: 'Admin',
+            direction: 'outgoing-human',
+            media_id: mediaId
+          },
+          { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+      }
+    } catch (logErr: any) {
+      console.warn('n8n photo log failed:', logErr?.message);
+    }
+
+    // 4. Directly save to database to guarantee persistence on reload
+    try {
+      const dbMessage = `[PHOTO] ${caption}`;
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO conversations (customer_phone, message, direction, channel, timestamp, phone_number_id) 
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        ['+' + cleanPhone, dbMessage, 'outgoing-human', 'whatsapp', leadInboxId]
+      );
+    } catch (dbErr: any) {
+      console.error('Failed to save manual photo to database:', dbErr?.message);
+    }
+
     res.json({ success: true });
   } catch (e: any) {
-    console.error('send-photo error:', e?.message);
-    res.status(502).json({ error: 'Photo reply failed', detail: e?.message });
+    const errorDetail = e?.response?.data ? JSON.stringify(e.response.data) : e.message;
+    console.error('send-photo error details:', errorDetail);
+    res.status(502).json({ error: 'Photo reply failed', detail: errorDetail });
   }
+});
+
+
+// ----------------------------------------------------
+// DIAGNOSTICS: Verify Env (Godmode only)
+// ----------------------------------------------------
+app.get('/api/diag/env-check', requireAuth, async (req, res) => {
+  const user = (req as any).user;
+  if (user?.email !== 'jameskoikai04@gmail.com') return res.status(403).json({ error: 'Forbidden' });
+
+  res.json({
+    WHATSAPP_TOKEN_STUDENTS: (process.env.WHATSAPP_TOKEN_STUDENTS || '').trim(),
+    WHATSAPP_TOKEN_ACCESSORIES: (process.env.WHATSAPP_TOKEN_ACCESSORIES || '').trim(),
+    WHATSAPP_ID_STUDENTS: (process.env.WHATSAPP_ID_STUDENTS || '1044226772116764').trim(),
+    WHATSAPP_ID_ACCESSORIES: (process.env.WHATSAPP_ID_ACCESSORIES || '1141388965725319').trim(),
+    supabase_url: config.SUPABASE_URL ? 'PRESENT' : 'MISSING',
+    db_url: config.SUPABASE_DATABASE_URL ? 'PRESENT' : 'MISSING'
+  });
 });
 
 app.get('/api/stats', requireAuth, async (req, res) => {
@@ -847,7 +985,7 @@ app.post('/api/send-receipt', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (e: any) {
     console.error('send-receipt error:', e.message);
-    res.status(500).json({ error: 'Failed' });
+    res.status(500).json({ error: 'Failed to send receipt' });
   }
 });
 
