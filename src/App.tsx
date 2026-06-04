@@ -903,7 +903,11 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
   const [selected, setSelected] = useState<Lead | null>(null);
   const [convos, setConvos] = useState<ConversationLog[]>([]);
   const [loadingConvos, setLoadingConvos] = useState(false);
-  const [payForm, setPayForm] = useState({ code: '', amount: '', storage: '', condition: '' });
+  const [payForm, setPayForm] = useState({
+    code: '', amount: '', storage: '', condition: '',
+    name: '', email: '', model: '', location: '', method: ''
+  });
+
   const [busy, setBusy] = useState(false);
   const [receiptSent, setReceiptSent] = useState(false);
   const [humanReply, setHumanReply] = useState('');
@@ -931,6 +935,11 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
         amount: selected.product_price || '',
         storage: selected.product_storage || '',
         condition: selected.product_condition || '',
+        name: selected.customer_name || '',
+        email: selected.email || '',
+        model: selected.product_model || selected.interest || '',
+        location: selected.delivery_location || '',
+        method: selected.payment_method || 'M-Pesa'
       });
     }
   }, [selected]);
@@ -954,7 +963,7 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
     setSelected(null);
     setConvos([]);
     fetchLeads(inbox);
-    const id = setInterval(() => fetchLeads(inbox), 30000);
+    const id = setInterval(() => fetchLeads(inbox), 10000);
     return () => clearInterval(id);
   }, [inbox]);
 
@@ -1077,19 +1086,33 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
         body: JSON.stringify({
           transaction_code: payForm.code,
           customer_phone: selected.phone,
-          customer_name: selected.customer_name || '',
+          customer_name: payForm.name,
+          customer_email: payForm.email,
           amount: parseFloat(payForm.amount),
           payment_status: 'confirmed',
-          product_model: selected.product_model || selected.interest || '',
+          product_model: payForm.model,
           product_storage: payForm.storage,
           product_condition: payForm.condition,
+          delivery_location: payForm.location,
+          payment_method: payForm.method
         })
       });
 
       if (sendReceipt) {
         await authFetch('/api/send-receipt', {
           method: 'POST',
-          body: JSON.stringify({ phone: selected.phone, transaction_code: payForm.code })
+          body: JSON.stringify({
+            phone: selected.phone,
+            transaction_code: payForm.code,
+            name: payForm.name,
+            email: payForm.email,
+            model: payForm.model,
+            storage: payForm.storage,
+            condition: payForm.condition,
+            location: payForm.location,
+            paymentMethod: payForm.method,
+            amount: payForm.amount
+          })
         });
         setReceiptSent(true);
       }
@@ -1338,29 +1361,15 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
                     value={payForm.amount}
                     onChange={e => setPayForm({ ...payForm, amount: e.target.value })}
                   />
-                  {/* Auto-filled read-only fields */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                    <div className="inbox-field-row">
-                      <span className="inbox-field-label">Product (auto)</span>
-                      <div className="inbox-field-value" style={{ fontSize: 11 }}>{productLabel}</div>
-                    </div>
-                    <div className="inbox-field-row">
-                      <span className="inbox-field-label">Delivery (auto)</span>
-                      <div className="inbox-field-value" style={{ fontSize: 11 }}>{selected.delivery_location || '—'}</div>
-                    </div>
+                    <input className="inp" placeholder="Name" value={payForm.name} onChange={e => setPayForm({ ...payForm, name: e.target.value })} />
+                    <input className="inp" placeholder="Email" value={payForm.email} onChange={e => setPayForm({ ...payForm, email: e.target.value })} />
+                    <input className="inp" placeholder="Product" value={payForm.model} onChange={e => setPayForm({ ...payForm, model: e.target.value })} />
+                    <input className="inp" placeholder="Delivery Location" value={payForm.location} onChange={e => setPayForm({ ...payForm, location: e.target.value })} />
+                    <input className="inp" placeholder="Payment Method" value={payForm.method} onChange={e => setPayForm({ ...payForm, method: e.target.value })} />
+                    <input className="inp" placeholder="Storage" value={payForm.storage} onChange={e => setPayForm({ ...payForm, storage: e.target.value })} />
                   </div>
-                  <input
-                    className="inp"
-                    placeholder="Storage (e.g. 128GB)"
-                    value={payForm.storage}
-                    onChange={e => setPayForm({ ...payForm, storage: e.target.value })}
-                  />
-                  <input
-                    className="inp"
-                    placeholder="Condition (e.g. Grade A)"
-                    value={payForm.condition}
-                    onChange={e => setPayForm({ ...payForm, condition: e.target.value })}
-                  />
+                  <input className="inp" placeholder="Condition (e.g. Grade A)" value={payForm.condition} onChange={e => setPayForm({ ...payForm, condition: e.target.value })} />
 
                   <button
                     className="btn-primary"
@@ -1403,11 +1412,27 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
   const [selected, setSelected] = useState<Lead | null>(null);
   const [convos, setConvos] = useState<ConversationLog[]>([]);
   const [loadingConvos, setLoadingConvos] = useState(false);
-  const [receiptForm, setReceiptForm] = useState({ code: '', amount: '', storage: '', condition: '' });
+  const [receiptForm, setReceiptForm] = useState({
+    code: '', amount: '', storage: '', condition: '',
+    name: '', email: '', model: '', location: '', method: ''
+  });
+
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (selected) setReceiptForm({ code: selected.transaction_code || '', amount: selected.product_price || '', storage: selected.product_storage || '', condition: selected.product_condition || '' });
+    if (selected) {
+      setReceiptForm({
+        code: selected.transaction_code || '',
+        amount: selected.product_price || '',
+        storage: selected.product_storage || '',
+        condition: selected.product_condition || '',
+        name: selected.customer_name || '',
+        email: selected.email || '',
+        model: selected.product_model || selected.interest || '',
+        location: selected.delivery_location || '',
+        method: selected.payment_method || 'M-Pesa'
+      });
+    }
   }, [selected]);
 
   const fetchLeads = () => {
@@ -1415,7 +1440,7 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
     authFetch(`/api/leads?inbox=${globalInbox}`).then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 30000); return () => clearInterval(id); }, [globalInbox]);
+  useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 10000); return () => clearInterval(id); }, [globalInbox]);
 
   const selectLead = (l: Lead) => {
     setSelected(l); setLoadingConvos(true);
@@ -1437,29 +1462,29 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
         method: 'POST',
         body: JSON.stringify({
           transaction_code: receiptForm.code, customer_phone: selected.phone,
-          customer_email: selected.email || '', customer_name: selected.customer_name || '',
+          customer_email: receiptForm.email, customer_name: receiptForm.name,
           amount: parseFloat(receiptForm.amount), payment_status: sendEmail ? 'completed' : 'confirmed',
-          payment_method: selected.payment_method || 'M-Pesa',
-          delivery_location: selected.delivery_location || 'Store Pickup',
-          product_model: selected.product_model || selected.interest || '',
+          payment_method: receiptForm.method,
+          delivery_location: receiptForm.location,
+          product_model: receiptForm.model,
           product_storage: receiptForm.storage, product_condition: receiptForm.condition,
           upsell_items: selected.upsell_items || '',
         }),
       });
-      if (sendEmail && selected.email?.includes('@')) {
+      if (sendEmail && receiptForm.email?.includes('@')) {
         const r = await fetch('https://shwariaccessories.app.n8n.cloud/webhook/send-receipt', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: selected.email,
+            email: receiptForm.email,
             phone: selected.phone,
-            name: selected.customer_name,
-            product: selected.product_model,
+            name: receiptForm.name,
+            product: receiptForm.model,
             transactionCode: receiptForm.code,
             amount: receiptForm.amount,
             storage: receiptForm.storage,
             condition: receiptForm.condition,
-            location: selected.delivery_location,
-            paymentMethod: selected.payment_method
+            location: receiptForm.location,
+            paymentMethod: receiptForm.method
           }),
         });
         alert(r.ok ? 'Receipt sent!' : 'Payment saved. Receipt email failed — check N8N logs.');
@@ -1522,10 +1547,16 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input className="inp" placeholder="Transaction Code" value={receiptForm.code} onChange={e => setReceiptForm({ ...receiptForm, code: e.target.value })} />
               <input className="inp" placeholder="Amount (KES)" type="number" value={receiptForm.amount} onChange={e => setReceiptForm({ ...receiptForm, amount: e.target.value })} />
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                <input className="inp" placeholder="Name" value={receiptForm.name} onChange={e => setReceiptForm({ ...receiptForm, name: e.target.value })} />
+                <input className="inp" placeholder="Email" value={receiptForm.email} onChange={e => setReceiptForm({ ...receiptForm, email: e.target.value })} />
+                <input className="inp" placeholder="Product" value={receiptForm.model} onChange={e => setReceiptForm({ ...receiptForm, model: e.target.value })} />
+                <input className="inp" placeholder="Delivery Location" value={receiptForm.location} onChange={e => setReceiptForm({ ...receiptForm, location: e.target.value })} />
+                <input className="inp" placeholder="Payment Method" value={receiptForm.method} onChange={e => setReceiptForm({ ...receiptForm, method: e.target.value })} />
                 <input className="inp" placeholder="Storage" value={receiptForm.storage} onChange={e => setReceiptForm({ ...receiptForm, storage: e.target.value })} />
-                <input className="inp" placeholder="Condition" value={receiptForm.condition} onChange={e => setReceiptForm({ ...receiptForm, condition: e.target.value })} />
               </div>
+              <input className="inp" placeholder="Condition (e.g. Grade A)" value={receiptForm.condition} onChange={e => setReceiptForm({ ...receiptForm, condition: e.target.value })} />
+
               <button className="btn-primary" style={{ marginTop: 4 }} disabled={busy} onClick={() => recordPayment(false)}>
                 {busy ? 'Saving…' : 'Save Payment'}
               </button>
