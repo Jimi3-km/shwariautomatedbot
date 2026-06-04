@@ -208,7 +208,7 @@ export default function App() {
 
   useEffect(() => {
     fetch('/api/public-env').then(r => r.json()).then(d => {
-      if (d.SUPABASE_URL && d.SUPABASE_ANON_KEY) {
+      if (d.SUPABASE_URL && d.SUPABASE_ANON_KEY && !supabase) {
         supabase = createClient(d.SUPABASE_URL, d.SUPABASE_ANON_KEY);
       }
       setReady(true);
@@ -221,11 +221,18 @@ export default function App() {
   return <Dashboard />;
 }
 
+const INBOX_LABELS: Record<string, string> = {
+  '1044226772116764': 'Shwari Students',
+  '1141388965725319': 'Shwari Accessories',
+  'all': 'All Accounts'
+};
+
 // =============================================================================
 // DASHBOARD
 // =============================================================================
 function Dashboard() {
   const [tab, setTab] = useState('overview');
+  const [globalInbox, setGlobalInbox] = useState('1044226772116764');
   const [payments, setPayments] = useState<Payment[]>([]);
   const [subscription, setSubscription] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -257,7 +264,7 @@ function Dashboard() {
 
   const fetchPayments = async () => {
     try {
-      const r = await authFetch('/api/payments');
+      const r = await authFetch(`/api/payments?inbox=${globalInbox}`);
       if (r.ok) setPayments(await r.json());
     } catch { }
   };
@@ -368,6 +375,20 @@ function Dashboard() {
           ))}
         </nav>
 
+        {/* Global Inbox Selector */}
+        <div style={{ padding: '0 16px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-4)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.05em' }}>View Data For:</div>
+          <select
+            value={globalInbox}
+            onChange={e => setGlobalInbox(e.target.value)}
+            style={{ width: '100%', background: 'var(--surface-2)', border: '1px solid var(--border)', color: '#fff', padding: '8px 12px', borderRadius: 8, fontSize: 13, outline: 'none' }}
+          >
+            {Object.entries(INBOX_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Status */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -397,10 +418,10 @@ function Dashboard() {
           <Paywall subscription={subscription} onPaymentSuccess={handlePaymentSuccess} />
         ) : (
           <>
-            {tab === 'overview' && <OverviewTab onNavigate={setTab} payments={payments} />}
-            {tab === 'inbox' && <InboxTab />}
+            {tab === 'overview' && <OverviewTab onNavigate={setTab} payments={payments} globalInbox={globalInbox} />}
+            {tab === 'inbox' && <InboxTab globalInbox={globalInbox} />}
             {tab === 'pricelist' && <PricelistTab />}
-            {tab === 'leads' && <LeadsTab />}
+            {tab === 'leads' && <LeadsTab globalInbox={globalInbox} />}
             {tab === 'payments' && <PaymentsTab payments={payments} />}
             {tab === 'settings' && <SettingsTab />}
           </>
@@ -482,9 +503,9 @@ function OnboardingScreen({ onComplete, defaultName, userEmail }: { onComplete: 
 // =============================================================================
 // OVERVIEW
 // =============================================================================
-function OverviewTab({ onNavigate, payments }: { onNavigate: (t: string) => void; payments: Payment[] }) {
+function OverviewTab({ onNavigate, payments, globalInbox }: { onNavigate: (t: string) => void; payments: Payment[], globalInbox: string }) {
   const [stats, setStats] = useState<any>({});
-  useEffect(() => { authFetch('/api/stats').then(r => r.json()).then(d => { if (!d.error) setStats(d); }).catch(() => { }); }, []);
+  useEffect(() => { authFetch(`/api/stats?inbox=${globalInbox}`).then(r => r.json()).then(d => { if (!d.error) setStats(d); }).catch(() => { }); }, [globalInbox]);
 
   const kpis = [
     { label: 'Revenue', value: `KES ${(stats.totalRevenue || 0).toLocaleString()}`, sub: 'Confirmed sales', icon: <TrendingUp size={15} /> },
@@ -875,13 +896,8 @@ function displayName(lead: Lead): string {
   return lead.phone;
 }
 
-const INBOX_LABELS: Record<string, string> = {
-  '1044226772116764': 'Shwari Students',
-  '1141388965725319': 'Shwari Accessories',
-};
-
-function InboxTab() {
-  const [inbox, setInbox] = useState<string>('1044226772116764');
+function InboxTab({ globalInbox }: { globalInbox: string }) {
+  const [inbox, setInbox] = useState<string>(globalInbox === 'all' ? '1044226772116764' : globalInbox);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Lead | null>(null);
@@ -896,6 +912,16 @@ function InboxTab() {
   const [sendingPhoto, setSendingPhoto] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  // Sync with global inbox selector
+  useEffect(() => {
+    if (globalInbox !== 'all' && globalInbox !== inbox) {
+      setInbox(globalInbox);
+    }
+  }, [globalInbox]);
 
   // Auto-fill payment form from selected lead
   useEffect(() => {
@@ -981,6 +1007,23 @@ function InboxTab() {
     }
   };
 
+  const saveLeadName = async () => {
+    if (!selected || !newName.trim()) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/name`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: newName })
+      });
+      if (res.ok) {
+        setSelected({ ...selected, customer_name: newName });
+        fetchLeads(inbox);
+        setEditingName(false);
+      }
+    } catch (e) { console.error(e); }
+    setBusy(false);
+  };
+
   const sendPhotoReply = async () => {
     if (!selected || !photoFile) return;
     setSendingPhoto(true);
@@ -989,9 +1032,8 @@ function InboxTab() {
       formData.append('photo', photoFile);
       if (humanReply.trim()) formData.append('caption', humanReply);
 
-      const res = await fetch(`/api/leads/${encodeURIComponent(selected.phone)}/photo`, {
+      const res = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/photo`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('sb-access-token')}` },
         body: formData
       });
 
@@ -1052,7 +1094,7 @@ function InboxTab() {
       <div className="inbox-list-pane">
         <div className="inbox-list-header">
           <div className="inbox-tabs">
-            {Object.keys(INBOX_LABELS).map(key => (
+            {Object.keys(INBOX_LABELS).filter(k => k !== 'all').map(key => (
               <button
                 key={key}
                 className={`inbox-tab-btn ${inbox === key ? 'active' : ''}`}
@@ -1108,7 +1150,38 @@ function InboxTab() {
                     {getInitials(displayName(selected))}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: 15 }}>{displayName(selected)}</div>
+                    {editingName ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          autoFocus
+                          className="inp"
+                          style={{ height: 32, fontSize: 13, padding: '0 8px', width: 150 }}
+                          value={newName}
+                          onChange={e => setNewName(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && saveLeadName()}
+                        />
+                        <button className="btn-primary" style={{ padding: '0 8px', height: 32 }} onClick={saveLeadName} disabled={busy}>
+                          <Check size={14} />
+                        </button>
+                        <button className="btn-ghost" style={{ padding: '0 8px', height: 32 }} onClick={() => setEditingName(false)}>
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 15 }}>{displayName(selected)}</div>
+                        <button
+                          className="btn-ghost"
+                          style={{ padding: 4, height: 'auto', color: 'var(--text-4)' }}
+                          onClick={() => {
+                            setNewName(displayName(selected));
+                            setEditingName(true);
+                          }}
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      </div>
+                    )}
                     <div style={{ fontSize: 11, color: 'var(--text-4)' }}>{selected.phone}</div>
                   </div>
                 </div>
@@ -1300,7 +1373,7 @@ function InboxTab() {
 // =============================================================================
 // LEADS
 // =============================================================================
-function LeadsTab() {
+function LeadsTab({ globalInbox }: { globalInbox: string }) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Lead | null>(null);
@@ -1315,10 +1388,10 @@ function LeadsTab() {
 
   const fetchLeads = () => {
     setLoading(true);
-    authFetch('/api/leads').then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
+    authFetch(`/api/leads?inbox=${globalInbox}`).then(r => r.json()).then(d => { if (!d.error) setLeads(d); }).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 30000); return () => clearInterval(id); }, []);
+  useEffect(() => { fetchLeads(); const id = setInterval(fetchLeads, 30000); return () => clearInterval(id); }, [globalInbox]);
 
   const selectLead = (l: Lead) => {
     setSelected(l); setLoadingConvos(true);

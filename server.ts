@@ -493,13 +493,22 @@ app.put('/api/leads/:phone/mode', requireAuth, async (req, res) => {
     const { phone } = req.params;
     const { bot_status } = req.body;
 
-    let webhookUrl = bot_status === 'human'
-      ? 'https://shwariaccessories.app.n8n.cloud/webhook/takeover'
-      : 'https://shwariaccessories.app.n8n.cloud/webhook/return-to-bot';
+    const pool = getPool();
+    const cleanPhone = phone.replace(/\D/g, '');
+    const { rows } = await pool.query('SELECT inbox_number FROM leads WHERE REPLACE(phone, \'+\', \'\') = $1 OR phone = $2', [cleanPhone, phone]);
+    const leadInboxId = rows[0]?.inbox_number || config.WHATSAPP_ID_STUDENTS;
 
-    const payload = bot_status === 'human'
-      ? { customerPhone: phone, agentName: 'Staff' }
-      : { customerPhone: phone };
+    const webhookUrl = leadInboxId === config.WHATSAPP_ID_ACCESSORIES
+      ? config.N8N_WEBHOOK_ACCESSORIES
+      : config.N8N_WEBHOOK_STUDENTS;
+
+    if (!webhookUrl) throw new Error('n8n webhook not configured');
+
+    const payload = {
+      customerPhone: phone,
+      action: bot_status === 'human' ? 'takeover' : 'return-to-bot',
+      agentName: bot_status === 'human' ? 'Staff' : undefined
+    };
 
     await axios.post(webhookUrl, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 });
 
@@ -579,11 +588,17 @@ app.post('/api/leads/:phone/reply', requireAuth, async (req, res) => {
 
     // 2. Also notify n8n to log the message in conversations table
     try {
-      await axios.post(
-        'https://shwariaccessories.app.n8n.cloud/webhook/human-send-message',
-        { customerPhone: phone, message, phoneNumberId: leadInboxId },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
-      );
+      const webhookUrl = leadInboxId === config.WHATSAPP_ID_ACCESSORIES
+        ? config.N8N_WEBHOOK_ACCESSORIES
+        : config.N8N_WEBHOOK_STUDENTS;
+
+      if (webhookUrl) {
+        await axios.post(
+          webhookUrl,
+          { customerPhone: phone, message, phoneNumberId: leadInboxId, action: 'human-send-message' },
+          { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+      }
     } catch (logErr: any) {
       console.warn('n8n log failed (message still sent):', logErr?.message);
     }
@@ -651,6 +666,25 @@ app.get('/api/stats', requireAuth, async (req, res) => {
 
     const pool = getPool();
 
+    const inboxParam = req.query.inbox as string | undefined;
+    let inboxClause = '';
+    let payInboxClause = '';
+    const queryParams: any[] = [];
+
+    if (inboxParam && inboxParam !== 'all') {
+      if (inboxParam === config.WHATSAPP_ID_STUDENTS) {
+        inboxClause = `WHERE (inbox_number IS NULL OR inbox_number = '' OR inbox_number = $1 OR inbox_number = 'inbox1')`;
+        payInboxClause = `WHERE (inbox_number IS NULL OR inbox_number = '' OR inbox_number = $1 OR inbox_number = 'inbox1') AND (payment_status = 'confirmed' OR payment_status = 'completed')`;
+        queryParams.push(config.WHATSAPP_ID_STUDENTS);
+      } else {
+        inboxClause = `WHERE inbox_number = $1`;
+        payInboxClause = `WHERE inbox_number = $1 AND (payment_status = 'confirmed' OR payment_status = 'completed')`;
+        queryParams.push(inboxParam);
+      }
+    } else {
+      payInboxClause = `WHERE payment_status = 'confirmed' OR payment_status = 'completed'`;
+    }
+
     let inStockTotal = 0;
     let outStockTotal = 0;
 
@@ -663,7 +697,9 @@ app.get('/api/stats', requireAuth, async (req, res) => {
     }
 
     // Leads stats
-    const { rows: leads } = await pool.query('SELECT * FROM leads');
+    let leadsQuery = 'SELECT * FROM leads';
+    if (inboxClause) leadsQuery += ` ${inboxClause}`;
+    const { rows: leads } = await pool.query(leadsQuery, queryParams);
     const stats = {
       totalLeads: leads.length,
       highValue: leads.filter(l => l.urgency === "high").length,
@@ -689,7 +725,7 @@ app.get('/api/stats', requireAuth, async (req, res) => {
     };
 
     // Sales stats
-    const salesRes = await pool.query("SELECT COUNT(*) as count, SUM(amount) as revenue FROM payments WHERE payment_status = 'confirmed' OR payment_status = 'completed'");
+    const salesRes = await pool.query(`SELECT COUNT(*) as count, SUM(amount) as revenue FROM payments ${payInboxClause}`, queryParams);
     const totalSales = parseInt(salesRes.rows[0].count) || 0;
     const totalRevenue = parseFloat(salesRes.rows[0].revenue) || 0;
 
@@ -767,29 +803,18 @@ app.get('/api/leads/:phone/conversations', requireAuth, async (req, res) => {
   }
 });
 
+
 // ----------------------------------------------------
-// LEAD STATUS: Toggle Bot/Human Mode
+// LEAD NAME: Update lead nickname
 // ----------------------------------------------------
-app.put('/api/leads/:phone/mode', requireAuth, async (req, res) => {
+app.put('/api/leads/:phone/name', requireAuth, async (req, res) => {
   try {
     const { phone } = req.params;
-    const { mode } = req.body;
+    const { name } = req.body;
     const pool = getPool();
-    await pool.query(
-      `INSERT INTO human_handover (customer_phone, status, updated_at) 
-       VALUES ($1, $2, NOW()) 
-       ON CONFLICT (customer_phone) DO UPDATE SET status = $2, updated_at = NOW()`,
-      [phone, mode]
-    );
-    const webhookPath = mode === 'human' ? 'takeover' : 'return-to-bot';
-    try {
-      await axios.post(`https://shwariaccessories.app.n8n.cloud/webhook/${webhookPath}`, { customerPhone: phone });
-    } catch (err: any) {
-      console.warn(`n8n ${webhookPath} webhook failed:`, err.message);
-    }
-    res.json({ success: true, mode });
+    await pool.query('UPDATE leads SET customer_name = $1 WHERE phone = $2', [name, phone]);
+    res.json({ success: true });
   } catch (e: any) {
-    console.error('toggle-mode error:', e.message);
     res.status(500).json({ error: String(e) });
   }
 });
@@ -832,7 +857,22 @@ app.post('/api/send-receipt', requireAuth, async (req, res) => {
 app.get('/api/payments', requireAuth, async (req, res) => {
   try {
     const pool = getPool();
-    const { rows } = await pool.query('SELECT * FROM payments ORDER BY created_at DESC');
+    const inboxParam = req.query.inbox as string | undefined;
+    let query = 'SELECT * FROM payments';
+    const params: any[] = [];
+
+    if (inboxParam && inboxParam !== 'all') {
+      if (inboxParam === config.WHATSAPP_ID_STUDENTS) {
+        query += ` WHERE (inbox_number IS NULL OR inbox_number = '' OR inbox_number = $1 OR inbox_number = 'inbox1')`;
+        params.push(config.WHATSAPP_ID_STUDENTS);
+      } else {
+        query += ` WHERE inbox_number = $1`;
+        params.push(inboxParam);
+      }
+    }
+    query += ' ORDER BY created_at DESC';
+
+    const { rows } = await pool.query(query, params);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -852,9 +892,19 @@ app.post('/api/payments', requireAuth, async (req, res) => {
       product_model,
       product_storage,
       product_condition,
-      upsell_items
+      upsell_items,
+      inbox_number
     } = req.body;
     const pool = getPool();
+
+    // Determine default inbox if missing
+    let actualInbox = inbox_number;
+    if (!actualInbox) {
+      const cleanPhone = customer_phone.replace(/\D/g, '');
+      const ln = await pool.query(`SELECT inbox_number FROM leads WHERE REPLACE(phone, '+', '') = $1 LIMIT 1`, [cleanPhone]);
+      actualInbox = ln.rows[0]?.inbox_number || config.WHATSAPP_ID_STUDENTS;
+    }
+
     const result = await pool.query(
       `INSERT INTO payments (
           transaction_code, 
@@ -868,9 +918,10 @@ app.post('/api/payments', requireAuth, async (req, res) => {
           product_model,
           product_storage,
           product_condition,
-          upsell_items
+          upsell_items,
+          inbox_number
         ) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
          ON CONFLICT (transaction_code) DO UPDATE SET
           payment_status = EXCLUDED.payment_status,
           updated_at = NOW()
@@ -887,7 +938,8 @@ app.post('/api/payments', requireAuth, async (req, res) => {
         product_model,
         product_storage,
         product_condition,
-        upsell_items
+        upsell_items,
+        actualInbox
       ]
     );
     res.json(result.rows[0] || { success: true });

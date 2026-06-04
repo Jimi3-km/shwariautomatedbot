@@ -50,6 +50,12 @@
               "name": "timestamp",
               "value": "={{ $now.toISO() }}",
               "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "inbox_number",
+              "value": "1044226772116764",
+              "type": "string"
             }
           ]
         },
@@ -72,6 +78,10 @@
             {
               "fieldId": "customer_phone",
               "fieldValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
+            },
+            {
+              "fieldId": "inbox_number",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.inbox_number }}"
             },
             {
               "fieldId": "message",
@@ -521,6 +531,10 @@
         "fieldsUi": {
           "fieldValues": [
             {
+              "fieldId": "inbox_number",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.inbox_number }}"
+            },
+            {
               "fieldId": "intent",
               "fieldValue": "={{ $(\"Prepare Reply\").item.json.intent }}"
             },
@@ -614,6 +628,10 @@
         "tableId": "leads",
         "fieldsUi": {
           "fieldValues": [
+            {
+              "fieldId": "inbox_number",
+              "fieldValue": "={{ $(\"Extract Message Data\").item.json.inbox_number }}"
+            },
             {
               "fieldId": "phone",
               "fieldValue": "={{ $(\"Extract Message Data\").item.json.customerPhone }}"
