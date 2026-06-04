@@ -502,3 +502,278 @@ input[type="file"]::file-selector-button:hover {
 .lead-card:hover {
   border-color: #333;
 }
+
+/* ─────────────────────────────────────────
+   Inbox
+   ───────────────────────────────────────── */
+
+/* Outer layout — two pane side-by-side */
+.inbox-layout {
+  display: flex;
+  height: calc(100vh - 56px);
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Left pane: lead list */
+.inbox-list-pane {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 12px 0 0 12px;
+  overflow: hidden;
+}
+
+.inbox-list-header {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inbox-list-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Inbox selector pill tabs */
+.inbox-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.inbox-tab-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all 0.15s;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.inbox-tab-btn.active {
+  background: var(--white);
+  color: var(--black);
+}
+
+.inbox-tab-btn:not(.active):hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+}
+
+/* Each lead row */
+.inbox-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+  position: relative;
+}
+
+.inbox-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.inbox-item.active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.inbox-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--white);
+  border-radius: 0 2px 2px 0;
+}
+
+/* Avatar circle */
+.inbox-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--black);
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
+}
+
+.inbox-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 3px;
+}
+
+.inbox-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-item-time {
+  font-size: 10px;
+  color: var(--text-4);
+  font-family: var(--mono);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.inbox-item-preview {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.inbox-item-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+/* Right pane: conversation */
+.inbox-conv-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: 0 12px 12px 0;
+  border: 1px solid var(--border);
+  border-left: none;
+}
+
+.inbox-conv-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Inner layout: messages + action panel */
+.inbox-conv-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.inbox-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inbox-action-panel {
+  width: 260px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.inbox-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inbox-field-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-4);
+}
+
+.inbox-field-value {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+/* Empty inbox state */
+.inbox-empty-conv {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-4);
+  gap: 10px;
+  text-align: center;
+  padding: 40px;
+}
+
+.inbox-empty-conv svg {
+  opacity: 0.15;
+}
+
+.inbox-empty-conv p {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* Receipt success pulse */
+@keyframes successPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4);
+  }
+
+  70% {
+    box-shadow: 0 0 0 8px rgba(74, 222, 128, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
+  }
+}
+
+.inbox-send-success {
+  animation: successPulse 0.6s ease-out;
+}

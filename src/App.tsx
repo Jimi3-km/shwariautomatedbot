@@ -3,7 +3,8 @@ import {
   Settings as SettingsIcon, MessageSquare, Smartphone, Activity,
   RefreshCw, Save, Trash2, Edit2, Plus, Check, ArrowLeft,
   DollarSign, Users, Package, TrendingUp, Image, Upload, Play, X,
-  CreditCard, Lock, AlertTriangle, ExternalLink, LogOut, UserPlus, Shield
+  CreditCard, Lock, AlertTriangle, ExternalLink, LogOut, UserPlus, Shield,
+  Inbox, Send, Receipt, ChevronDown
 } from 'lucide-react';
 import { format, differenceInDays } from 'date-fns';
 
@@ -58,27 +59,19 @@ type Lead = {
   product_model?: string;
   product_storage?: string;
   product_condition?: string;
-  product_price?: string;
   upsell_items?: string;
   customer_name?: string;
+  bot_status?: 'bot' | 'human';
 };
 
 type ConversationLog = {
   id?: number;
   customer_phone: string;
-  message?: string;
-  response?: string;
-  created_at: string;
-  email?: string;
-  delivery_location?: string;
-  payment_method?: string;
-  transaction_code?: string;
-  product_model?: string;
-  product_storage?: string;
-  product_condition?: string;
-  product_price?: string;
-  upsell_items?: string;
   customer_name?: string;
+  message?: string;
+  direction?: 'incoming' | 'outgoing';
+  channel?: string;
+  timestamp?: string;
 };
 
 type Payment = {
@@ -130,6 +123,7 @@ const statusBadge = (s: string) =>
 // =============================================================================
 const NAV = [
   { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
+  { id: 'inbox', label: 'Inbox', icon: <Inbox size={15} /> },
   { id: 'pricelist', label: 'Inventory', icon: <Smartphone size={15} /> },
   { id: 'leads', label: 'Leads', icon: <Users size={15} /> },
   { id: 'payments', label: 'Sales', icon: <DollarSign size={15} /> },
@@ -404,6 +398,7 @@ function Dashboard() {
         ) : (
           <>
             {tab === 'overview' && <OverviewTab onNavigate={setTab} payments={payments} />}
+            {tab === 'inbox' && <InboxTab />}
             {tab === 'pricelist' && <PricelistTab />}
             {tab === 'leads' && <LeadsTab />}
             {tab === 'payments' && <PaymentsTab payments={payments} />}
@@ -625,7 +620,7 @@ function PricelistTab() {
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           {Object.entries(categoryLabels).map(([id, label]) => (
-            <button key={id} onClick={() => { setCategory(id); setPreviewId(null); setEditingId(null); }} style={{
+            <button key={id} onClick={() => { setCategory(id); setPreviewId(null); setEditingId(null); setForm({}); }} style={{
               background: category === id ? '#fff' : 'transparent',
               color: category === id ? '#000' : 'var(--text-3)',
               border: `1px solid ${category === id ? '#fff' : 'var(--border-2)'}`,
@@ -852,6 +847,457 @@ function PricelistTab() {
 }
 
 // =============================================================================
+// INBOX
+// =============================================================================
+
+// Avatar palette — deterministic colour from initials
+const AVATAR_PALETTE = [
+  '#a3e635', '#34d399', '#38bdf8', '#818cf8', '#f472b6', '#fb923c', '#fbbf24', '#e879f9'
+];
+
+function avatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+const BAD_NAMES = ['hello', 'hi', 'hey', 'jambo', 'mambo', 'hujambo', 'karibu', 'sawa', 'okay', 'ok'];
+
+function displayName(lead: Lead): string {
+  const n = lead.customer_name?.trim();
+  if (n && !BAD_NAMES.includes(n.toLowerCase())) return n;
+  return lead.phone;
+}
+
+const INBOX_LABELS: Record<string, string> = {
+  '1044226772116764': 'Shwari Students',
+  '1141388965725319': 'Shwari Accessories',
+};
+
+function InboxTab() {
+  const [inbox, setInbox] = useState<string>('1044226772116764');
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Lead | null>(null);
+  const [convos, setConvos] = useState<ConversationLog[]>([]);
+  const [loadingConvos, setLoadingConvos] = useState(false);
+  const [payForm, setPayForm] = useState({ code: '', amount: '', storage: '', condition: '' });
+  const [busy, setBusy] = useState(false);
+  const [receiptSent, setReceiptSent] = useState(false);
+  const [humanReply, setHumanReply] = useState('');
+  const [replying, setReplying] = useState(false);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [sendingPhoto, setSendingPhoto] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+
+  // Auto-fill payment form from selected lead
+  useEffect(() => {
+    if (selected) {
+      setPayForm({
+        code: selected.transaction_code || '',
+        amount: selected.product_price || '',
+        storage: selected.product_storage || '',
+        condition: selected.product_condition || '',
+      });
+    }
+  }, [selected]);
+
+  // Scroll to bottom when convos load
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
+  }, [convos]);
+
+  const fetchLeads = (inboxKey: string) => {
+    setLoading(true);
+    authFetch(`/api/leads?inbox=${inboxKey}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setLeads(d); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    setSelected(null);
+    setConvos([]);
+    fetchLeads(inbox);
+    const id = setInterval(() => fetchLeads(inbox), 30000);
+    return () => clearInterval(id);
+  }, [inbox]);
+
+  const selectLead = (l: Lead) => {
+    setSelected(l);
+    setReceiptSent(false);
+    setLoadingConvos(true);
+    authFetch(`/api/leads/${encodeURIComponent(l.phone)}/conversations`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setConvos(d); })
+      .finally(() => setLoadingConvos(false));
+  };
+
+  const updateStage = async (phone: string, stage: string) => {
+    await authFetch(`/api/leads/${encodeURIComponent(phone)}/stage`, { method: 'PUT', body: JSON.stringify({ stage }) });
+    fetchLeads(inbox);
+  };
+
+  const toggleBotMode = async () => {
+    if (!selected) return;
+    const newMode = selected.bot_status === 'human' ? 'bot' : 'human';
+    await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/mode`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode: newMode })
+    });
+    setSelected({ ...selected, bot_status: newMode });
+    fetchLeads(inbox);
+  };
+
+  const sendHumanReply = async () => {
+    if (!selected || !humanReply.trim()) return;
+    setReplying(true);
+    try {
+      const res = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({ message: humanReply })
+      });
+      if (res.ok) {
+        setHumanReply('');
+        const cRes = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`);
+        const cData = await cRes.json();
+        if (!cData.error) setConvos(cData);
+        if (selected.bot_status !== 'human') {
+          setSelected({ ...selected, bot_status: 'human' });
+          fetchLeads(inbox);
+        }
+      }
+    } finally {
+      setReplying(false);
+    }
+  };
+
+  const sendPhotoReply = async () => {
+    if (!selected || !photoFile) return;
+    setSendingPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append('photo', photoFile);
+      if (humanReply.trim()) formData.append('caption', humanReply);
+
+      const res = await fetch(`/api/leads/${encodeURIComponent(selected.phone)}/photo`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('sb-access-token')}` },
+        body: formData
+      });
+
+      if (res.ok) {
+        setPhotoFile(null);
+        setHumanReply('');
+        const cRes = await authFetch(`/api/leads/${encodeURIComponent(selected.phone)}/conversations`);
+        const cData = await cRes.json();
+        if (!cData.error) setConvos(cData);
+      } else {
+        alert('Failed to send photo');
+      }
+    } finally {
+      setSendingPhoto(false);
+    }
+  };
+
+  const savePayment = async (sendReceipt: boolean) => {
+    if (!selected || !payForm.code || !payForm.amount) {
+      alert('Missing info'); return;
+    }
+    setBusy(true);
+    try {
+      await authFetch('/api/payments', {
+        method: 'POST',
+        body: JSON.stringify({
+          transaction_code: payForm.code,
+          customer_phone: selected.phone,
+          customer_name: selected.customer_name || '',
+          amount: parseFloat(payForm.amount),
+          payment_status: 'confirmed',
+          product_model: selected.product_model || selected.interest || '',
+          product_storage: payForm.storage,
+          product_condition: payForm.condition,
+        })
+      });
+
+      if (sendReceipt) {
+        await authFetch('/api/send-receipt', {
+          method: 'POST',
+          body: JSON.stringify({ phone: selected.phone, transaction_code: payForm.code })
+        });
+        setReceiptSent(true);
+      }
+      alert('Payment saved');
+      updateStage(selected.phone, 'payment_submitted');
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const productLabel = selected?.product_model ? `${selected.product_model} ${selected.product_storage || ''}`.trim() : selected?.interest || 'N/A';
+
+  return (
+    <div className="inbox-layout">
+      <div className="inbox-list-pane">
+        <div className="inbox-list-header">
+          <div className="inbox-tabs">
+            {Object.keys(INBOX_LABELS).map(key => (
+              <button
+                key={key}
+                className={`inbox-tab-btn ${inbox === key ? 'active' : ''}`}
+                onClick={() => setInbox(key)}
+              >
+                {INBOX_LABELS[key]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="inbox-list-scroll">
+          {loading && (
+            <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>
+              <RefreshCw size={16} className="spin" />
+            </div>
+          )}
+          {!loading && leads.length === 0 && (
+            <div className="empty-state" style={{ padding: '2rem 1rem' }}>
+              <MessageSquare size={20} />
+              <p style={{ fontSize: 13 }}>No leads in this inbox.</p>
+            </div>
+          )}
+          {leads.map(lead => (
+            <div
+              key={lead.id}
+              className={`inbox-item ${selected?.id === lead.id ? 'active' : ''}`}
+              onClick={() => selectLead(lead)}
+            >
+              <div className="inbox-avatar" style={{ background: avatarColor(displayName(lead)) }}>
+                {getInitials(displayName(lead))}
+              </div>
+              <div className="inbox-item-body">
+                <div className="inbox-item-top">
+                  <span className="inbox-item-name">{displayName(lead)}</span>
+                  <span className="inbox-item-time">{format(new Date(lead.last_contact), 'HH:mm')}</span>
+                </div>
+                <div className="inbox-item-preview">{lead.last_message || 'No messages'}</div>
+              </div>
+              {lead.urgency === 'high' && <div className="inbox-item-dot" />}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="inbox-conv-pane">
+        {selected ? (
+          <div className="inbox-conv-body">
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div className="inbox-conv-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="inbox-avatar" style={{ width: 34, height: 34, fontSize: 12, background: avatarColor(displayName(selected)) }}>
+                    {getInitials(displayName(selected))}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>{displayName(selected)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-4)' }}>{selected.phone}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className={selected.bot_status === 'human' ? 'btn-primary' : 'btn-ghost'} style={{ fontSize: 11, padding: '5px 12px' }} onClick={toggleBotMode}>
+                    {selected.bot_status === 'human' ? 'Human Mode' : 'AI Active'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="inbox-messages" ref={messagesRef} style={{ flex: 1, overflowY: 'auto' }}>
+                {loadingConvos && (
+                  <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>
+                    <RefreshCw size={14} className="spin" />
+                  </div>
+                )}
+                {!loadingConvos && convos.length === 0 && (
+                  <div className="empty-state" style={{ padding: '3rem 2rem' }}>
+                    <MessageSquare size={24} />
+                    <p>No conversation logs yet.</p>
+                  </div>
+                )}
+                {convos.map((row, i) => (
+                  <React.Fragment key={i}>
+                    {row.direction === 'incoming' ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                        <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                          {displayName(selected)} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
+                        </span>
+                        <div className="bubble-customer">{row.message}</div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', alignSelf: 'flex-end' }}>
+                        <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                          {row.direction === 'outgoing-human' ? 'Staff' : 'Agent'} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
+                        </span>
+                        <div className="bubble-agent" style={{ background: row.direction === 'outgoing-human' ? '#dcf8c6' : 'var(--white)' }}>
+                          <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{row.message}</p>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+
+              {/* Human Chat Input (WhatsApp Style - Bottom aligned) */}
+              <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+                {photoFile && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '6px 10px', background: 'var(--surface-2)', borderRadius: 8 }}>
+                    <Image size={14} />
+                    <span style={{ fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photoFile.name}</span>
+                    <button className="btn-icon" style={{ padding: 2 }} onClick={() => setPhotoFile(null)}><X size={12} /></button>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button className="btn-icon" title="Attach photo" onClick={() => photoInputRef.current?.click()}>
+                    <Image size={16} />
+                  </button>
+                  <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => setPhotoFile(e.target.files?.[0] || null)} />
+                  <input
+                    className="inp"
+                    style={{ flex: 1 }}
+                    placeholder={photoFile ? 'Add a caption (optional)...' : selected.bot_status === 'human' ? 'Type a message...' : 'Type here to take over...'}
+                    value={humanReply}
+                    onChange={e => setHumanReply(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !photoFile) sendHumanReply(); }}
+                  />
+                  {photoFile ? (
+                    <button className="btn-primary" onClick={sendPhotoReply} disabled={sendingPhoto}>
+                      {sendingPhoto ? '...' : <Send size={15} />}
+                    </button>
+                  ) : (
+                    <button className="btn-primary" onClick={sendHumanReply} disabled={!humanReply.trim() || replying}>
+                      {replying ? '...' : <Send size={15} />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Action panel (Lead details & Payment) */}
+            <div className="inbox-action-panel">
+              {/* Lead info */}
+              <div>
+                <p className="section-label" style={{ marginBottom: 10 }}>Lead Details</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="inbox-field-row">
+                    <span className="inbox-field-label">Product</span>
+                    <div className="inbox-field-value">{productLabel}</div>
+                  </div>
+                  {selected.delivery_location && (
+                    <div className="inbox-field-row">
+                      <span className="inbox-field-label">Delivery</span>
+                      <div className="inbox-field-value">📍 {selected.delivery_location}</div>
+                    </div>
+                  )}
+                  {selected.payment_method && (
+                    <div className="inbox-field-row">
+                      <span className="inbox-field-label">Payment Method</span>
+                      <div className="inbox-field-value">💳 {selected.payment_method}</div>
+                    </div>
+                  )}
+                  {selected.product_price && (
+                    <div className="inbox-field-row">
+                      <span className="inbox-field-label">Quoted Price</span>
+                      <div className="inbox-field-value" style={{ color: 'var(--text)', fontWeight: 600, fontFamily: 'var(--mono)' }}>
+                        KES {parseFloat(selected.product_price).toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <hr className="divider" />
+
+              {/* Payment form */}
+              <div>
+                <p className="section-label" style={{ marginBottom: 10 }}>Record Payment</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <input
+                    className="inp"
+                    placeholder="Transaction Code (e.g. QJH7F...)"
+                    value={payForm.code}
+                    onChange={e => setPayForm({ ...payForm, code: e.target.value })}
+                  />
+                  <input
+                    className="inp"
+                    placeholder="Amount (KES)"
+                    type="number"
+                    value={payForm.amount}
+                    onChange={e => setPayForm({ ...payForm, amount: e.target.value })}
+                  />
+                  {/* Auto-filled read-only fields */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    <div className="inbox-field-row">
+                      <span className="inbox-field-label">Product (auto)</span>
+                      <div className="inbox-field-value" style={{ fontSize: 11 }}>{productLabel}</div>
+                    </div>
+                    <div className="inbox-field-row">
+                      <span className="inbox-field-label">Delivery (auto)</span>
+                      <div className="inbox-field-value" style={{ fontSize: 11 }}>{selected.delivery_location || '—'}</div>
+                    </div>
+                  </div>
+                  <input
+                    className="inp"
+                    placeholder="Storage (e.g. 128GB)"
+                    value={payForm.storage}
+                    onChange={e => setPayForm({ ...payForm, storage: e.target.value })}
+                  />
+                  <input
+                    className="inp"
+                    placeholder="Condition (e.g. Grade A)"
+                    value={payForm.condition}
+                    onChange={e => setPayForm({ ...payForm, condition: e.target.value })}
+                  />
+
+                  <button
+                    className="btn-primary"
+                    style={{ marginTop: 4, width: '100%' }}
+                    disabled={busy}
+                    onClick={() => savePayment(false)}
+                  >
+                    {busy ? 'Saving...' : <><Check size={13} /> Save Payment</>}
+                  </button>
+
+                  <button
+                    className={`btn-ghost${receiptSent ? ' inbox-send-success' : ''}`}
+                    style={{ width: '100%', border: receiptSent ? '1px solid #4ade80' : undefined, color: receiptSent ? '#4ade80' : undefined }}
+                    disabled={busy}
+                    onClick={() => savePayment(true)}
+                  >
+                    {receiptSent ? <><Check size={13} /> Receipt Sent!</> : <><Send size={13} /> Send Receipt</>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <MessageSquare size={40} />
+            <p>Select a conversation to start chatting</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // LEADS
 // =============================================================================
 function LeadsTab() {
@@ -1007,25 +1453,18 @@ function LeadsTab() {
                   {row.message && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                       <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                        Customer · {format(new Date(row.created_at), 'HH:mm')}
+                        Customer · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
                       </span>
                       <div className="bubble-customer">{row.message}</div>
                     </div>
                   )}
-                  {row.response && (
+                  {(row.direction === 'outgoing' || row.direction === 'outgoing-human') && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', alignSelf: 'flex-end' }}>
                       <span style={{ fontSize: 10, color: 'var(--text-4)', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                        Bot · {format(new Date(row.created_at), 'HH:mm')}
+                        {row.direction === 'outgoing-human' ? 'Staff' : 'Agent'} · {row.timestamp ? format(new Date(row.timestamp), 'HH:mm') : ''}
                       </span>
                       <div className="bubble-agent">
-                        <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{row.response}</p>
-                        {(row.product_model || row.delivery_location || row.payment_method) && (
-                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #e5e5e5', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {row.product_model && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>📱 {row.product_model} {row.product_storage}</span>}
-                            {row.delivery_location && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>📍 {row.delivery_location}</span>}
-                            {row.payment_method && <span style={{ fontSize: 10, background: '#f0f0f0', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>💳 {row.payment_method}</span>}
-                          </div>
-                        )}
+                        <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{row.message}</p>
                       </div>
                     </div>
                   )}
@@ -1042,65 +1481,49 @@ function LeadsTab() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 920 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.04em' }}>Leads</h1>
-        <div style={{ background: 'var(--surface-2)', padding: '4px 12px', borderRadius: 20, fontSize: 13, border: '1px solid var(--border)' }}>
-          {leads.length} total active leads
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>Leads</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-4)' }}>{leads.length} total active leads</span>
+          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={fetchLeads}>
+            <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+          </button>
         </div>
       </div>
-      <button className="btn-ghost" onClick={fetchLeads} style={{ fontSize: 12, width: 'fit-content', marginBottom: 10 }}>
-        <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
-      </button>
 
-      {leads.length === 0 && (
-        <div className="card"><div className="empty-state"><MessageSquare size={28} /><p>No leads yet. They will appear here when customers message on WhatsApp.</p></div></div>
+      {leads.length === 0 && !loading && (
+        <div className="card"><div className="empty-state"><MessageSquare size={28} /><p>No leads yet.</p></div></div>
       )}
 
       {leads.map(lead => (
         <div key={lead.id} className="lead-card" onClick={() => selectLead(lead)}>
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            {/* Identity */}
             <div style={{ flex: '1 1 250px', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 700, fontSize: 18, color: '#fff', letterSpacing: '-0.03em' }}>
-                  {(lead.customer_name && !['hello', 'hi', 'hey', 'jambo', 'mambo'].includes(lead.customer_name.toLowerCase().trim()))
-                    ? lead.customer_name
-                    : lead.phone}
-                </span>
+                <span style={{ fontWeight: 700, fontSize: 18, color: '#fff', letterSpacing: '-0.03em' }}>{displayName(lead)}</span>
                 <span className={urgencyBadge(lead.urgency)} style={{ fontSize: 10, padding: '2px 8px' }}>{lead.urgency || 'low'}</span>
               </div>
-
-              {(lead.customer_name && !['hello', 'hi', 'hey', 'jambo', 'mambo'].includes(lead.customer_name.toLowerCase().trim())) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-3)', fontSize: 12, marginBottom: 8 }}>
-                  <Smartphone size={12} />
-                  <span className="mono">{lead.phone}</span>
-                </div>
-              )}
-
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-3)', fontSize: 12, marginBottom: 8 }}>
+                <Smartphone size={12} />
+                <span className="mono">{lead.phone}</span>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <div style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 500 }}>
                   {lead.product_model ? `${lead.product_model} ${lead.product_storage || ''}`.trim() : lead.interest || 'No product specified'}
                 </div>
-                {lead.delivery_location && (
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span>📍</span> {lead.delivery_location}
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* Last message */}
             <div style={{ flex: '2 1 300px', minWidth: 0 }}>
               <div className="section-label" style={{ marginBottom: 6, fontSize: 9 }}>Last Message</div>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-3)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.5 }}>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-3)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 "{lead.last_message || 'No messages logged'}"
               </p>
             </div>
 
-            {/* Stage + actions */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
               <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>{format(new Date(lead.last_contact), 'MMM d, HH:mm')}</span>
               <span className="badge badge-neutral">{STAGES[lead.stage] || lead.stage}</span>
-              <select className="inp" value={lead.stage} style={{ fontSize: 12, width: 'auto', padding: '5px 28px 5px 8px' }}
+              <select className="inp" value={lead.stage} style={{ fontSize: 11, width: 'auto' }}
                 onClick={e => e.stopPropagation()}
                 onChange={e => { e.stopPropagation(); updateStage(lead.phone, e.target.value); }}>
                 {Object.entries(STAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}

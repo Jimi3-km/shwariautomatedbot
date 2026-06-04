@@ -10,6 +10,11 @@ export let config = {
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
   // Dashboard & N8N Webhook integrations
   N8N_API_URL: process.env.N8N_API_URL || '',
+  // WhatsApp Cloud API credentials (for direct human reply)
+  WHATSAPP_TOKEN_STUDENTS: process.env.WHATSAPP_TOKEN_STUDENTS || '',
+  WHATSAPP_TOKEN_ACCESSORIES: process.env.WHATSAPP_TOKEN_ACCESSORIES || '',
+  WHATSAPP_ID_STUDENTS: process.env.WHATSAPP_ID_STUDENTS || '1044226772116764',
+  WHATSAPP_ID_ACCESSORIES: process.env.WHATSAPP_ID_ACCESSORIES || '1141388965725319',
   // Paystack & Billing
   PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY || '',
   PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',

@@ -16,8 +16,22 @@ const supabase = config.SUPABASE_URL && supabaseToken
 
 const app = express();
 const PORT = parseInt(config.PORT, 10) || 3000;
-console.log(`🚀 Starting Shwari Server...`);
-console.log(`📁 DB URL detected: ${config.SUPABASE_DATABASE_URL ? 'YES' : 'NO'}`);
+
+// FORCED RE-PARSE OF .env (Sometimes tsx watch doesn't refresh process.env properly)
+import fs from 'fs';
+import dotenv from 'dotenv';
+if (fs.existsSync('.env')) {
+  const envConfig = dotenv.parse(fs.readFileSync('.env'));
+  for (const k in envConfig) {
+    process.env[k] = envConfig[k];
+    if (config.hasOwnProperty(k)) {
+      (config as any)[k] = envConfig[k];
+    }
+  }
+}
+
+console.log(`💬 Students Token Configured: ${config.WHATSAPP_TOKEN_STUDENTS ? 'YES' : 'NO'} (ID: ${config.WHATSAPP_ID_STUDENTS})`);
+console.log(`💬 Accessories Token Configured: ${config.WHATSAPP_TOKEN_ACCESSORIES ? 'YES' : 'NO'} (ID: ${config.WHATSAPP_ID_ACCESSORIES})`);
 
 // ----------------------------------------------------
 // AUTH MIDDLEWARE — verifies Supabase JWT
@@ -336,8 +350,17 @@ app.put('/api/pricelist/:id', requireAuth, upload.single('photo'), async (req, r
       return res.json(result.rows[0]);
     }
 
-    const { "Phone Model": phone_model, "Specs": specs, "Cash Price": cash_price, "Deposit": deposit, "12 Weeks": w12, "Deposit_1": dep1, "24 Weeks": w24, availability, notes } = req.body;
-    const stock_status = availability ? 'in_stock' : 'out_of_stock';
+    const phone_model = req.body["Phone Model"] || req.body.model;
+    const specs = req.body.Specs || req.body.specs;
+    const cash_price = req.body["Cash Price"] || req.body.full_price;
+    const deposit = req.body.Deposit || req.body.lipa_mdogo_deposit;
+    const w12 = req.body["12 Weeks"] || req.body.lipa_mdogo_weekly;
+    const dep1 = req.body.Deposit_1;
+    const w24 = req.body["24 Weeks"] || req.body.lipa_mdogo_duration_weeks;
+    const availability = req.body.availability !== undefined ? req.body.availability : (req.body.stock_status === 'in_stock');
+    const notes = req.body.notes;
+
+    const stock_status = (availability === true || availability === 'true') ? 'in_stock' : 'out_of_stock';
     const result = await pool.query(
       `UPDATE ${tableName} SET 
         "Phone Model"=$1, "Specs"=$2, "Cash Price"=$3, "Deposit"=$4, "12 Weeks"=$5, "Deposit_1"=$6, "24 Weeks"=$7, 
@@ -378,17 +401,57 @@ app.get('/api/leads', requireAuth, async (req, res) => {
     }
 
     const pool = getPool();
-    const { rows } = await pool.query(`
-        SELECT l.*, 
-               (SELECT customer_name FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.customer_name IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_customer_name,
-               (SELECT product_model FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_model IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_model,
-               (SELECT product_storage FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_storage IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_storage,
-               (SELECT delivery_location FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.delivery_location IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_delivery_location,
-               (SELECT payment_method FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.payment_method IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_payment_method,
-               (SELECT email FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.email IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_email
-        FROM leads l 
-        ORDER BY l.last_contact DESC
-      `);
+    // Optional inbox filter: ?inbox=PHONENUMBERID
+    const inboxParam = req.query.inbox as string | undefined;
+    let inboxClause = '';
+    const queryParams: any[] = [];
+
+    if (inboxParam && inboxParam !== 'all') {
+      if (inboxParam === config.WHATSAPP_ID_STUDENTS) {
+        // Shwari Students: Handle both NULL/Empty (legacy) and the actual ID
+        inboxClause = `WHERE (l.inbox_number IS NULL OR l.inbox_number = '' OR l.inbox_number = $1 OR l.inbox_number = 'inbox1')`;
+        queryParams.push(config.WHATSAPP_ID_STUDENTS);
+      } else {
+        // Other inboxes
+        inboxClause = `WHERE l.inbox_number = $1`;
+        queryParams.push(inboxParam);
+      }
+    }
+
+    let rows: any[] = [];
+    try {
+      const result = await pool.query(`
+          SELECT l.*, 
+                 h.status as bot_status,
+                 (SELECT customer_name FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.customer_name IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_customer_name,
+                 (SELECT product_model FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_model IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_model,
+                 (SELECT product_storage FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_storage IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_storage,
+                 (SELECT delivery_location FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.delivery_location IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_delivery_location,
+                 (SELECT payment_method FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.payment_method IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_payment_method,
+                 (SELECT email FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.email IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_email
+          FROM leads l 
+          LEFT JOIN human_handover h ON h.customer_phone = l.phone
+          ${inboxClause}
+          ORDER BY l.last_contact DESC
+        `, queryParams);
+      rows = result.rows;
+    } catch (joinErr) {
+      console.warn('human_handover JOIN failed, falling back to plain leads query:', (joinErr as any)?.message);
+      const result = await pool.query(`
+          SELECT l.*, 
+                 NULL as bot_status,
+                 (SELECT customer_name FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.customer_name IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_customer_name,
+                 (SELECT product_model FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_model IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_model,
+                 (SELECT product_storage FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.product_storage IS NOT NULL ORDER BY created_at DESC LIMIT 1) as product_storage,
+                 (SELECT delivery_location FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.delivery_location IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_delivery_location,
+                 (SELECT payment_method FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.payment_method IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_payment_method,
+                 (SELECT email FROM conversation_logs c WHERE c.customer_phone = l.phone AND c.email IS NOT NULL ORDER BY created_at DESC LIMIT 1) as derived_email
+          FROM leads l 
+          ${inboxClause}
+          ORDER BY l.last_contact DESC
+        `, queryParams);
+      rows = result.rows;
+    }
 
     const processedRows = rows.map((r: any) => ({
       ...r,
@@ -400,6 +463,181 @@ app.get('/api/leads', requireAuth, async (req, res) => {
     res.json(processedRows);
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// SEND RECEIPT (proxy to n8n)
+// ----------------------------------------------------
+app.post('/api/send-receipt', requireAuth, async (req, res) => {
+  try {
+    const payload = req.body;
+    const response = await axios.post(
+      'https://shwariaccessories.app.n8n.cloud/webhook/send-receipt',
+      payload,
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+    res.json({ success: true, data: response.data });
+  } catch (e: any) {
+    console.error('send-receipt error:', e?.message);
+    // Don't fail hard — the payment was already saved
+    res.status(502).json({ error: 'Receipt webhook failed', detail: e?.message });
+  }
+});
+
+// ----------------------------------------------------
+// HUMAN HANDOFF: Toggle AI or Human Mode
+// ----------------------------------------------------
+app.put('/api/leads/:phone/mode', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { bot_status } = req.body;
+
+    let webhookUrl = bot_status === 'human'
+      ? 'https://shwariaccessories.app.n8n.cloud/webhook/takeover'
+      : 'https://shwariaccessories.app.n8n.cloud/webhook/return-to-bot';
+
+    const payload = bot_status === 'human'
+      ? { customerPhone: phone, agentName: 'Staff' }
+      : { customerPhone: phone };
+
+    await axios.post(webhookUrl, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 });
+
+    res.json({ success: true, bot_status });
+  } catch (e: any) {
+    console.error('toggle-mode error:', e?.message);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Helper: send a text message via WhatsApp Cloud API
+async function sendWhatsAppText(toPhone: string, message: string, overrideId?: string) {
+  const phoneNumberId = overrideId || config.WHATSAPP_ID_STUDENTS;
+  const token = phoneNumberId === config.WHATSAPP_ID_ACCESSORIES
+    ? config.WHATSAPP_TOKEN_ACCESSORIES
+    : config.WHATSAPP_TOKEN_STUDENTS;
+
+  if (!token) throw new Error(`WhatsApp token for ID ${phoneNumberId} not configured in .env`);
+  const cleanTo = toPhone.replace(/\D/g, '');
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+      { messaging_product: 'whatsapp', to: cleanTo, type: 'text', text: { body: message } },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+    );
+    return response;
+  } catch (err: any) {
+    if (err.response) {
+      console.error('WhatsApp API Error (Text):', JSON.stringify(err.response.data, null, 2));
+    }
+    throw err;
+  }
+}
+
+// Helper: upload media to WhatsApp and get media_id
+async function uploadWhatsAppMedia(buffer: Buffer, mimeType: string, filename: string, phoneNumberId: string) {
+  const token = phoneNumberId === config.WHATSAPP_ID_ACCESSORIES
+    ? config.WHATSAPP_TOKEN_ACCESSORIES
+    : config.WHATSAPP_TOKEN_STUDENTS;
+
+  if (!token) throw new Error(`WhatsApp token for ID ${phoneNumberId} not configured in .env`);
+  const FormData = (await import('form-data')).default;
+  const form = new FormData();
+  form.append('file', buffer, { filename, contentType: mimeType });
+  form.append('messaging_product', 'whatsapp');
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v18.0/${phoneNumberId}/media`,
+      form,
+      { headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` } }
+    );
+    return response.data.id;
+  } catch (err: any) {
+    if (err.response) {
+      console.error('WhatsApp API Error (Media Upload):', JSON.stringify(err.response.data, null, 2));
+    }
+    throw err;
+  }
+}
+
+// ----------------------------------------------------
+// HUMAN HANDOFF: Send Manual Reply (text)
+// ----------------------------------------------------
+app.post('/api/leads/:phone/reply', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+
+    const pool = getPool();
+    const cleanPhone = phone.replace(/\D/g, '');
+    const { rows } = await pool.query('SELECT inbox_number FROM leads WHERE REPLACE(phone, \'+\', \'\') = $1 OR phone = $2', [cleanPhone, phone]);
+    const leadInboxId = rows[0]?.inbox_number;
+
+    // 1. Send directly via WhatsApp Cloud API using the lead's original inbox number
+    await sendWhatsAppText(phone, message, leadInboxId);
+
+    // 2. Also notify n8n to log the message in conversations table
+    try {
+      await axios.post(
+        'https://shwariaccessories.app.n8n.cloud/webhook/human-send-message',
+        { customerPhone: phone, message, phoneNumberId: leadInboxId },
+        { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
+      );
+    } catch (logErr: any) {
+      console.warn('n8n log failed (message still sent):', logErr?.message);
+    }
+
+    res.json({ success: true, bot_status: 'human' });
+  } catch (e: any) {
+    const details = e.response?.data || e.message;
+    console.error('send-human-reply error:', JSON.stringify(details, null, 2));
+    res.status(502).json({ error: 'Human reply failed', detail: details });
+  }
+});
+
+// ----------------------------------------------------
+// HUMAN HANDOFF: Send Photo Message
+// ----------------------------------------------------
+app.post('/api/leads/:phone/photo', requireAuth, upload.single('photo'), async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const caption = req.body.caption || '';
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+
+    const pool = getPool();
+    const cleanPhone = phone.replace(/\D/g, '');
+    const { rows } = await pool.query('SELECT inbox_number FROM leads WHERE REPLACE(phone, \'+\', \'\') = $1 OR phone = $2', [cleanPhone, phone]);
+    const leadInboxId = rows[0]?.inbox_number || config.WHATSAPP_ID_STUDENTS;
+
+    const token = leadInboxId === config.WHATSAPP_ID_ACCESSORIES
+      ? config.WHATSAPP_TOKEN_ACCESSORIES
+      : config.WHATSAPP_TOKEN_STUDENTS;
+
+    if (!token) {
+      return res.status(400).json({ error: `WhatsApp token for ID ${leadInboxId} not set in .env` });
+    }
+
+    // 1. Upload image to WhatsApp media API
+    const mediaId = await uploadWhatsAppMedia(req.file.buffer, req.file.mimetype, req.file.originalname, leadInboxId);
+
+    // 2. Send the image message
+    const cleanTo = phone.replace(/\D/g, '');
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${leadInboxId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: cleanTo,
+        type: 'image',
+        image: { id: mediaId, caption }
+      },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+    );
+
+    res.json({ success: true });
+  } catch (e: any) {
+    console.error('send-photo error:', e?.message);
+    res.status(502).json({ error: 'Photo reply failed', detail: e?.message });
   }
 });
 
@@ -484,15 +722,107 @@ app.get('/api/leads/:phone/conversations', requireAuth, async (req, res) => {
   try {
     const { phone } = req.params;
     const pool = getPool();
-    // Use fuzzy phone match to handle + prefix discrepancies
     const cleanPhone = phone.replace(/\D/g, '');
-    const { rows } = await pool.query(
-      "SELECT * FROM conversation_logs WHERE REPLACE(customer_phone, '+', '') = $1 OR customer_phone = $2 ORDER BY created_at ASC",
-      [cleanPhone, phone]
+    const phoneMatch = `REPLACE(customer_phone, '+', '') = $1 OR customer_phone = $2`;
+
+    // Fetch from NEW conversations table (direction-based, used by n8n)
+    let newRows: any[] = [];
+    try {
+      const r = await pool.query(
+        `SELECT id, customer_phone, customer_name, message, direction, channel, timestamp as ts FROM conversations WHERE ${phoneMatch} ORDER BY timestamp ASC`,
+        [cleanPhone, phone]
+      );
+      newRows = r.rows.map(row => ({
+        ...row,
+        timestamp: row.ts,
+      }));
+    } catch { /* conversations table may be empty or missing */ }
+
+    // Fetch from LEGACY conversation_logs table (message/response format)
+    let legacyRows: any[] = [];
+    try {
+      const r = await pool.query(
+        `SELECT id, customer_phone, customer_name, message, response, sender, intent, created_at as ts FROM conversation_logs WHERE ${phoneMatch} ORDER BY created_at ASC`,
+        [cleanPhone, phone]
+      );
+      // Normalize legacy rows to the direction format
+      for (const row of r.rows) {
+        if (row.message) {
+          legacyRows.push({ ...row, direction: 'incoming', timestamp: row.ts });
+        }
+        if (row.response) {
+          legacyRows.push({ ...row, message: row.response, direction: row.sender === 'human' ? 'outgoing-human' : 'outgoing', timestamp: row.ts });
+        }
+      }
+    } catch { /* conversation_logs may have different schema */ }
+
+    // Merge and sort by timestamp, newer conversations table takes priority if timestamps match
+    const allRows = [...legacyRows, ...newRows].sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
-    res.json(rows);
+
+    res.json(allRows);
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// LEAD STATUS: Toggle Bot/Human Mode
+// ----------------------------------------------------
+app.put('/api/leads/:phone/mode', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { mode } = req.body;
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO human_handover (customer_phone, status, updated_at) 
+       VALUES ($1, $2, NOW()) 
+       ON CONFLICT (customer_phone) DO UPDATE SET status = $2, updated_at = NOW()`,
+      [phone, mode]
+    );
+    const webhookPath = mode === 'human' ? 'takeover' : 'return-to-bot';
+    try {
+      await axios.post(`https://shwariaccessories.app.n8n.cloud/webhook/${webhookPath}`, { customerPhone: phone });
+    } catch (err: any) {
+      console.warn(`n8n ${webhookPath} webhook failed:`, err.message);
+    }
+    res.json({ success: true, mode });
+  } catch (e: any) {
+    console.error('toggle-mode error:', e.message);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// LEAD STAGE: Update pipeline stage
+// ----------------------------------------------------
+app.put('/api/leads/:phone/stage', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { stage } = req.body;
+    const pool = getPool();
+    await pool.query('UPDATE leads SET stage = $1 WHERE phone = $2', [stage, phone]);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// RECEIPTS: Trigger n8n receipt generation
+// ----------------------------------------------------
+app.post('/api/send-receipt', requireAuth, async (req, res) => {
+  try {
+    const { phone, transaction_code } = req.body;
+    await axios.post('https://builtwithaiautomations.app.n8n.cloud/webhook/send-receipt', {
+      phone,
+      transaction_code
+    });
+    res.json({ success: true });
+  } catch (e: any) {
+    console.error('send-receipt error:', e.message);
+    res.status(500).json({ error: 'Failed' });
   }
 });
 

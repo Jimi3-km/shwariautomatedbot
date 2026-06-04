@@ -132,6 +132,10 @@ export async function initDb() {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
+        // Inbox number column (which WA number this lead came through)
+        await p.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS inbox_number VARCHAR(30);`);
+        // Bot status column for human handoff logic
+        await p.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_status VARCHAR(20) DEFAULT 'ai';`);
 
         // Payments Table (UUID & n8n compliant)
         await p.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
@@ -174,9 +178,48 @@ export async function initDb() {
                 product_condition VARCHAR(50),
                 product_price VARCHAR(50),
                 upsell_items TEXT,
+                inbox_number VARCHAR(30),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
+        // Inbox number column (safe add)
+        await p.query(`ALTER TABLE conversation_logs ADD COLUMN IF NOT EXISTS inbox_number VARCHAR(30);`);
+
+        // ── Human Handover Table (mirrors n8n schema) ──
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS human_handover (
+                id BIGSERIAL PRIMARY KEY,
+                customer_phone VARCHAR(50) UNIQUE NOT NULL,
+                customer_name TEXT,
+                status VARCHAR(20) DEFAULT 'bot',
+                assigned_to TEXT,
+                last_message TEXT,
+                last_customer_message TEXT,
+                last_activity TIMESTAMPTZ DEFAULT NOW(),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_handover_phone  ON human_handover(customer_phone);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_handover_status ON human_handover(status);`);
+
+        // ── Conversations Table (mirrors n8n schema) ──
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS conversations (
+                id BIGSERIAL PRIMARY KEY,
+                customer_phone VARCHAR(50) NOT NULL,
+                customer_name TEXT,
+                phone_number_id VARCHAR(50), -- Which inbox number this message was sent to/from
+                direction VARCHAR(20) NOT NULL DEFAULT 'incoming',
+                message TEXT,
+                channel VARCHAR(20) DEFAULT 'whatsapp',
+                timestamp TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await p.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS phone_number_id VARCHAR(50);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_convs_phone     ON conversations(customer_phone);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_convs_pni       ON conversations(phone_number_id);`);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_convs_timestamp ON conversations(timestamp DESC);`);
 
         // ── Critical performance indexes ──
         await p.query(`CREATE INDEX IF NOT EXISTS idx_conv_logs_phone    ON conversation_logs(customer_phone);`);
