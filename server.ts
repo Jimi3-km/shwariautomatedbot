@@ -973,23 +973,6 @@ app.put('/api/leads/:phone/stage', requireAuth, async (req, res) => {
 });
 
 // ----------------------------------------------------
-// RECEIPTS: Trigger n8n receipt generation
-// ----------------------------------------------------
-app.post('/api/send-receipt', requireAuth, async (req, res) => {
-  try {
-    const { phone, transaction_code } = req.body;
-    await axios.post('https://builtwithaiautomations.app.n8n.cloud/webhook/send-receipt', {
-      phone,
-      transaction_code
-    });
-    res.json({ success: true });
-  } catch (e: any) {
-    console.error('send-receipt error:', e.message);
-    res.status(500).json({ error: 'Failed to send receipt' });
-  }
-});
-
-// ----------------------------------------------------
 // PAYMENTS API
 // ----------------------------------------------------
 app.get('/api/payments', requireAuth, async (req, res) => {
