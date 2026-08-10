@@ -1,114 +1,371 @@
-# Shwari WhatsApp Agent
+# Shwari WhatsApp AI Sales Agent
 
-An AI-powered WhatsApp automation system and CRM dashboard for **Shwari iPhones** — a Kenyan phone shop. The bot handles customer inquiries over WhatsApp, classifies intent, escalates hot leads, and logs everything to a live admin dashboard.
+**AI-powered WhatsApp sales automation and CRM dashboard built for Shwari iPhones, a Kenyan phone retailer.**
 
----
+Shwari WhatsApp Agent connects WhatsApp, an AI sales agent, workflow automation, a PostgreSQL database, and an operational dashboard into a single sales system.
 
-## What This Does
+The system was built to automate customer conversations while giving the business team visibility and control over leads, products, payments, and conversations.
 
-| Feature | Description |
-|---|---|
-| **Dual WhatsApp Inbox** | Manages two separate Meta WhatsApp Cloud API numbers — one for iPhone sales (Students), one for Accessories |
-| **N8N AI Agent** | N8N cloud workflow classifies customer intent, generates replies via LLM, and routes leads to the dashboard |
-| **Lead Pipeline** | Admin dashboard tracks leads by stage (New → Engaged → Hot → Closed), urgency, and intent |
-| **Human Handoff** | Agents can take over from the AI bot in real time, send text/photo replies directly via the dashboard |
-| **Inventory Management** | Manage iPhone pricelist (general + Lipa Mdogo Mdogo payment plan) and accessories from the dashboard |
-| **Payment Tracking** | Record M-Pesa/Paystack payments, send receipts, track revenue per inbox |
-| **Subscription Paywall** | Monthly KES 18,000 subscription verified via Paystack; admin email gets unlimited bypass |
-| **Supabase Auth** | JWT-based authentication; all dashboard API routes require a valid bearer token |
+> **Project type:** AI Sales Automation / CRM
+> **Built with:** React · TypeScript · Node.js · Express · PostgreSQL · Supabase · n8n · Meta WhatsApp Cloud API
+> **Status:** Original production-oriented implementation; currently being evolved into a multi-tenant platform
 
 ---
 
-## Architecture
+## What I Built
 
-```
+The system replaces a large portion of the manual work involved in selling products through WhatsApp.
+
+A typical customer interaction flows through:
+
+```text
+Customer
+   │
+   ▼
+WhatsApp
+   │
+   ▼
 Meta WhatsApp Cloud API
-        │
-        ▼
-  N8N Cloud Workflows  ←──── workflows/n8n/
-        │
-        ▼
-  Express API (server.ts)
-        │
-        ├── src/db.ts      → pg pool → Supabase PostgreSQL
-        ├── src/config.ts  → environment variable config
-        └── React Frontend (src/App.tsx) via Vite middleware
+   │
+   ▼
+n8n Workflow
+   │
+   ├── Customer / Intent Detection
+   ├── AI Sales Agent
+   ├── Product Lookup
+   ├── Lead Management
+   ├── Conversation Logging
+   └── Human Escalation
+   │
+   ▼
+Express API
+   │
+   ▼
+Supabase / PostgreSQL
+   │
+   ▼
+Admin Dashboard
+```
+
+The result is a system where WhatsApp conversations become structured sales activity instead of remaining isolated messages.
+
+---
+
+## Core Features
+
+### AI Sales Agent
+
+The n8n workflow receives incoming WhatsApp messages and uses an LLM-powered agent to:
+
+* Understand customer intent
+* Answer product questions
+* Retrieve product information
+* Provide pricing
+* Explain payment options
+* Identify purchase intent
+* Route important leads
+* Continue conversations using conversation context
+* Escalate customers to human staff when required
+
+The agent is connected to structured business data rather than relying entirely on hardcoded responses.
+
+---
+
+### Dual WhatsApp Inbox
+
+The original implementation supported two separate WhatsApp Cloud API numbers:
+
+* **Students / iPhone Sales**
+* **Accessories**
+
+The dashboard could distinguish activity between the two sales channels.
+
+---
+
+### Lead Pipeline
+
+Customer interactions are converted into structured leads.
+
+The dashboard provides visibility into:
+
+```text
+New → Engaged → Hot → Closed
+```
+
+Leads can be monitored by:
+
+* Stage
+* Intent
+* Urgency
+* Customer
+* Inbox
+* Conversation activity
+
+This gives the business a basic CRM layer on top of WhatsApp.
+
+---
+
+### Human Handoff
+
+The system was designed for a hybrid AI + human workflow.
+
+When an AI conversation requires human intervention, an operator can take over from the dashboard and communicate with the customer directly.
+
+The dashboard supports sending:
+
+* Text
+* Images / product photos
+
+This allows AI to handle repetitive conversations while human agents handle high-value or complex interactions.
+
+---
+
+### Inventory & Pricing
+
+The dashboard includes product management for:
+
+* iPhones
+* Accessories
+* General pricing
+* Lipa Mdogo Mdogo payment plans
+* Product availability
+
+The AI agent can use this information when responding to customers.
+
+---
+
+### Payment Tracking
+
+The system includes payment management for sales activity.
+
+Supported payment workflows include:
+
+* M-Pesa
+* Paystack
+* Payment recording
+* Receipt generation
+* Revenue tracking
+* Payment status management
+
+Payment activity can be associated with the relevant sales inbox.
+
+---
+
+### Authentication
+
+The dashboard uses Supabase Authentication with JWT-based API authentication.
+
+Protected API requests use:
+
+```text
+Authorization: Bearer <JWT>
+```
+
+Administrative operations are restricted to authenticated users with the appropriate access.
+
+---
+
+# Architecture
+
+```text
+                 ┌──────────────────────┐
+                 │      Customer        │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │ WhatsApp Cloud API   │
+                 │       (Meta)         │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │     n8n Workflows    │
+                 │                      │
+                 │ • AI Agent           │
+                 │ • Intent Detection   │
+                 │ • Product Lookup     │
+                 │ • Lead Routing       │
+                 │ • Notifications      │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │    Express API       │
+                 │     TypeScript       │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │ Supabase PostgreSQL  │
+                 │                      │
+                 │ • Products           │
+                 │ • Leads              │
+                 │ • Conversations      │
+                 │ • Payments           │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │   React Dashboard    │
+                 │                      │
+                 │ Overview             │
+                 │ Inbox                │
+                 │ Leads                │
+                 │ Products             │
+                 │ Payments             │
+                 │ Settings             │
+                 └──────────────────────┘
 ```
 
 ---
 
-## Technology Stack
+# Technology Stack
 
-| Layer | Technology |
-|---|---|
-| Backend | Node.js · Express · TypeScript |
-| Frontend | React 19 · Vite · TailwindCSS v4 |
-| Database | Supabase (PostgreSQL via `pg` pool) |
-| Auth | Supabase Auth (JWT) |
-| Automation | N8N (cloud-hosted) |
-| WhatsApp | Meta WhatsApp Cloud API v25 |
-| Payments | Paystack |
-| Deployment | Vercel (serverless via `api/index.ts` adapter) |
+| Layer          | Technology                        |
+| -------------- | --------------------------------- |
+| Frontend       | React 19 · Vite · Tailwind CSS v4 |
+| Backend        | Node.js · Express · TypeScript    |
+| Database       | Supabase · PostgreSQL             |
+| Authentication | Supabase Auth · JWT               |
+| Automation     | n8n                               |
+| AI             | LLM-powered sales agent           |
+| Messaging      | Meta WhatsApp Cloud API           |
+| Payments       | Paystack · M-Pesa workflows       |
+| Deployment     | Vercel                            |
 
 ---
 
-## Repository Structure
+# Key Engineering Highlights
+
+### Workflow orchestration
+
+Rather than putting all application logic inside the frontend, n8n acts as the orchestration layer for incoming customer conversations.
+
+This makes it possible to separate:
+
+* Messaging
+* AI reasoning
+* Business logic
+* Database operations
+* Notifications
+* Human escalation
+
+---
+
+### AI + deterministic business logic
+
+The AI handles conversational reasoning, while structured application logic handles business-critical operations.
+
+For example:
+
+```text
+Customer asks for iPhone price
+          ↓
+AI understands request
+          ↓
+Product data retrieved
+          ↓
+Business data supplied to agent
+          ↓
+AI generates response
+          ↓
+Response sent through WhatsApp
+```
+
+This approach reduces reliance on hardcoded AI responses.
+
+---
+
+### Real-time operational dashboard
+
+The dashboard is not simply an analytics interface.
+
+It is an operational control layer where staff can:
+
+* View conversations
+* Manage leads
+* Update products
+* Track payments
+* Take over AI conversations
+* Monitor sales activity
+
+---
+
+### Database migrations
+
+Database changes are maintained as incremental SQL migrations rather than being treated as undocumented changes.
+
+```text
+database/
+├── schema/
+│   ├── supabase_schema.sql
+│   └── payments_schema.sql
+│
+└── migrations/
+    ├── migration_*.sql
+    └── ...
+```
+
+This makes the database easier to evolve and reproduce.
+
+---
+
+# Repository Structure
 
 ```text
 shwariautomatedbot/
-├── .env.example          # Variable names — copy to .env and fill in
-├── .gitignore
-├── vercel.json           # Vercel routing config
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-├── index.html            # Vite SPA entry
-│
-├── server.ts             # Express server — all API routes (entry point)
 │
 ├── api/
-│   └── index.ts          # Vercel serverless adapter
-│
-├── src/
-│   ├── App.tsx           # React dashboard (all pages/components)
-│   ├── main.tsx          # React entry point
-│   ├── index.css         # Global styles
-│   ├── config.ts         # Centralized env config object
-│   └── db.ts             # pg pool, initDb() (auto-creates tables)
+│   └── index.ts
 │
 ├── database/
 │   ├── schema/
-│   │   ├── supabase_schema.sql       # Base table definitions + RLS
-│   │   └── payments_schema.sql       # Payments table + indexes
+│   │   ├── supabase_schema.sql
+│   │   └── payments_schema.sql
+│   │
 │   └── migrations/
-│       └── migration_*.sql           # Incremental schema changes
+│       └── migration_*.sql
+│
+├── docs/
+│   └── dashboard-standalone.html
+│
+├── scripts/
+│   ├── init-db-script.ts
+│   ├── run-migration-script.ts
+│   └── test-accessories-api.ts
+│
+├── src/
+│   ├── App.tsx
+│   ├── config.ts
+│   ├── db.ts
+│   ├── index.css
+│   └── main.tsx
 │
 ├── workflows/
 │   └── n8n/
-│       ├── n8n-workflow-main.json          # Main WhatsApp AI agent workflow
-│       └── n8n-workflow-dashboard-api.json # Dashboard webhook helper
+│       ├── n8n-workflow-main.json
+│       └── n8n-workflow-dashboard-api.json
 │
-├── scripts/
-│   ├── init-db-script.ts       # One-time DB init script
-│   ├── run-migration-script.ts # Runs a specific migration
-│   └── test-accessories-api.ts # Dev utility — test accessories CRUD
-│
-└── docs/
-    └── dashboard-standalone.html  # Standalone dashboard HTML (no server needed)
+├── server.ts
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── vercel.json
 ```
 
 ---
 
-## Local Setup
+# Running Locally
 
-### Prerequisites
+### Requirements
 
-- Node.js 20+
-- A [Supabase](https://supabase.com) project
-- A [Meta WhatsApp Business](https://developers.facebook.com) app with phone number(s)
-- An [N8N](https://n8n.io) instance (cloud or self-hosted)
+* Node.js 20+
+* Supabase project
+* Meta WhatsApp Business / Cloud API
+* n8n instance
 
-### 1. Clone and Install
+### Install
 
 ```bash
 git clone <repo-url>
@@ -116,93 +373,89 @@ cd shwariautomatedbot
 npm install
 ```
 
-### 2. Configure Environment
+### Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in all values. See the [Environment Variables](#environment-variables) section below.
+Configure the required credentials in `.env`.
 
-### 3. Run the App
+### Start
 
 ```bash
 npm run dev
 ```
 
-Dashboard runs at **http://localhost:3000**
+The dashboard runs locally at:
 
-The server auto-creates all database tables on first run via `src/db.ts → initDb()`.
-
----
-
-## Environment Variables
-
-| Variable | Description |
-|---|---|
-| `PORT` | Server port (default: 3000) |
-| `SUPABASE_DATABASE_URL` | Full Postgres connection string |
-| `SUPABASE_URL` | Supabase project REST URL |
-| `SUPABASE_ANON_KEY` | Supabase public anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server only, never expose) |
-| `N8N_API_URL` | N8N workflow URL (for display in settings) |
-| `N8N_WEBHOOK_STUDENTS` | N8N webhook for Students inbox routing |
-| `N8N_WEBHOOK_ACCESSORIES` | N8N webhook for Accessories inbox routing |
-| `N8N_WEBHOOK_SEND_RECEIPT` | N8N webhook to trigger receipt delivery |
-| `WHATSAPP_TOKEN_STUDENTS` | Meta permanent token for Students phone number |
-| `WHATSAPP_ID_STUDENTS` | Phone Number ID for Students inbox |
-| `WHATSAPP_TOKEN_ACCESSORIES` | Meta permanent token for Accessories phone number |
-| `WHATSAPP_ID_ACCESSORIES` | Phone Number ID for Accessories inbox |
-| `PAYSTACK_PUBLIC_KEY` | Paystack public key (frontend) |
-| `PAYSTACK_SECRET_KEY` | Paystack secret key (server only) |
-| `ADMIN_EMAIL` | Admin account email (seeded into Supabase Auth on startup) |
-| `ADMIN_PASSWORD` | Admin account password |
-| `ADMIN_FULL_NAME` | Admin display name |
-
----
-
-## N8N Workflows
-
-Import the workflows from `workflows/n8n/` into your N8N instance:
-
-1. Open N8N → **Import from File**
-2. Import `n8n-workflow-main.json` — the main WhatsApp AI agent
-3. Import `n8n-workflow-dashboard-api.json` — dashboard data webhook helper
-4. Update all credential nodes with your Supabase and WhatsApp API keys
-5. Copy the generated webhook URLs into your `.env`
-
----
-
-## Database
-
-The schema is auto-applied on server startup via `src/db.ts`. For manual or incremental changes:
-
-- **Initial schema**: `database/schema/supabase_schema.sql`
-- **Payments schema**: `database/schema/payments_schema.sql`
-- **Incremental migrations**: `database/migrations/migration_*.sql`
-
-Run a specific migration:
-
-```bash
-npx tsx scripts/run-migration-script.ts
+```text
+http://localhost:3000
 ```
 
 ---
 
-## Deployment (Vercel)
+# Security
 
-The `api/index.ts` file is the Vercel serverless adapter. `vercel.json` routes:
+The application keeps sensitive credentials outside the repository.
 
-- `/api/*` → Express routes
-- `/*` → React SPA (`index.html`)
+Examples include:
 
-Do **not** commit `vercel.env` — it contains production secrets. Set environment variables directly in the Vercel dashboard.
+* Supabase service-role credentials
+* Database connection strings
+* WhatsApp access tokens
+* Paystack secret keys
+* Administrative credentials
+
+These are provided through environment variables and are excluded from version control.
 
 ---
 
-## Security Notes
+# Project Evolution
 
-- All API routes (except `/api/public-env` and `/api/webhooks/increment-unread`) require a valid Supabase JWT via `Authorization: Bearer <token>`
-- Admin-only routes check against `ADMIN_EMAIL` env var
-- WhatsApp tokens, database passwords, and Paystack keys must **never** be committed — they belong in `.env` only
-- `vercel.env` is gitignored and should never be pushed
+This repository represents the **original Shwari-specific implementation**.
+
+After building the first version, I began redesigning the architecture around a more general problem:
+
+> How can the same AI sales infrastructure support multiple businesses instead of being hardcoded around one company?
+
+The next version is therefore being developed as a **multi-tenant AI sales platform**.
+
+The new architecture introduces:
+
+* Tenant isolation
+* Business-specific configuration
+* Multiple channel connections
+* Tenant-scoped products
+* Tenant-scoped conversations
+* Tenant-scoped leads
+* Tenant-scoped payments
+* Role-based access
+* Database-level Row Level Security
+* A unified dashboard for connected channels
+
+The Shwari implementation serves as the foundation and real-world test case for that architecture.
+
+---
+
+# Why I Built It
+
+The project started from a real business workflow rather than a purely academic exercise.
+
+The goal was to take a common business process — selling through WhatsApp — and connect:
+
+**AI + automation + database + CRM + payments + human operations**
+
+into one system.
+
+The current work focuses on taking what worked in the Shwari implementation and turning it into a reusable SaaS architecture.
+
+---
+
+## Author
+
+**James Koikai**
+
+AI Engineer · Full-Stack Developer
+
+I build AI-powered applications, automation systems, and SaaS products that connect AI with real business workflows.
