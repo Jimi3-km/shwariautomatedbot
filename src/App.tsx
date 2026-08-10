@@ -62,6 +62,7 @@ type Lead = {
   upsell_items?: string;
   customer_name?: string;
   bot_status?: 'bot' | 'human';
+  unread_count?: number;
 };
 
 type ConversationLog = {
@@ -232,7 +233,7 @@ const INBOX_LABELS: Record<string, string> = {
 // =============================================================================
 function Dashboard() {
   const [tab, setTab] = useState('overview');
-  const [globalInbox, setGlobalInbox] = useState('1044226772116764');
+  const [globalInbox, setGlobalInbox] = useState('all');
   const [payments, setPayments] = useState<Payment[]>([]);
   const [subscription, setSubscription] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -975,6 +976,13 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
       .then(r => r.json())
       .then(d => { if (!d.error) setConvos(d); })
       .finally(() => setLoadingConvos(false));
+
+    // Mark as read
+    if (l.unread_count && l.unread_count > 0) {
+      authFetch(`/api/leads/${encodeURIComponent(l.phone)}/read`, { method: 'PUT' });
+      // Optimistic UI update
+      setLeads(prev => prev.map(item => item.phone === l.phone ? { ...item, unread_count: 0 } : item));
+    }
   };
 
   const updateStage = async (phone: string, stage: string) => {
@@ -1172,7 +1180,23 @@ function InboxTab({ globalInbox }: { globalInbox: string }) {
                 </div>
                 <div className="inbox-item-preview">{lead.last_message || 'No messages'}</div>
               </div>
-              {lead.urgency === 'high' && <div className="inbox-item-dot" />}
+              {lead.unread_count && lead.unread_count > 0 ? (
+                <div className="unread-badge-white" style={{
+                  minWidth: 18,
+                  height: 18,
+                  borderRadius: 9,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  padding: '0 5px'
+                }}>
+                  {lead.unread_count}
+                </div>
+              ) : lead.urgency === 'high' ? (
+                <div className="inbox-item-dot" />
+              ) : null}
             </div>
           ))}
         </div>
@@ -1446,6 +1470,12 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
     setSelected(l); setLoadingConvos(true);
     authFetch(`/api/leads/${encodeURIComponent(l.phone)}/conversations`)
       .then(r => r.json()).then(d => { if (!d.error) setConvos(d); }).finally(() => setLoadingConvos(false));
+
+    // Mark as read
+    if (l.unread_count && l.unread_count > 0) {
+      authFetch(`/api/leads/${encodeURIComponent(l.phone)}/read`, { method: 'PUT' });
+      setLeads(prev => prev.map(item => item.phone === l.phone ? { ...item, unread_count: 0 } : item));
+    }
   };
 
   const updateStage = async (phone: string, stage: string) => {
@@ -1629,6 +1659,16 @@ function LeadsTab({ globalInbox }: { globalInbox: string }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 700, fontSize: 18, color: '#fff', letterSpacing: '-0.03em' }}>{displayName(lead)}</span>
                 <span className={urgencyBadge(lead.urgency)} style={{ fontSize: 10, padding: '2px 8px' }}>{lead.urgency || 'low'}</span>
+                {lead.unread_count && lead.unread_count > 0 && (
+                  <span className="unread-badge-white" style={{
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 800
+                  }}>
+                    {lead.unread_count} NEW MESSAGE{lead.unread_count > 1 ? 'S' : ''}
+                  </span>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-3)', fontSize: 12, marginBottom: 8 }}>
                 <Smartphone size={12} />

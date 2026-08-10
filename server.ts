@@ -71,25 +71,29 @@ app.use(cors());
 // Initialize DB safely
 initDb().then(async () => {
   console.log('✅ Database initialized.');
-  // Ensure Godmode user exists in Supabase
+  // Ensure Godmode user exists in Supabase (credentials loaded from env)
   if (supabase) {
-    const email = 'jameskoikai04@gmail.com';
-    const password = 'Godmode!';
-    const { data: { users }, error: listError } = await (supabase.auth.admin as any).listUsers();
-    if (!listError) {
-      const exists = users.find((u: any) => u.email === email);
-      if (!exists) {
-        console.log(`👤 Creating Godmode user: ${email}...`);
-        const { error: createError } = await (supabase.auth.admin as any).createUser({
-          email,
-          password,
-          email_confirm: true,
-          user_metadata: { full_name: 'James Koikai' }
-        });
-        if (createError) console.error('❌ Failed to create Godmode user:', createError.message);
-        else console.log('✅ Godmode user created.');
-      } else {
-        console.log('✅ Godmode user found.');
+    const email = config.ADMIN_EMAIL;
+    const password = config.ADMIN_PASSWORD;
+    if (!email || !password) {
+      console.warn('⚠️  ADMIN_EMAIL or ADMIN_PASSWORD not set — skipping Godmode user seed.');
+    } else {
+      const { data: { users }, error: listError } = await (supabase.auth.admin as any).listUsers();
+      if (!listError) {
+        const exists = users.find((u: any) => u.email === email);
+        if (!exists) {
+          console.log(`👤 Creating Godmode user: ${email}...`);
+          const { error: createError } = await (supabase.auth.admin as any).createUser({
+            email,
+            password,
+            email_confirm: true,
+            user_metadata: { full_name: config.ADMIN_FULL_NAME || 'Admin' }
+          });
+          if (createError) console.error('❌ Failed to create Godmode user:', createError.message);
+          else console.log('✅ Godmode user created.');
+        } else {
+          console.log('✅ Godmode user found.');
+        }
       }
     }
   }
@@ -189,8 +193,8 @@ app.delete('/api/profiles/:id', requireAuth, async (req, res) => {
 // SUBSCRIPTION / PAYWALL API
 // ----------------------------------------------------
 async function getSubscriptionStatus(userEmail?: string) {
-  // GODMODE BYPASS: Always return active for the specific admin email
-  if (userEmail === 'jameskoikai04@gmail.com') {
+  // GODMODE BYPASS: Always return active for the configured admin email
+  if (config.ADMIN_EMAIL && userEmail === config.ADMIN_EMAIL) {
     return { status: 'active', expiry_date: '2099-12-31T23:59:59.999Z', plan: 'unlimited' };
   }
 
@@ -410,19 +414,16 @@ app.get('/api/leads', requireAuth, async (req, res) => {
     }
 
     const pool = getPool();
-    // Optional inbox filter: ?inbox=PHONENUMBERID
     const inboxParam = req.query.inbox as string | undefined;
     let inboxClause = '';
     const queryParams: any[] = [];
 
     if (inboxParam && inboxParam !== 'all') {
       if (inboxParam === config.WHATSAPP_ID_STUDENTS) {
-        // Shwari Students: Handle both NULL/Empty (legacy) and the actual ID
-        inboxClause = `WHERE (l.inbox_number IS NULL OR l.inbox_number = '' OR l.inbox_number = $1 OR l.inbox_number = 'inbox1')`;
+        inboxClause = "WHERE (l.inbox_number IS NULL OR l.inbox_number = '' OR l.inbox_number = $1 OR l.inbox_number = 'inbox1')";
         queryParams.push(config.WHATSAPP_ID_STUDENTS);
       } else {
-        // Other inboxes
-        inboxClause = `WHERE l.inbox_number = $1`;
+        inboxClause = "WHERE l.inbox_number = $1";
         queryParams.push(inboxParam);
       }
     }
@@ -467,10 +468,11 @@ app.get('/api/leads', requireAuth, async (req, res) => {
       customer_name: cleanName(r.customer_name || r.derived_customer_name, r.phone),
       delivery_location: r.derived_delivery_location || r.delivery_location,
       payment_method: r.derived_payment_method || r.payment_method,
-      email: r.derived_email || r.email
+      email: r.derived_email || r.email || ''
     }));
+
     res.json(processedRows);
-  } catch (e) {
+  } catch (e: any) {
     res.status(500).json({ error: String(e) });
   }
 });
@@ -480,9 +482,13 @@ app.get('/api/leads', requireAuth, async (req, res) => {
 // ----------------------------------------------------
 app.post('/api/send-receipt', requireAuth, async (req, res) => {
   try {
+    const receiptWebhookUrl = config.N8N_WEBHOOK_SEND_RECEIPT;
+    if (!receiptWebhookUrl) {
+      return res.status(500).json({ error: 'N8N_WEBHOOK_SEND_RECEIPT not configured' });
+    }
     const payload = req.body;
     const response = await axios.post(
-      'https://shwariaccessories.app.n8n.cloud/webhook/send-receipt',
+      receiptWebhookUrl,
       payload,
       { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
     );
@@ -782,13 +788,13 @@ app.post('/api/leads/:phone/photo', requireAuth, upload.single('photo'), async (
 // ----------------------------------------------------
 app.get('/api/diag/env-check', requireAuth, async (req, res) => {
   const user = (req as any).user;
-  if (user?.email !== 'jameskoikai04@gmail.com') return res.status(403).json({ error: 'Forbidden' });
+  if (!config.ADMIN_EMAIL || user?.email !== config.ADMIN_EMAIL) return res.status(403).json({ error: 'Forbidden' });
 
   res.json({
-    WHATSAPP_TOKEN_STUDENTS: (process.env.WHATSAPP_TOKEN_STUDENTS || '').trim(),
-    WHATSAPP_TOKEN_ACCESSORIES: (process.env.WHATSAPP_TOKEN_ACCESSORIES || '').trim(),
-    WHATSAPP_ID_STUDENTS: (process.env.WHATSAPP_ID_STUDENTS || '1044226772116764').trim(),
-    WHATSAPP_ID_ACCESSORIES: (process.env.WHATSAPP_ID_ACCESSORIES || '1141388965725319').trim(),
+    WHATSAPP_TOKEN_STUDENTS: config.WHATSAPP_TOKEN_STUDENTS ? 'PRESENT' : 'MISSING',
+    WHATSAPP_TOKEN_ACCESSORIES: config.WHATSAPP_TOKEN_ACCESSORIES ? 'PRESENT' : 'MISSING',
+    WHATSAPP_ID_STUDENTS: config.WHATSAPP_ID_STUDENTS || 'NOT SET',
+    WHATSAPP_ID_ACCESSORIES: config.WHATSAPP_ID_ACCESSORIES || 'NOT SET',
     supabase_url: config.SUPABASE_URL ? 'PRESENT' : 'MISSING',
     db_url: config.SUPABASE_DATABASE_URL ? 'PRESENT' : 'MISSING'
   });
@@ -966,6 +972,46 @@ app.put('/api/leads/:phone/stage', requireAuth, async (req, res) => {
     const { stage } = req.body;
     const pool = getPool();
     await pool.query('UPDATE leads SET stage = $1 WHERE phone = $2', [stage, phone]);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// LEAD STATUS: Mark as Read
+// ----------------------------------------------------
+app.put('/api/leads/:phone/read', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const pool = getPool();
+    await pool.query('UPDATE leads SET unread_count = 0 WHERE phone = $1', [phone]);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ----------------------------------------------------
+// WEBHOOK: Increment Unread Count (for n8n to call)
+// ----------------------------------------------------
+app.post('/api/webhooks/increment-unread', async (req, res) => {
+  try {
+    const { phone, message, inbox_number } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone is required' });
+
+    const pool = getPool();
+    // Update or insert lead with incremented unread_count
+    await pool.query(`
+      INSERT INTO leads (phone, last_message, unread_count, inbox_number, last_contact)
+      VALUES ($1, $2, 1, $3, NOW())
+      ON CONFLICT (phone) DO UPDATE SET 
+        last_message = EXCLUDED.last_message,
+        unread_count = leads.unread_count + 1,
+        last_contact = NOW(),
+        inbox_number = COALESCE(leads.inbox_number, EXCLUDED.inbox_number)
+    `, [phone, message || '', inbox_number]);
+
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: String(e) });

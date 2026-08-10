@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getPool } from './src/db.js';
+import { getPool } from '../src/db.js';
 
 async function testApi() {
     console.log('🔍 Testing Accessories Fetch...');

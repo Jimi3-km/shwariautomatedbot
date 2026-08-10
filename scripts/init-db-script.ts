@@ -1,4 +1,4 @@
-import { initDb } from './src/db.js';
+import { initDb } from '../src/db.js';
 import 'dotenv/config';
 
 async function main() {

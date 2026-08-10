@@ -127,6 +127,7 @@ export async function initDb() {
                 product_price VARCHAR(50),
                 upsell_items TEXT,
                 stage VARCHAR(50) DEFAULT 'new',
+                unread_count INTEGER DEFAULT 0,
                 last_message TEXT,
                 last_contact TIMESTAMPTZ DEFAULT NOW(),
                 created_at TIMESTAMPTZ DEFAULT NOW()
@@ -136,6 +137,8 @@ export async function initDb() {
         await p.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS inbox_number VARCHAR(30);`);
         // Bot status column for human handoff logic
         await p.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS bot_status VARCHAR(20) DEFAULT 'ai';`);
+        // Unread count column (safe add)
+        await p.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS unread_count INTEGER DEFAULT 0;`);
 
         // Payments Table (UUID & n8n compliant)
         await p.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
@@ -154,10 +157,12 @@ export async function initDb() {
                 product_condition VARCHAR(50),
                 upsell_items TEXT,
                 payment_status VARCHAR(50) DEFAULT 'pending',
+                inbox_number VARCHAR(30),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ
             );
         `);
+        await p.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS inbox_number VARCHAR(30);`);
 
         // Conversation Logs Table
         await p.query(`

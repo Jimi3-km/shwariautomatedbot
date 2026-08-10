@@ -1,11 +1,34 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
 node_modules/
-build/
+
+# ── Build Output ──────────────────────────────────────────────────────────────
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
+build/
+
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.*
 !.env.example
-.vercel
 vercel.env
-whatsapp_check.cjs
+
+# ── Vercel ────────────────────────────────────────────────────────────────────
+.vercel
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Test Coverage ─────────────────────────────────────────────────────────────
+coverage/
+
+# ── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ── Project-specific ignores ──────────────────────────────────────────────────
+# Bolt/AI Studio project metadata
+metadata.json
+# Dev diagnostic scripts (contain env references)
+scripts/whatsapp-check.cjs
