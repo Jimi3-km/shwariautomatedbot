@@ -21,6 +21,19 @@
       ]
     },
     "allowImportingTsExtensions": true,
-    "noEmit": true
-  }
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src",
+    "server.ts",
+    "api"
+  ],
+  "exclude": [
+    "legacy",
+    "node_modules",
+    "dist"
+  ]
 }
