@@ -70,11 +70,17 @@ except `/api/health` and `/api/public-config`.
 | GET | `/me` | user, role, tenant, memberships |
 | GET/PATCH | `/team`, `/team/:id` | admin only |
 | GET | `/overview` | tiles, recent conversations and leads |
-| GET | `/conversations`, `/conversations/:id` | inbox |
+| GET | `/conversations` | filters: search, channel_type, status, handled_by, unread; paginated |
+| GET | `/conversations/:id` | thread, lead, payments |
 | POST | `/conversations/:id/read` | clear unread |
 | POST | `/conversations/:id/takeover` | `{ai_enabled}` — flips whether n8n replies |
 | POST | `/conversations/:id/reply` | staff reply, dispatched by channel type |
-| GET/PATCH | `/leads`, `/leads/:id` | filters: stage, channel_type, search |
+| GET | `/analytics?days=` | time series + totals, real data only |
+| GET | `/onboarding` | setup checklist, completion computed server-side |
+| GET | `/leads` | filters: stage, channel_type, search |
+| GET | `/leads/stages` | stage vocabulary, so the UI never hardcodes it |
+| GET | `/leads/:id` | lead detail: conversation, orders, payments, timeline |
+| PATCH | `/leads/:id` | stage, notes, assignment (assignee must be a tenant member) |
 | GET/POST/PUT/DELETE | `/products`, `/products/:id` | delete archives; `?hard=true` for admins |
 | GET/PUT | `/agent` | agent settings |
 | GET/PUT | `/business` | tenant record; PUT is admin only |
@@ -133,6 +139,28 @@ Follow-ups read `public.followup_candidates`, a view that applies each
 tenant's own `followup_delay_hours` and composes the message from that
 tenant's own `agent_name`, `business_name` and template. The branch is
 currently **disabled** pending end-to-end testing.
+
+## Frontend structure
+
+```
+src/
+  app/        router + session context (tenant resolution, badge counts)
+  components/ ui/ design system, Chart, OnboardingChecklist
+  hooks/      useAsync, useMutation, useDebounced, useIsMobile, useVisiblePolling
+  layouts/    AppShell: sidebar, topbar, mobile drawer
+  lib/        api/ typed client, format helpers
+  pages/      one file per route
+  types/      shared API types
+```
+
+Routing is `react-router-dom` with real URLs. Every list state that matters
+(inbox search, unread filter, selected conversation) lives in the URL.
+
+Responsive: below 768px the sidebar becomes a drawer and the inbox becomes a
+list-to-detail flow. Tables become cards on Leads, Orders and Payments.
+
+`legacy/` holds the previous single-tenant application for reference. Nothing
+in `src/` imports from it, and the build excludes it.
 
 ## Environment
 

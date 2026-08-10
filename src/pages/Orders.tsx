@@ -1,88 +1,146 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { api, fmtMoney, fmtDate } from '../lib/api';
-import { PageHeader, Badge, Empty, ErrorNote, inputStyle } from './Shell';
+import React, { useState } from 'react';
+import { ShoppingCart } from 'lucide-react';
+import { getOrders, updateOrder } from '../lib/api';
+import type { Order, OrderStatus } from '../types';
+import { useAsync, useIsMobile, useMutation } from '../hooks';
+import { useSession } from '../app/SessionContext';
+import {
+  Card, EmptyState, ErrorState, FilterChip, InlineError, LoadingState,
+  PageHeader, Pill, Select, TableWrap, useToast,
+} from '../components/ui';
+import { formatDateTime, formatMoney, humanize } from '../lib/format';
 
-const STATES = ['pending', 'confirmed', 'delivered', 'cancelled'];
-const TONE: Record<string, any> = { delivered: 'good', confirmed: 'info', cancelled: 'bad', pending: 'warn' };
+const STATUSES: OrderStatus[] = ['pending', 'confirmed', 'delivered', 'cancelled'];
 
-export function Orders({ canWrite, currency }: { canWrite: boolean; currency: string }) {
-  const [orders, setOrders] = useState<any[]>([]);
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState<string | null>(null);
+const TONE: Record<OrderStatus, 'success' | 'warning' | 'danger' | 'info'> = {
+  delivered: 'success', confirmed: 'info', cancelled: 'danger', pending: 'warning',
+};
 
-  const load = useCallback(async () => {
-    try {
-      const qs = status ? `?status=${status}` : '';
-      setOrders((await api<{ orders: any[] }>(`/orders${qs}`)).orders);
-    } catch (e: any) { setError(e.message); }
-  }, [status]);
-  useEffect(() => { load(); }, [load]);
+export function Orders() {
+  const { canWrite, currency } = useSession();
+  const isMobile = useIsMobile();
+  const toast = useToast();
+  const [status, setStatus] = useState<OrderStatus | ''>('');
 
-  async function setOrderStatus(id: string, next: string) {
-    try {
-      await api(`/orders/${id}`, { method: 'PATCH', body: { status: next } });
-      setOrders((cur) => cur.map((o) => (o.id === id ? { ...o, status: next } : o)));
-    } catch (e: any) { setError(e.message); }
+  const state = useAsync(() => getOrders(status || undefined), [status]);
+  const orders = state.data?.orders ?? [];
+
+  const change = useMutation(async (order: Order, next: OrderStatus) => {
+    await updateOrder(order.id, { status: next });
+    toast.push('success', `Order ${order.order_ref} marked ${next}.`);
+    state.reload();
+  });
+
+  function itemsLabel(o: Order): string {
+    if (!Array.isArray(o.items) || o.items.length === 0) return '—';
+    return o.items.map((i) => i.name ?? i.product ?? 'Item').join(', ');
   }
 
   return (
     <>
       <PageHeader title="Orders" subtitle="Every order placed through your channels." />
-      <ErrorNote error={error} />
 
-      <div className="px-6 pt-4 flex gap-2">
-        <button onClick={() => setStatus('')} className="px-3 py-1.5 rounded-lg text-xs"
-          style={{ background: status === '' ? 'var(--white)' : 'var(--surface-2)', color: status === '' ? 'var(--black)' : 'var(--text-2)' }}>
-          All
-        </button>
-        {STATES.map((s) => (
-          <button key={s} onClick={() => setStatus(s)} className="px-3 py-1.5 rounded-lg text-xs"
-            style={{ background: status === s ? 'var(--white)' : 'var(--surface-2)', color: status === s ? 'var(--black)' : 'var(--text-2)' }}>
-            {s}
-          </button>
+      <div style={{ padding: '14px 20px 0', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+        <FilterChip active={status === ''} onClick={() => setStatus('')}>All</FilterChip>
+        {STATUSES.map((s) => (
+          <FilterChip key={s} active={status === s} onClick={() => setStatus(status === s ? '' : s)}>
+            {humanize(s)}
+          </FilterChip>
         ))}
       </div>
 
-      <div className="p-6">
-        {!orders.length ? <Empty message="No orders yet." /> : (
-          <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--border)' }}>
-            <table className="w-full text-sm">
+      <InlineError message={change.error} />
+
+      <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
+        {state.loading && !state.data ? (
+          <LoadingState rows={5} />
+        ) : state.error ? (
+          <ErrorState message={state.error} onRetry={state.reload} />
+        ) : orders.length === 0 ? (
+          <EmptyState
+            icon={<ShoppingCart size={26} />}
+            title={status ? `No ${status} orders` : 'No orders yet'}
+            body="Orders appear here once customers confirm what they want to buy."
+          />
+        ) : isMobile ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {orders.map((o) => (
+              <Card key={o.id}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="mono" style={{ flex: 1, fontSize: 12.5 }}>{o.order_ref}</span>
+                  <Pill tone={TONE[o.status]}>{humanize(o.status)}</Pill>
+                </div>
+                <div style={{ fontSize: 17, fontWeight: 600, marginTop: 6 }}>
+                  {formatMoney(o.total, o.currency ?? currency)}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 4 }}>{itemsLabel(o)}</div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                  <Pill tone={o.payment_status === 'paid' ? 'success' : 'warning'}>
+                    {humanize(o.payment_status)}
+                  </Pill>
+                  <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{formatDateTime(o.created_at)}</span>
+                </div>
+                {canWrite && (
+                  <div style={{ marginTop: 10 }}>
+                    <Select
+                      aria-label={`Status for ${o.order_ref}`}
+                      value={o.status} disabled={change.busy}
+                      onChange={(e) => change.run(o, e.target.value as OrderStatus)}
+                      options={STATUSES.map((s) => ({ value: s, label: humanize(s) }))}
+                      style={{ height: 30, fontSize: 12.5 }}
+                    />
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <TableWrap>
+            <table className="tbl" style={{ width: '100%' }}>
               <thead>
-                <tr style={{ background: 'var(--surface-2)', color: 'var(--text-2)' }}>
-                  {['Reference', 'Customer', 'Products', 'Amount', 'Payment', 'Status', 'Delivery', 'Created'].map((h) => (
-                    <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>
-                  ))}
+                <tr>
+                  <th>Reference</th><th>Customer</th><th>Items</th><th>Amount</th>
+                  <th>Payment</th><th>Status</th><th>Delivery</th><th>Created</th>
                 </tr>
               </thead>
               <tbody>
                 {orders.map((o) => (
-                  <tr key={o.id} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                    <td className="px-3 py-2 font-mono text-xs">{o.order_ref}</td>
-                    <td className="px-3 py-2 text-xs">{o.customer_id || '—'}</td>
-                    <td className="px-3 py-2 text-xs max-w-[220px] truncate">
-                      {Array.isArray(o.items) && o.items.length
-                        ? o.items.map((i: any) => i.name ?? i.product ?? 'item').join(', ')
-                        : '—'}
+                  <tr key={o.id}>
+                    <td className="mono primary" style={{ fontSize: 12.5 }}>{o.order_ref}</td>
+                    <td style={{ fontSize: 12.5 }}>{o.customer_id || '—'}</td>
+                    <td style={{ fontSize: 12.5, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {itemsLabel(o)}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmtMoney(o.total, o.currency || currency)}</td>
-                    <td className="px-3 py-2">
-                      <Badge tone={o.payment_status === 'paid' ? 'good' : 'warn'}>{o.payment_status}</Badge>
+                    <td style={{ whiteSpace: 'nowrap', fontWeight: 500 }}>
+                      {formatMoney(o.total, o.currency ?? currency)}
                     </td>
-                    <td className="px-3 py-2">
+                    <td>
+                      <Pill tone={o.payment_status === 'paid' ? 'success' : 'warning'}>
+                        {humanize(o.payment_status)}
+                      </Pill>
+                    </td>
+                    <td>
                       {canWrite ? (
-                        <select value={o.status} onChange={(e) => setOrderStatus(o.id, e.target.value)}
-                          className="px-2 py-1 rounded text-xs" style={inputStyle}>
-                          {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      ) : <Badge tone={TONE[o.status]}>{o.status}</Badge>}
+                        <Select
+                          aria-label={`Status for ${o.order_ref}`}
+                          value={o.status} disabled={change.busy}
+                          onChange={(e) => change.run(o, e.target.value as OrderStatus)}
+                          options={STATUSES.map((s) => ({ value: s, label: humanize(s) }))}
+                          style={{ height: 28, fontSize: 12, width: 135 }}
+                        />
+                      ) : (
+                        <Pill tone={TONE[o.status]}>{humanize(o.status)}</Pill>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-xs">{o.delivery_location || '—'}</td>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap" style={{ color: 'var(--text-3)' }}>{fmtDate(o.created_at)}</td>
+                    <td style={{ fontSize: 12.5 }}>{o.delivery_location || '—'}</td>
+                    <td style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                      {formatDateTime(o.created_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableWrap>
         )}
       </div>
     </>

@@ -1,82 +1,88 @@
 import React, { useState } from 'react';
-import { api } from '../lib/api';
+import { Building2 } from 'lucide-react';
+import { bootstrapTenant } from '../lib/api';
+import { useMutation } from '../hooks';
+import { Button, Field, Input, InlineError } from '../components/ui';
 
 /**
- * Shown once, to an authenticated user who has no tenant yet. Creating the
- * business also creates their tenant_users row with role=owner.
+ * Shown once, to an authenticated user with no business yet. Creating the
+ * business also makes them its owner. The tenant is created server-side; the
+ * browser never chooses an id.
  */
 export function CreateBusinessScreen({
   onCreated, onSignOut,
 }: { onCreated: () => void; onSignOut: () => void }) {
   const [businessName, setBusinessName] = useState('');
   const [agentName, setAgentName] = useState('');
-  const [currency, setCurrency] = useState('KES');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [currency, setCurrency] = useState('');
+  const [timezone] = useState(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  );
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true); setError(null);
-    try {
-      await api('/bootstrap', {
-        method: 'POST',
-        body: { business_name: businessName, agent_name: agentName || 'Assistant', currency },
-      });
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create your business');
-      setBusy(false);
-    }
-  }
-
-  const field = {
-    background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)',
-  } as React.CSSProperties;
+  const create = useMutation(async () => {
+    await bootstrapTenant({
+      business_name: businessName.trim(),
+      agent_name: agentName.trim() || undefined,
+      currency: currency.trim() || undefined,
+      timezone,
+    });
+    onCreated();
+  });
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--bg)' }}>
-      <div className="w-full max-w-sm">
-        <h1 className="text-xl font-semibold mb-1" style={{ color: 'var(--text)' }}>Set up your business</h1>
-        <p className="text-sm mb-6" style={{ color: 'var(--text-2)' }}>
-          This becomes your workspace. You can change any of it later.
-        </p>
+    <div style={{
+      height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'var(--bg)', padding: 20,
+    }}>
+      <div style={{ width: '100%', maxWidth: 400 }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 12, background: 'var(--surface-2)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+          }}>
+            <Building2 size={20} />
+          </div>
+          <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em' }}>Set up your business</h1>
+          <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginTop: 4 }}>
+            This becomes your workspace. Everything here can be changed later.
+          </p>
+        </div>
 
-        <form onSubmit={submit} className="space-y-3">
-          <label className="block">
-            <span className="text-xs" style={{ color: 'var(--text-2)' }}>Business name</span>
-            <input
-              required value={businessName} onChange={(e) => setBusinessName(e.target.value)}
-              placeholder="e.g. Acme Electronics"
-              className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={field}
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs" style={{ color: 'var(--text-2)' }}>What should your AI agent be called?</span>
-            <input
-              value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Assistant"
-              className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={field}
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs" style={{ color: 'var(--text-2)' }}>Currency</span>
-            <input
-              value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase().slice(0, 3))}
-              maxLength={3} className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={field}
-            />
-          </label>
+        <form
+          onSubmit={(e) => { e.preventDefault(); create.run(); }}
+          style={{ display: 'grid', gap: 13 }}
+        >
+          <InlineError message={create.error} onDismiss={create.clearError} />
 
-          {error && <p className="text-sm" style={{ color: '#f87171' }}>{error}</p>}
+          <Field label="Business name" required>
+            <Input
+              required value={businessName} placeholder="e.g. Glow Beauty Spa"
+              onChange={(e) => setBusinessName(e.target.value)}
+            />
+          </Field>
 
-          <button
-            type="submit" disabled={busy}
-            className="w-full py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
-            style={{ background: 'var(--white)', color: 'var(--black)' }}
+          <Field label="AI agent name" hint="What your assistant calls itself when talking to customers.">
+            <Input value={agentName} placeholder="Assistant" onChange={(e) => setAgentName(e.target.value)} />
+          </Field>
+
+          <Field label="Currency" hint="Three-letter code, e.g. USD, KES, NGN.">
+            <Input
+              maxLength={3} value={currency} placeholder="USD"
+              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+            />
+          </Field>
+
+          <Button
+            type="submit" variant="solid" size="lg" style={{ width: '100%' }}
+            loading={create.busy} disabled={!businessName.trim()}
           >
-            {busy ? 'Creating…' : 'Create business'}
-          </button>
+            Create business
+          </Button>
         </form>
 
-        <button onClick={onSignOut} className="mt-5 text-xs" style={{ color: 'var(--text-2)' }}>Sign out</button>
+        <div style={{ textAlign: 'center', marginTop: 18 }}>
+          <button onClick={onSignOut} style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Sign out</button>
+        </div>
       </div>
     </div>
   );

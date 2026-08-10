@@ -15,17 +15,31 @@ inboxRouter.get(
   requireAuth,
   handler(async (req, res) => {
     const ctx = req.ctx!;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
     let q = ctx.db
       .from('conversations')
-      .select('id, channel_type, channel_id, customer_id, customer_name, status, ai_enabled, unread_count, last_message_preview, last_message_at, lead_id, created_at')
+      .select(
+        'id, channel_type, channel_id, customer_id, customer_name, status, ai_enabled, unread_count, last_message_preview, last_message_at, lead_id, created_at',
+        { count: 'exact' }
+      )
       .eq('tenant_id', ctx.tenantId)
       .order('last_message_at', { ascending: false, nullsFirst: false })
-      .limit(Math.min(Number(req.query.limit) || 100, 200));
+      .range(offset, offset + limit - 1);
 
     if (req.query.status) q = q.eq('status', String(req.query.status));
     if (req.query.channel_type) q = q.eq('channel_type', String(req.query.channel_type));
+    if (req.query.unread === 'true') q = q.gt('unread_count', 0);
+    // handled_by=ai|human maps onto the takeover flag that n8n reads.
+    if (req.query.handled_by === 'ai') q = q.eq('ai_enabled', true);
+    if (req.query.handled_by === 'human') q = q.eq('ai_enabled', false);
+    if (req.query.search) {
+      const s = String(req.query.search).replace(/[%,()]/g, '');
+      q = q.or(`customer_name.ilike.%${s}%,customer_id.ilike.%${s}%,last_message_preview.ilike.%${s}%`);
+    }
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) return res.status(400).json({ error: error.message });
 
     // Attach lead stage for the list's stage badge.
@@ -42,6 +56,9 @@ inboxRouter.get(
         ...c,
         lead_stage: c.lead_id ? stages[String(c.lead_id)] ?? null : null,
       })),
+      total: count ?? 0,
+      limit,
+      offset,
     });
   })
 );
@@ -219,7 +236,58 @@ inboxRouter.get(
   })
 );
 
-const LEAD_STAGES = ['new', 'contacted', 'interested', 'quoted', 'payment_claimed', 'payment_verified', 'won', 'lost'];
+export const LEAD_STAGES = [
+  'new', 'contacted', 'interested', 'quoted',
+  'payment_claimed', 'payment_verified', 'won', 'lost',
+] as const;
+
+/** Stage vocabulary is served from the backend so the UI never hardcodes it. */
+inboxRouter.get(
+  '/leads/stages',
+  requireAuth,
+  handler(async (_req, res) => {
+    res.json({ stages: LEAD_STAGES });
+  })
+);
+
+/** Full lead detail: conversation, orders, payments and timeline. */
+inboxRouter.get(
+  '/leads/:id',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data: lead, error } = await ctx.db
+      .from('leads').select('*').eq('id', req.params.id).eq('tenant_id', ctx.tenantId).maybeSingle();
+    if (error) return res.status(400).json({ error: error.message });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const [{ data: conversation }, { data: orders }, { data: payments }] = await Promise.all([
+      ctx.db.from('conversations')
+        .select('id, channel_type, customer_id, status, ai_enabled, last_message_at')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('channel_type', lead.channel_type)
+        .eq('customer_id', lead.customer_id)
+        .maybeSingle(),
+      ctx.db.from('orders').select('*').eq('tenant_id', ctx.tenantId).eq('lead_id', lead.id)
+        .order('created_at', { ascending: false }),
+      ctx.db.from('payments').select('*').eq('tenant_id', ctx.tenantId).eq('lead_id', lead.id)
+        .order('created_at', { ascending: false }),
+    ]);
+
+    // Timeline assembled from real records only.
+    const timeline: Array<{ at: string; kind: string; label: string }> = [];
+    if (lead.created_at) timeline.push({ at: lead.created_at, kind: 'lead', label: 'Lead created' });
+    if (lead.last_contact) timeline.push({ at: lead.last_contact, kind: 'message', label: 'Last customer contact' });
+    for (const o of orders ?? []) timeline.push({ at: o.created_at, kind: 'order', label: `Order ${o.order_ref} (${o.status})` });
+    for (const p of payments ?? []) {
+      timeline.push({ at: p.created_at, kind: 'payment', label: `Payment claimed${p.transaction_code ? ` (${p.transaction_code})` : ''}` });
+      if (p.verified_at) timeline.push({ at: p.verified_at, kind: 'payment', label: 'Payment verified' });
+    }
+    timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json({ lead, conversation: conversation ?? null, orders: orders ?? [], payments: payments ?? [], timeline });
+  })
+);
 
 inboxRouter.patch(
   '/leads/:id',
@@ -229,12 +297,24 @@ inboxRouter.patch(
     const ctx = req.ctx!;
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (req.body?.stage !== undefined) {
-      if (!LEAD_STAGES.includes(req.body.stage)) {
+      if (!(LEAD_STAGES as readonly string[]).includes(req.body.stage)) {
         return res.status(400).json({ error: `stage must be one of: ${LEAD_STAGES.join(', ')}` });
       }
       updates.stage = req.body.stage;
     }
-    for (const f of ['customer_name', 'email', 'delivery_location', 'payment_method', 'product_model', 'product_storage', 'product_condition', 'upsell_items']) {
+    if (req.body?.assigned_to !== undefined) {
+      // Only a member of this tenant may be assigned a lead.
+      if (req.body.assigned_to === null) {
+        updates.assigned_to = null;
+      } else {
+        const { data: member } = await ctx.db
+          .from('tenant_users').select('user_id')
+          .eq('tenant_id', ctx.tenantId).eq('user_id', req.body.assigned_to).maybeSingle();
+        if (!member) return res.status(400).json({ error: 'That user is not a member of this business' });
+        updates.assigned_to = req.body.assigned_to;
+      }
+    }
+    for (const f of ['customer_name', 'email', 'delivery_location', 'payment_method', 'product_model', 'product_storage', 'product_condition', 'upsell_items', 'notes']) {
       if (req.body?.[f] !== undefined) updates[f] = req.body[f];
     }
     if (req.body?.product_price !== undefined) {

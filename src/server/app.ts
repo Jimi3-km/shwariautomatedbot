@@ -8,6 +8,7 @@ import { inboxRouter } from './routes/inbox.js';
 import { commerceRouter } from './routes/commerce.js';
 import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
+import { analyticsRouter } from './routes/analytics.js';
 
 export function createApp() {
   const app = express();
@@ -41,6 +42,7 @@ export function createApp() {
   app.use('/api', commerceRouter);
   app.use('/api', channelsRouter);
   app.use('/api', receiptsRouter);
+  app.use('/api', analyticsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

@@ -1,161 +1,281 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../lib/api';
-import { PageHeader, ErrorNote, inputStyle } from './Shell';
+import { Bot, Plus, X, Save } from 'lucide-react';
+import { getAgentSettings, updateAgentSettings } from '../lib/api';
+import type { AgentSettings as AgentSettingsType } from '../types';
+import { useAsync, useMutation } from '../hooks';
+import { useSession } from '../app/SessionContext';
+import {
+  Button, Card, ErrorState, Field, Input, InlineError, LoadingState,
+  PageHeader, Select, Textarea, useToast,
+} from '../components/ui';
+
+const MODELS = [
+  { value: 'gpt-4o-mini', label: 'Standard — fast and economical' },
+  { value: 'gpt-4o', label: 'Advanced — best quality, higher cost' },
+];
+
+interface FormState {
+  persona: string;
+  customInstructions: string;
+  followupTemplate: string;
+  model: string;
+  memoryWindow: number;
+  followupDelayHours: number;
+  salesScript: string[];
+  upsells: string[];
+  escalationRules: string[];
+}
+
+function toForm(a: AgentSettingsType): FormState {
+  const rules = a.escalation_rules as Record<string, unknown> | null;
+  const handover = rules && Array.isArray((rules as any).handover_if) ? (rules as any).handover_if as string[] : [];
+  return {
+    persona: a.persona ?? '',
+    customInstructions: a.custom_instructions ?? '',
+    followupTemplate: a.followup_template ?? '',
+    model: a.model ?? 'gpt-4o-mini',
+    memoryWindow: a.memory_window ?? 50,
+    followupDelayHours: a.followup_delay_hours ?? 24,
+    salesScript: Array.isArray(a.sales_script) ? a.sales_script : [],
+    upsells: Array.isArray(a.upsell_catalogue) ? a.upsell_catalogue : [],
+    escalationRules: handover,
+  };
+}
 
 /**
- * Plain-language agent configuration. Deliberately exposes no n8n concepts --
- * no node names, webhook URLs or workflow ids appear anywhere on this page.
+ * Agent configuration in the business owner's language. Nothing here exposes
+ * the automation engine underneath: no workflow names, node names or webhook
+ * URLs. Free-text fields feed a fixed prompt structure server-side, so a
+ * business configures behaviour without being able to rewrite the guardrails.
  */
-export function AgentSettings({ canWrite }: { canWrite: boolean }) {
-  const [agent, setAgent] = useState<any>(null);
-  const [scriptText, setScriptText] = useState('');
-  const [upsellText, setUpsellText] = useState('');
-  const [escalationText, setEscalationText] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
+export function AgentSettings() {
+  const { canWrite, tenant } = useSession();
+  const toast = useToast();
+  const state = useAsync(() => getAgentSettings(), []);
+  const [form, setForm] = useState<FormState | null>(null);
 
   useEffect(() => {
-    api<{ agent: any }>('/agent').then((r) => {
-      const a = r.agent ?? {};
-      setAgent(a);
-      setScriptText(Array.isArray(a.sales_script) ? a.sales_script.join('\n') : '');
-      setUpsellText(Array.isArray(a.upsell_catalogue) ? a.upsell_catalogue.join(', ') : '');
-      setEscalationText(
-        a.escalation_rules && Object.keys(a.escalation_rules).length
-          ? JSON.stringify(a.escalation_rules, null, 2) : ''
-      );
-    }).catch((e) => setError(e.message));
-  }, []);
+    if (state.data?.agent && !form) setForm(toForm(state.data.agent));
+  }, [state.data, form]);
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true); setError(null); setSaved(false);
-    try {
-      let escalation_rules: any = {};
-      if (escalationText.trim()) {
-        try { escalation_rules = JSON.parse(escalationText); }
-        catch { throw new Error('Escalation rules must be valid JSON'); }
-      }
-      const body = {
-        persona: agent.persona,
-        custom_instructions: agent.custom_instructions,
-        followup_template: agent.followup_template,
-        model: agent.model,
-        memory_window: Number(agent.memory_window),
-        followup_delay_hours: Number(agent.followup_delay_hours),
-        sales_script: scriptText.split('\n').map((s) => s.trim()).filter(Boolean),
-        upsell_catalogue: upsellText.split(',').map((s) => s.trim()).filter(Boolean),
-        escalation_rules,
-      };
-      const updated = await api('/agent', { method: 'PUT', body });
-      setAgent(updated);
-      setSaved(true);
-    } catch (e: any) { setError(e.message); }
-    finally { setBusy(false); }
+  const save = useMutation(async (f: FormState) => {
+    await updateAgentSettings({
+      persona: f.persona,
+      custom_instructions: f.customInstructions,
+      followup_template: f.followupTemplate,
+      model: f.model,
+      memory_window: f.memoryWindow,
+      followup_delay_hours: f.followupDelayHours,
+      sales_script: f.salesScript.filter((s) => s.trim()),
+      upsell_catalogue: f.upsells.filter((s) => s.trim()),
+      escalation_rules: { handover_if: f.escalationRules.filter((s) => s.trim()) },
+    } as Partial<AgentSettingsType>);
+    toast.push('success', 'Agent settings saved.');
+    state.reload();
+  });
+
+  if (state.loading && !state.data) {
+    return <><PageHeader title="AI Agent" /><LoadingState /></>;
+  }
+  if (state.error) {
+    return <><PageHeader title="AI Agent" /><ErrorState message={state.error} onRetry={state.reload} /></>;
+  }
+  if (!form) {
+    return <><PageHeader title="AI Agent" /><LoadingState /></>;
   }
 
-  if (!agent) return <><PageHeader title="AI Agent" /><ErrorNote error={error} /></>;
-
-  const set = (k: string) => (e: any) => setAgent({ ...agent, [k]: e.target.value });
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm({ ...form, [key]: value });
 
   return (
     <>
-      <PageHeader title="AI Agent" subtitle="How your agent talks to customers and sells for you." />
-      <ErrorNote error={error} />
-
-      <form onSubmit={save} className="p-6 max-w-3xl space-y-5">
-        <Section title="Personality and tone"
-          hint="Describe how the agent should come across — friendly, formal, brief, warm. Written in plain language.">
-          <textarea
-            value={agent.persona ?? ''} onChange={set('persona')} rows={4} disabled={!canWrite}
-            placeholder="Warm, confident and concise. Speaks English and Swahili. Never pushy."
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle}
-          />
-        </Section>
-
-        <Section title="Sales steps"
-          hint="One step per line. The agent follows these in order and asks only one question per reply.">
-          <textarea
-            value={scriptText} onChange={(e) => setScriptText(e.target.value)} rows={7} disabled={!canWrite}
-            placeholder={'Greet and ask what they are looking for\nConfirm the exact model and budget\nQuote the price from the catalogue\nAsk for delivery location\nShare payment details'}
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none font-mono" style={inputStyle}
-          />
-        </Section>
-
-        <Section title="Upsells" hint="Comma separated. The agent may offer these alongside a main product.">
-          <input
-            value={upsellText} onChange={(e) => setUpsellText(e.target.value)} disabled={!canWrite}
-            placeholder="Screen protector, Case, Charger"
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle}
-          />
-        </Section>
-
-        <Section title="Custom instructions" hint="Anything specific to your business the agent must always know.">
-          <textarea
-            value={agent.custom_instructions ?? ''} onChange={set('custom_instructions')} rows={4} disabled={!canWrite}
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle}
-          />
-        </Section>
-
-        <Section title="Escalation rules (JSON)" hint="When the agent should stop and hand over to a human.">
-          <textarea
-            value={escalationText} onChange={(e) => setEscalationText(e.target.value)} rows={4} disabled={!canWrite}
-            placeholder='{"handover_if":["customer is angry","order above 200000"]}'
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none font-mono" style={inputStyle}
-          />
-        </Section>
-
-        <Section title="Follow-up message"
-          hint="Sent to a lead that has gone quiet. Your business name and agent name are filled in automatically.">
-          <textarea
-            value={agent.followup_template ?? ''} onChange={set('followup_template')} rows={3} disabled={!canWrite}
-            placeholder="Hi! {agent_name} here from {business_name}. You were looking at something earlier — can I help you finish your order?"
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle}
-          />
-        </Section>
-
-        <div className="grid md:grid-cols-3 gap-3">
-          <Section title="Model" hint="Which AI model answers customers.">
-            <select value={agent.model ?? 'gpt-4o-mini'} onChange={set('model')} disabled={!canWrite}
-              className="w-full px-3 py-2 rounded-lg text-sm" style={inputStyle}>
-              <option value="gpt-4o-mini">gpt-4o-mini (fast, low cost)</option>
-              <option value="gpt-4o">gpt-4o (most capable)</option>
-            </select>
-          </Section>
-          <Section title="Memory" hint="How many past messages the agent remembers.">
-            <input type="number" min={1} max={200} value={agent.memory_window ?? 50}
-              onChange={set('memory_window')} disabled={!canWrite}
-              className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} />
-          </Section>
-          <Section title="Follow up after (hours)" hint="Quiet time before a follow-up is sent.">
-            <input type="number" min={1} max={720} value={agent.followup_delay_hours ?? 24}
-              onChange={set('followup_delay_hours')} disabled={!canWrite}
-              className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} />
-          </Section>
-        </div>
-
-        {canWrite && (
-          <div className="flex items-center gap-3">
-            <button type="submit" disabled={busy}
-              className="px-4 py-2 rounded-lg text-sm disabled:opacity-50"
-              style={{ background: 'var(--white)', color: 'var(--black)' }}>
-              {busy ? 'Saving…' : 'Save agent settings'}
-            </button>
-            {saved && <span className="text-sm" style={{ color: '#6ee7b7' }}>Saved</span>}
-          </div>
+      <PageHeader
+        title="AI Agent"
+        subtitle={tenant ? `How ${tenant.agent_name || 'your agent'} talks to your customers` : undefined}
+        actions={canWrite && (
+          <Button variant="solid" size="sm" icon={<Save size={13} />} loading={save.busy}
+            onClick={() => save.run(form)}>
+            Save changes
+          </Button>
         )}
-      </form>
+      />
+
+      <InlineError message={save.error} onDismiss={save.clearError} />
+
+      <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
+        <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
+
+          <Card>
+            <SectionTitle icon={<Bot size={15} />} title="Identity and tone"
+              hint="Your agent's name is set in Business settings." />
+            <Field
+              label="Personality and tone"
+              hint="Describe how your agent should come across, in plain language."
+            >
+              <Textarea
+                rows={4} disabled={!canWrite} value={form.persona}
+                onChange={(e) => set('persona', e.target.value)}
+                placeholder="Warm, confident and concise. Never pushy. Happy to switch between English and the customer's language."
+              />
+            </Field>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Sales process"
+              hint="The steps your agent works through. It follows these in order and asks only one question per reply." />
+            <ListEditor
+              items={form.salesScript} disabled={!canWrite}
+              onChange={(salesScript) => set('salesScript', salesScript)}
+              addLabel="Add step"
+              placeholder="e.g. Confirm exactly what the customer wants"
+              ordered
+              emptyHint="No steps yet. Without these your agent will improvise its approach."
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="Upsells"
+              hint="Extras your agent may suggest alongside a main purchase." />
+            <ListEditor
+              items={form.upsells} disabled={!canWrite}
+              onChange={(upsells) => set('upsells', upsells)}
+              addLabel="Add upsell"
+              placeholder="e.g. Screen protector"
+              emptyHint="No upsells configured."
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="When to hand over to a human"
+              hint="If any of these apply, your agent stops and alerts you instead of continuing." />
+            <ListEditor
+              items={form.escalationRules} disabled={!canWrite}
+              onChange={(escalationRules) => set('escalationRules', escalationRules)}
+              addLabel="Add rule"
+              placeholder="e.g. The customer is upset or asking for a refund"
+              emptyHint="No handover rules yet."
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="Business instructions"
+              hint="Anything specific your agent must always know or never say." />
+            <Textarea
+              rows={4} disabled={!canWrite} value={form.customInstructions}
+              onChange={(e) => set('customInstructions', e.target.value)}
+              placeholder="e.g. We do not ship outside the country. Always mention the one-year warranty."
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="Follow-ups"
+              hint="Sent automatically to a customer who goes quiet." />
+            <Field
+              label="Follow-up message"
+              hint="Use {agent_name}, {business_name} and {customer_name} — they are filled in automatically for you."
+            >
+              <Textarea
+                rows={3} disabled={!canWrite} value={form.followupTemplate}
+                onChange={(e) => set('followupTemplate', e.target.value)}
+                placeholder="Hi {customer_name}! {agent_name} here from {business_name}. Can I help you finish your order?"
+              />
+            </Field>
+            <div style={{ marginTop: 12, maxWidth: 220 }}>
+              <Field label="Wait before following up" hint="Hours of silence.">
+                <Input
+                  type="number" min={1} max={720} disabled={!canWrite}
+                  value={form.followupDelayHours}
+                  onChange={(e) => set('followupDelayHours', Number(e.target.value))}
+                />
+              </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Advanced" hint="Sensible defaults; change only if you need to." />
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+              <Field label="Model" hint="Which AI model answers your customers.">
+                <Select
+                  value={form.model} disabled={!canWrite} options={MODELS}
+                  onChange={(e) => set('model', e.target.value)}
+                />
+              </Field>
+              <Field label="Conversation memory" hint="How many past messages the agent keeps in mind (1–200).">
+                <Input
+                  type="number" min={1} max={200} disabled={!canWrite}
+                  value={form.memoryWindow}
+                  onChange={(e) => set('memoryWindow', Number(e.target.value))}
+                />
+              </Field>
+            </div>
+          </Card>
+
+          {canWrite && (
+            <div>
+              <Button variant="solid" icon={<Save size={14} />} loading={save.busy} onClick={() => save.run(form)}>
+                Save changes
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
     </>
   );
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+function SectionTitle({ icon, title, hint }: { icon?: React.ReactNode; title: string; hint?: string }) {
   return (
-    <div>
-      <h2 className="text-sm font-medium">{title}</h2>
-      {hint && <p className="text-xs mt-0.5 mb-2" style={{ color: 'var(--text-2)' }}>{hint}</p>}
-      {children}
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        {icon}
+        <h2 style={{ fontSize: 14, fontWeight: 600 }}>{title}</h2>
+      </div>
+      {hint && <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.5 }}>{hint}</p>}
+    </div>
+  );
+}
+
+function ListEditor({
+  items, onChange, disabled, addLabel, placeholder, ordered, emptyHint,
+}: {
+  items: string[]; onChange: (items: string[]) => void; disabled: boolean;
+  addLabel: string; placeholder: string; ordered?: boolean; emptyHint: string;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      {items.length === 0 && (
+        <p style={{ fontSize: 12.5, color: 'var(--text-3)' }}>{emptyHint}</p>
+      )}
+      {items.map((item, i) => (
+        <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+          {ordered && (
+            <span style={{
+              width: 20, flexShrink: 0, fontSize: 12, color: 'var(--text-3)', textAlign: 'right',
+            }}>
+              {i + 1}.
+            </span>
+          )}
+          <Input
+            value={item} placeholder={placeholder} disabled={disabled} style={{ flex: 1 }}
+            onChange={(e) => onChange(items.map((v, j) => (j === i ? e.target.value : v)))}
+          />
+          {!disabled && (
+            <button
+              onClick={() => onChange(items.filter((_, j) => j !== i))}
+              aria-label="Remove"
+              style={{ color: 'var(--text-3)', padding: 5 }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      ))}
+      {!disabled && (
+        <div>
+          <Button size="sm" variant="outline" icon={<Plus size={12} />} onClick={() => onChange([...items, ''])}>
+            {addLabel}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,134 +1,235 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { api, fmtMoney, fmtDate } from '../lib/api';
-import { PageHeader, Badge, Empty, ErrorNote } from './Shell';
+import React, { useState } from 'react';
+import { CreditCard, Check, X, Receipt, ShieldCheck } from 'lucide-react';
+import { getPayments, verifyPayment, issueReceipt } from '../lib/api';
+import type { Payment, VerificationStatus } from '../types';
+import { useAsync, useIsMobile, useMutation } from '../hooks';
+import { useSession } from '../app/SessionContext';
+import {
+  Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FilterChip, InlineError,
+  LoadingState, Modal, PageHeader, Pill, TableWrap, Textarea, useToast,
+} from '../components/ui';
+import { formatDateTime, formatMoney, humanize } from '../lib/format';
 
-const FILTERS = [
+const FILTERS: Array<{ id: VerificationStatus | ''; label: string }> = [
   { id: '', label: 'All' },
-  { id: 'unverified', label: 'Unverified' },
+  { id: 'unverified', label: 'Awaiting check' },
   { id: 'verified', label: 'Verified' },
   { id: 'rejected', label: 'Rejected' },
 ];
 
+const TONE: Record<VerificationStatus, 'success' | 'warning' | 'danger'> = {
+  verified: 'success', unverified: 'warning', rejected: 'danger',
+};
+
 /**
- * Payment claims. The AI records a claim as unverified and can do nothing
- * else; only a person can move it to verified, and the database rejects any
- * attempt to do so without a real staff user attached.
+ * A customer claiming to have paid is not the same as a payment. Claims arrive
+ * as `unverified` and only a person can move one to `verified` — the API
+ * stamps who did it, and a database trigger rejects any verified row without a
+ * real staff user attached.
  */
-export function Payments({ canWrite, currency }: { canWrite: boolean; currency: string }) {
-  const [payments, setPayments] = useState<any[]>([]);
-  const [filter, setFilter] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<string | null>(null);
+export function Payments() {
+  const { canWrite, currency, refreshCounts } = useSession();
+  const isMobile = useIsMobile();
+  const toast = useToast();
 
-  const load = useCallback(async () => {
-    try {
-      const qs = filter ? `?verification_status=${filter}` : '';
-      setPayments((await api<{ payments: any[] }>(`/payments${qs}`)).payments);
-    } catch (e: any) { setError(e.message); }
-  }, [filter]);
-  useEffect(() => { load(); }, [load]);
+  const [filter, setFilter] = useState<VerificationStatus | ''>('unverified');
+  const state = useAsync(() => getPayments(filter || undefined), [filter]);
 
-  async function decide(id: string, decision: 'verified' | 'rejected') {
-    setBusyId(id); setError(null);
-    try {
-      const reason = decision === 'rejected'
-        ? window.prompt('Why is this claim being rejected? (optional)') ?? undefined
-        : undefined;
-      await api(`/payments/${id}/verify`, { method: 'POST', body: { decision, reason } });
-      await load();
-    } catch (e: any) { setError(e.message); }
-    finally { setBusyId(null); }
-  }
+  const [confirming, setConfirming] = useState<Payment | null>(null);
+  const [rejecting, setRejecting] = useState<Payment | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
 
-  async function issueReceipt(id: string) {
-    setError(null);
-    try {
-      const r = await api<{ html: string }>(`/payments/${id}/receipt`, { method: 'POST' });
-      setReceipt(r.html);
-    } catch (e: any) { setError(e.message); }
-  }
+  const decide = useMutation(async (id: string, decision: 'verified' | 'rejected', reason?: string) => {
+    await verifyPayment(id, decision, reason);
+    toast.push('success', decision === 'verified' ? 'Payment verified.' : 'Payment claim rejected.');
+    setConfirming(null); setRejecting(null); setRejectReason('');
+    state.reload();
+    refreshCounts();
+  });
+
+  const receipt = useMutation(async (id: string) => {
+    const r = await issueReceipt(id);
+    setReceiptHtml(r.html);
+    if (!r.delivery.sent) {
+      toast.push('info', 'Receipt generated. Automatic delivery is not configured yet.');
+    }
+    state.reload();
+  });
+
+  const payments = state.data?.payments ?? [];
 
   return (
     <>
       <PageHeader
         title="Payments"
-        subtitle="Customers claim a payment; you confirm it. The AI can never mark a payment verified."
+        subtitle="Customers claim a payment; you confirm it. Your AI agent can never mark a payment verified."
       />
-      <ErrorNote error={error} />
 
-      <div className="px-6 pt-4 flex gap-2">
+      <div style={{ padding: '14px 20px 0', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
         {FILTERS.map((f) => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
-            className="px-3 py-1.5 rounded-lg text-xs"
-            style={{ background: filter === f.id ? 'var(--white)' : 'var(--surface-2)', color: filter === f.id ? 'var(--black)' : 'var(--text-2)' }}>
-            {f.label}
-          </button>
+          <FilterChip key={f.id} active={filter === f.id} onClick={() => setFilter(f.id)}>{f.label}</FilterChip>
         ))}
       </div>
 
-      <div className="p-6">
-        {!payments.length ? <Empty message="No payment claims yet." /> : (
-          <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--border)' }}>
-            <table className="w-full text-sm">
+      <InlineError message={decide.error ?? receipt.error} />
+
+      <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
+        {state.loading && !state.data ? (
+          <LoadingState rows={5} />
+        ) : state.error ? (
+          <ErrorState message={state.error} onRetry={state.reload} />
+        ) : payments.length === 0 ? (
+          <EmptyState
+            icon={<CreditCard size={26} />}
+            title={filter === 'unverified' ? 'Nothing awaiting your check' : 'No payments yet'}
+            body={
+              filter === 'unverified'
+                ? 'When a customer says they have paid, the claim will appear here for you to verify.'
+                : 'Payment claims appear here as customers report paying.'
+            }
+          />
+        ) : isMobile ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {payments.map((p) => (
+              <Card key={p.id}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ flex: 1, fontSize: 16, fontWeight: 600 }}>
+                    {formatMoney(p.amount, p.currency ?? currency)}
+                  </span>
+                  <Pill tone={TONE[p.verification_status]}>{humanize(p.verification_status)}</Pill>
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
+                  {p.customer_id || p.customer_phone || 'Unknown customer'}
+                </div>
+                {p.transaction_code && (
+                  <div className="mono" style={{ fontSize: 12, marginTop: 3 }}>{p.transaction_code}</div>
+                )}
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4 }}>
+                  {formatDateTime(p.created_at)}
+                </div>
+                {canWrite && <Actions p={p} onVerify={setConfirming} onReject={setRejecting}
+                  onReceipt={(id) => receipt.run(id)} busy={receipt.busy} />}
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <TableWrap>
+            <table className="tbl" style={{ width: '100%' }}>
               <thead>
-                <tr style={{ background: 'var(--surface-2)', color: 'var(--text-2)' }}>
-                  {['Customer', 'Transaction code', 'Amount', 'Method', 'Status', 'Claimed', 'Actions'].map((h) => (
-                    <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>
-                  ))}
+                <tr>
+                  <th>Customer</th><th>Transaction code</th><th>Amount</th><th>Method</th>
+                  <th>Status</th><th>Claimed</th><th>Verified</th><th></th>
                 </tr>
               </thead>
               <tbody>
                 {payments.map((p) => (
-                  <tr key={p.id} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                    <td className="px-3 py-2">
-                      <div className="truncate max-w-[160px]">{p.customer_id || p.customer_phone || '—'}</div>
-                      {p.customer_email && <div className="text-xs" style={{ color: 'var(--text-3)' }}>{p.customer_email}</div>}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{p.transaction_code || '—'}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmtMoney(p.amount, p.currency || currency)}</td>
-                    <td className="px-3 py-2 text-xs">{p.payment_method || '—'}</td>
-                    <td className="px-3 py-2">
-                      <Badge tone={p.verification_status === 'verified' ? 'good' : p.verification_status === 'rejected' ? 'bad' : 'warn'}>
-                        {p.verification_status}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap" style={{ color: 'var(--text-3)' }}>{fmtDate(p.created_at)}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {canWrite && p.verification_status === 'unverified' && (
-                        <span className="flex gap-2">
-                          <button disabled={busyId === p.id} onClick={() => decide(p.id, 'verified')}
-                            className="px-2 py-1 rounded text-xs disabled:opacity-40" style={{ background: '#064e3b', color: '#6ee7b7' }}>
-                            Verify
-                          </button>
-                          <button disabled={busyId === p.id} onClick={() => decide(p.id, 'rejected')}
-                            className="px-2 py-1 rounded text-xs disabled:opacity-40" style={{ background: '#7f1d1d', color: '#fca5a5' }}>
-                            Reject
-                          </button>
-                        </span>
+                  <tr key={p.id}>
+                    <td className="primary">
+                      <div>{p.customer_id || p.customer_phone || '—'}</div>
+                      {p.customer_email && (
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.customer_email}</div>
                       )}
-                      {canWrite && p.verification_status === 'verified' && (
-                        <button onClick={() => issueReceipt(p.id)} className="text-xs" style={{ color: 'var(--text-2)' }}>
-                          Receipt
-                        </button>
+                    </td>
+                    <td className="mono" style={{ fontSize: 12 }}>{p.transaction_code || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap', fontWeight: 500 }}>
+                      {formatMoney(p.amount, p.currency ?? currency)}
+                    </td>
+                    <td style={{ fontSize: 12.5 }}>{p.payment_method || '—'}</td>
+                    <td>
+                      <Pill tone={TONE[p.verification_status]}>{humanize(p.verification_status)}</Pill>
+                      {p.rejected_reason && (
+                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{p.rejected_reason}</div>
                       )}
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                      {formatDateTime(p.created_at)}
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                      {p.verified_at ? formatDateTime(p.verified_at) : '—'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {canWrite && <Actions p={p} onVerify={setConfirming} onReject={setRejecting}
+                        onReceipt={(id) => receipt.run(id)} busy={receipt.busy} />}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableWrap>
         )}
       </div>
 
-      {receipt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,.8)' }}
-          onClick={() => setReceipt(null)}>
-          <div className="bg-white rounded-xl overflow-hidden max-w-xl w-full max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
-            <iframe title="Receipt" srcDoc={receipt} sandbox="" className="w-full h-[80vh] border-0" />
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={Boolean(confirming)}
+        title="Verify this payment?"
+        body={
+          confirming
+            ? `Confirm you have checked your account and received ${formatMoney(confirming.amount, confirming.currency ?? currency)}${confirming.transaction_code ? ` under ${confirming.transaction_code}` : ''}. This is recorded against your name.`
+            : ''
+        }
+        confirmLabel="Yes, I received it"
+        tone="accent"
+        busy={decide.busy}
+        onCancel={() => setConfirming(null)}
+        onConfirm={() => confirming && decide.run(confirming.id, 'verified')}
+      />
+
+      <Modal
+        open={Boolean(rejecting)} onClose={() => setRejecting(null)} title="Reject payment claim" width={440}
+        footer={
+          <>
+            <Button variant="subtle" onClick={() => setRejecting(null)}>Cancel</Button>
+            <Button variant="danger" loading={decide.busy}
+              onClick={() => rejecting && decide.run(rejecting.id, 'rejected', rejectReason || undefined)}>
+              Reject claim
+            </Button>
+          </>
+        }
+      >
+        <Field label="Reason" hint="Optional, but useful for your own records.">
+          <Textarea rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
+            placeholder="No matching transaction found…" />
+        </Field>
+      </Modal>
+
+      <Modal open={Boolean(receiptHtml)} onClose={() => setReceiptHtml(null)} title="Receipt" width={620}>
+        {receiptHtml && (
+          <iframe
+            title="Receipt preview" srcDoc={receiptHtml} sandbox=""
+            style={{ width: '100%', height: '60vh', border: 0, borderRadius: 'var(--radius)', background: '#fff' }}
+          />
+        )}
+      </Modal>
     </>
   );
+}
+
+function Actions({
+  p, onVerify, onReject, onReceipt, busy,
+}: {
+  p: Payment;
+  onVerify: (p: Payment) => void;
+  onReject: (p: Payment) => void;
+  onReceipt: (id: string) => void;
+  busy: boolean;
+}) {
+  if (p.verification_status === 'unverified') {
+    return (
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 8 }}>
+        <Button size="sm" variant="success" icon={<Check size={12} />} onClick={() => onVerify(p)}>Verify</Button>
+        <Button size="sm" variant="danger" icon={<X size={12} />} onClick={() => onReject(p)}>Reject</Button>
+      </div>
+    );
+  }
+  if (p.verification_status === 'verified') {
+    return (
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center', marginTop: 8 }}>
+        <ShieldCheck size={13} style={{ color: 'var(--success)' }} />
+        <Button size="sm" variant="outline" icon={<Receipt size={12} />} loading={busy}
+          onClick={() => onReceipt(p.id)}>Receipt</Button>
+      </div>
+    );
+  }
+  return null;
 }

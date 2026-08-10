@@ -112,6 +112,41 @@ begin
   insert into iso values (22,'Each channel has a distinct webhook secret',
     (select count(*)::text from public.channels where secret_token is not null), n::text,
     case when n = (select count(*) from public.channels where secret_token is not null) then 'PASS' else 'FAIL' end);
+
+  -- Lead notes and assignment (added later) must not become a leak path.
+  perform pg_temp.as_user(ua); select count(*) into n from public.leads where tenant_id=tb and notes is not null;
+  insert into iso values (23,'Tenant A cannot read Tenant B lead notes','0',n::text,case when n=0 then 'PASS' else 'FAIL' end); perform pg_temp.as_admin();
+
+  perform pg_temp.as_user(ua);
+  begin
+    update public.leads set notes='injected' where tenant_id=tb;
+    get diagnostics n = row_count;
+    insert into iso values (24,'Tenant A cannot write Tenant B lead notes','0',n::text,case when n=0 then 'PASS' else 'FAIL' end);
+  exception when others then
+    insert into iso values (24,'Tenant A cannot write Tenant B lead notes','0','blocked '||sqlstate,'PASS');
+  end;
+  perform pg_temp.as_admin();
+
+  -- followup_candidates exposes bot_token and must stay service-role only.
+  perform pg_temp.as_user(ua);
+  begin
+    select 1 into n from public.followup_candidates limit 1;
+    insert into iso values (25,'followup_candidates unreachable by dashboard role','denied','READABLE','FAIL');
+  exception when others then
+    insert into iso values (25,'followup_candidates unreachable by dashboard role','denied','blocked '||sqlstate,'PASS');
+  end;
+  perform pg_temp.as_admin();
+
+  -- Positive control: a tenant CAN write its own lead notes.
+  perform pg_temp.as_user(ua);
+  begin
+    update public.leads set notes='ok' where tenant_id=ta;
+    get diagnostics n = row_count;
+    insert into iso values (26,'Control: A can write its own lead notes','>=1',n::text,case when n>=1 then 'PASS' else 'FAIL' end);
+  exception when others then
+    insert into iso values (26,'Control: A can write its own lead notes','>=1','blocked '||sqlstate,'FAIL');
+  end;
+  perform pg_temp.as_admin();
 end $t$;
 
 select * from iso order by id;

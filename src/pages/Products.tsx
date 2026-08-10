@@ -1,67 +1,104 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { Plus, Pencil, Archive } from 'lucide-react';
-import { api, fmtMoney } from '../lib/api';
-import { PageHeader, Badge, Empty, ErrorNote, inputStyle } from './Shell';
+import React, { useState } from 'react';
+import { Package, Plus, Pencil, Archive, RotateCcw } from 'lucide-react';
+import {
+  getProducts, createProduct, updateProduct, archiveProduct, type ProductInput,
+} from '../lib/api';
+import type { Product } from '../types';
+import { useAsync, useMutation } from '../hooks';
+import { useSession } from '../app/SessionContext';
+import {
+  Button, Card, Checkbox, EmptyState, ErrorState, Field, Input, InlineError,
+  LoadingState, Modal, PageHeader, Pill, Textarea, useToast,
+} from '../components/ui';
+import { formatMoney } from '../lib/format';
 
-const blank = {
-  id: null as string | null, name: '', sku: '', description: '', price: '',
-  variant_text: '', in_stock: true, payment_options_text: '',
+/** Editable rows of key/value pairs — friendlier than asking for raw JSON. */
+interface Pair { key: string; value: string }
+
+function toPairs(obj: Record<string, unknown> | null | undefined): Pair[] {
+  if (!obj) return [];
+  return Object.entries(obj).map(([key, value]) => ({ key, value: String(value ?? '') }));
+}
+function fromPairs(pairs: Pair[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of pairs) {
+    const k = p.key.trim();
+    if (k) out[k] = p.value;
+  }
+  return out;
+}
+
+interface FormState {
+  id: string | null;
+  name: string; sku: string; description: string; price: string;
+  inStock: boolean; variant: Pair[]; paymentOptions: Pair[];
+}
+
+const emptyForm: FormState = {
+  id: null, name: '', sku: '', description: '', price: '',
+  inStock: true, variant: [], paymentOptions: [],
 };
 
 /**
- * The product catalogue the AI quotes from. Prices are numeric here and the
- * agent is instructed never to invent one, so anything a customer is quoted
- * originates on this page.
+ * The catalogue the AI quotes from. It is intentionally generic: a product can
+ * be a phone, a spa treatment or a service. Variants and payment options are
+ * free-form attributes rather than a fixed set of phone-specific columns.
  */
-export function Products({ canWrite, currency }: { canWrite: boolean; currency: string }) {
-  const [products, setProducts] = useState<any[]>([]);
-  const [form, setForm] = useState<typeof blank | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export function Products() {
+  const { canWrite, currency } = useSession();
+  const toast = useToast();
+  const state = useAsync(() => getProducts(), []);
+  const [form, setForm] = useState<FormState | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
-  const load = useCallback(async () => {
-    try { setProducts((await api<{ products: any[] }>('/products')).products); }
-    catch (e: any) { setError(e.message); }
-  }, []);
-  useEffect(() => { load(); }, [load]);
+  const save = useMutation(async (input: FormState) => {
+    const body: ProductInput = {
+      name: input.name.trim(),
+      sku: input.sku.trim() || null,
+      description: input.description.trim() || null,
+      price: input.price === '' ? null : Number(input.price),
+      currency: currency ?? undefined,
+      variant: fromPairs(input.variant),
+      payment_options: fromPairs(input.paymentOptions),
+      in_stock: input.inStock,
+    };
+    if (input.id) await updateProduct(input.id, body);
+    else await createProduct(body);
+    setForm(null);
+    toast.push('success', input.id ? 'Product updated.' : 'Product added.');
+    state.reload();
+  });
 
-  function edit(p: any) {
-    setForm({
-      id: p.id, name: p.name ?? '', sku: p.sku ?? '', description: p.description ?? '',
-      price: p.price == null ? '' : String(p.price),
-      variant_text: JSON.stringify(p.variant ?? {}, null, 0),
-      payment_options_text: JSON.stringify(p.payment_options ?? {}, null, 0),
-      in_stock: Boolean(p.in_stock),
+  const archive = useMutation(async (id: string) => {
+    await archiveProduct(id);
+    toast.push('success', 'Product archived.');
+    state.reload();
+  });
+
+  const restore = useMutation(async (p: Product) => {
+    await updateProduct(p.id, {
+      name: p.name, sku: p.sku, description: p.description, price: p.price,
+      currency: p.currency ?? currency ?? undefined,
+      variant: (p.variant ?? {}) as Record<string, unknown>,
+      payment_options: (p.payment_options ?? {}) as Record<string, unknown>,
+      in_stock: true,
     });
-  }
+    toast.push('success', 'Product restored.');
+    state.reload();
+  });
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form) return;
-    setBusy(true); setError(null);
-    try {
-      let variant = {}; let payment_options = {};
-      try { variant = form.variant_text.trim() ? JSON.parse(form.variant_text) : {}; }
-      catch { throw new Error('Variants must be valid JSON, e.g. {"storage":"128GB"}'); }
-      try { payment_options = form.payment_options_text.trim() ? JSON.parse(form.payment_options_text) : {}; }
-      catch { throw new Error('Payment options must be valid JSON'); }
+  const all = state.data?.products ?? [];
+  const products = showArchived ? all : all.filter((p) => p.in_stock);
+  const archivedCount = all.filter((p) => !p.in_stock).length;
 
-      const body = {
-        name: form.name, sku: form.sku || null, description: form.description || null,
-        price: form.price === '' ? null : Number(form.price),
-        currency, variant, payment_options, in_stock: form.in_stock,
-      };
-      if (form.id) await api(`/products/${form.id}`, { method: 'PUT', body });
-      else await api('/products', { method: 'POST', body });
-      setForm(null);
-      await load();
-    } catch (e: any) { setError(e.message); }
-    finally { setBusy(false); }
-  }
-
-  async function archive(id: string) {
-    try { await api(`/products/${id}`, { method: 'DELETE' }); await load(); }
-    catch (e: any) { setError(e.message); }
+  function openNew() { setForm({ ...emptyForm }); }
+  function openEdit(p: Product) {
+    setForm({
+      id: p.id, name: p.name, sku: p.sku ?? '', description: p.description ?? '',
+      price: p.price == null ? '' : String(p.price), inStock: p.in_stock,
+      variant: toPairs(p.variant as Record<string, unknown>),
+      paymentOptions: toPairs(p.payment_options as Record<string, unknown>),
+    });
   }
 
   return (
@@ -69,80 +106,201 @@ export function Products({ canWrite, currency }: { canWrite: boolean; currency: 
       <PageHeader
         title="Products"
         subtitle="Your AI agent quotes only from this catalogue and can never invent a price."
-        action={canWrite && (
-          <button
-            onClick={() => setForm({ ...blank })}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
-            style={{ background: 'var(--white)', color: 'var(--black)' }}
-          >
-            <Plus size={15} /> Add product
-          </button>
-        )}
+        actions={canWrite && <Button variant="solid" size="sm" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
       />
-      <ErrorNote error={error} />
 
-      {form && (
-        <form onSubmit={save} className="mx-6 mt-4 p-4 rounded-xl grid md:grid-cols-2 gap-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <Field label="Name"><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} /></Field>
-          <Field label="SKU (optional)"><input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} /></Field>
-          <Field label={`Price (${currency})`}><input type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} /></Field>
-          <Field label="Variants (JSON)"><input value={form.variant_text} onChange={(e) => setForm({ ...form, variant_text: e.target.value })} placeholder='{"storage":"128GB","condition":"new"}' className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} /></Field>
-          <Field label="Installment / payment options (JSON)"><input value={form.payment_options_text} onChange={(e) => setForm({ ...form, payment_options_text: e.target.value })} placeholder='{"deposit":5000,"weekly":1500,"weeks":12}' className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} /></Field>
-          <Field label="Description">
-            <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} />
-          </Field>
-          <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-2)' }}>
-            <input type="checkbox" checked={form.in_stock} onChange={(e) => setForm({ ...form, in_stock: e.target.checked })} />
-            In stock (the agent only offers in-stock products)
-          </label>
-          <div className="flex gap-2 justify-end md:col-span-2">
-            <button type="button" onClick={() => setForm(null)} className="px-3 py-1.5 rounded-lg text-sm" style={{ color: 'var(--text-2)' }}>Cancel</button>
-            <button type="submit" disabled={busy} className="px-3 py-1.5 rounded-lg text-sm disabled:opacity-50" style={{ background: 'var(--white)', color: 'var(--black)' }}>
-              {busy ? 'Saving…' : 'Save product'}
-            </button>
-          </div>
-        </form>
+      <InlineError message={archive.error ?? restore.error} />
+
+      {archivedCount > 0 && (
+        <div style={{ padding: '12px 20px 0' }}>
+          <Checkbox
+            label={`Show archived (${archivedCount})`}
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+        </div>
       )}
 
-      <div className="p-6">
-        {!products.length ? <Empty message="No products yet. Add your first one so the agent has something to sell." /> : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
+        {state.loading && !state.data ? (
+          <LoadingState rows={4} />
+        ) : state.error ? (
+          <ErrorState message={state.error} onRetry={state.reload} />
+        ) : products.length === 0 ? (
+          <EmptyState
+            icon={<Package size={26} />}
+            title="Your catalogue is empty"
+            body="Add your first product so your AI agent can answer customer questions accurately and quote real prices."
+            action={canWrite && <Button variant="solid" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
+          />
+        ) : (
+          <div style={{
+            display: 'grid', gap: 12, maxWidth: 1280, margin: '0 auto',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+          }}>
             {products.map((p) => (
-              <div key={p.id} className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{p.name}</div>
-                    {p.sku && <div className="text-xs" style={{ color: 'var(--text-3)' }}>{p.sku}</div>}
+              <Card key={p.id}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+                    {p.sku && <div className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.sku}</div>}
                   </div>
-                  <Badge tone={p.in_stock ? 'good' : 'neutral'}>{p.in_stock ? 'in stock' : 'archived'}</Badge>
+                  <Pill tone={p.in_stock ? 'success' : 'neutral'}>{p.in_stock ? 'In stock' : 'Archived'}</Pill>
                 </div>
-                <div className="text-lg font-semibold mt-2">{p.price == null ? 'No price set' : fmtMoney(p.price, p.currency || currency)}</div>
+
+                <div style={{ fontSize: 19, fontWeight: 600, marginTop: 8, letterSpacing: '-0.02em' }}>
+                  {p.price == null
+                    ? <span style={{ fontSize: 13, color: 'var(--text-3)', fontWeight: 400 }}>No price set</span>
+                    : formatMoney(p.price, p.currency ?? currency)}
+                </div>
+
                 {p.variant && Object.keys(p.variant).length > 0 && (
-                  <div className="text-xs mt-1" style={{ color: 'var(--text-2)' }}>
-                    {Object.entries(p.variant).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 }}>
+                    {Object.entries(p.variant).map(([k, v]) => (
+                      <Pill key={k} tone="neutral">{k}: {String(v)}</Pill>
+                    ))}
                   </div>
                 )}
-                {p.description && <p className="text-xs mt-2" style={{ color: 'var(--text-2)' }}>{p.description}</p>}
+
+                {p.payment_options && Object.keys(p.payment_options).length > 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--text-2)', marginTop: 8 }}>
+                    {Object.entries(p.payment_options).map(([k, v]) => `${k}: ${String(v)}`).join(' · ')}
+                  </div>
+                )}
+
+                {p.description && (
+                  <p style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 8, lineHeight: 1.5 }}>
+                    {p.description}
+                  </p>
+                )}
+
                 {canWrite && (
-                  <div className="flex gap-2 mt-3">
-                    <button onClick={() => edit(p)} className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-2)' }}><Pencil size={12} /> Edit</button>
-                    {p.in_stock && <button onClick={() => archive(p.id)} className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-2)' }}><Archive size={12} /> Archive</button>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+                    <Button size="sm" variant="outline" icon={<Pencil size={12} />} onClick={() => openEdit(p)}>Edit</Button>
+                    {p.in_stock ? (
+                      <Button size="sm" variant="subtle" icon={<Archive size={12} />}
+                        loading={archive.busy} onClick={() => archive.run(p.id)}>Archive</Button>
+                    ) : (
+                      <Button size="sm" variant="subtle" icon={<RotateCcw size={12} />}
+                        loading={restore.busy} onClick={() => restore.run(p)}>Restore</Button>
+                    )}
                   </div>
                 )}
-              </div>
+              </Card>
             ))}
           </div>
         )}
       </div>
+
+      <ProductModal
+        form={form} currency={currency} busy={save.busy} error={save.error}
+        onChange={setForm} onClose={() => setForm(null)} onSave={() => form && save.run(form)}
+      />
     </>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function ProductModal({
+  form, currency, busy, error, onChange, onClose, onSave,
+}: {
+  form: FormState | null; currency: string | null; busy: boolean; error: string | null;
+  onChange: (f: FormState) => void; onClose: () => void; onSave: () => void;
+}) {
+  if (!form) return null;
+  const valid = form.name.trim().length > 0;
+
   return (
-    <label className="block">
-      <span className="text-xs" style={{ color: 'var(--text-2)' }}>{label}</span>
-      <div className="mt-1">{children}</div>
-    </label>
+    <Modal
+      open onClose={onClose} title={form.id ? 'Edit product' : 'Add product'} width={560}
+      footer={
+        <>
+          <Button variant="subtle" onClick={onClose}>Cancel</Button>
+          <Button variant="solid" loading={busy} disabled={!valid} onClick={onSave}>
+            {form.id ? 'Save changes' : 'Add product'}
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'grid', gap: 14 }}>
+        <InlineError message={error} />
+
+        <Field label="Name" required>
+          <Input value={form.name} onChange={(e) => onChange({ ...form, name: e.target.value })}
+            placeholder="What are you selling?" />
+        </Field>
+
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+          <Field label={`Price${currency ? ` (${currency})` : ''}`} hint="Leave empty if priced on request.">
+            <Input type="number" min="0" step="0.01" value={form.price}
+              onChange={(e) => onChange({ ...form, price: e.target.value })} />
+          </Field>
+          <Field label="SKU" hint="Optional internal code.">
+            <Input value={form.sku} onChange={(e) => onChange({ ...form, sku: e.target.value })} />
+          </Field>
+        </div>
+
+        <Field label="Description" hint="The agent uses this to answer questions about the product.">
+          <Textarea rows={3} value={form.description}
+            onChange={(e) => onChange({ ...form, description: e.target.value })} />
+        </Field>
+
+        <PairEditor
+          label="Variants"
+          hint="Any attributes that describe this item, e.g. size, colour, storage, duration."
+          placeholderKey="storage" placeholderValue="128GB"
+          pairs={form.variant} onChange={(variant) => onChange({ ...form, variant })}
+        />
+
+        <PairEditor
+          label="Payment options"
+          hint="Installment or deposit terms the agent may offer, e.g. deposit / weekly / weeks."
+          placeholderKey="deposit" placeholderValue="5000"
+          pairs={form.paymentOptions} onChange={(paymentOptions) => onChange({ ...form, paymentOptions })}
+        />
+
+        <Checkbox
+          label="In stock — the agent only offers products that are in stock"
+          checked={form.inStock}
+          onChange={(e) => onChange({ ...form, inStock: e.target.checked })}
+        />
+      </div>
+    </Modal>
+  );
+}
+
+function PairEditor({
+  label, hint, pairs, onChange, placeholderKey, placeholderValue,
+}: {
+  label: string; hint: string; pairs: Pair[];
+  onChange: (p: Pair[]) => void; placeholderKey: string; placeholderValue: string;
+}) {
+  return (
+    <div>
+      <label className="field-label">{label}</label>
+      <p className="field-hint" style={{ marginTop: 0, marginBottom: 7 }}>{hint}</p>
+      <div style={{ display: 'grid', gap: 6 }}>
+        {pairs.map((pair, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6 }}>
+            <Input
+              placeholder={placeholderKey} value={pair.key} style={{ flex: 1 }}
+              onChange={(e) => onChange(pairs.map((p, j) => (j === i ? { ...p, key: e.target.value } : p)))}
+            />
+            <Input
+              placeholder={placeholderValue} value={pair.value} style={{ flex: 1 }}
+              onChange={(e) => onChange(pairs.map((p, j) => (j === i ? { ...p, value: e.target.value } : p)))}
+            />
+            <Button size="md" variant="subtle" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
+              Remove
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button size="sm" variant="outline" icon={<Plus size={12} />}
+            onClick={() => onChange([...pairs, { key: '', value: '' }])}>
+            Add {label.toLowerCase().replace(/s$/, '')}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

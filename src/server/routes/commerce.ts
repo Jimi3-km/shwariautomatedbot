@@ -178,16 +178,31 @@ commerceRouter.get(
     };
 
     const [
-      totalLeads, newLeads, activeConversations,
-      paymentClaims, verifiedPayments, wonLeads,
+      totalLeads, newLeads, activeConversations, totalConversations, newConversations,
+      paymentClaims, verifiedPayments, wonLeads, qualifiedLeads,
+      aiConversations, humanConversations, unreadConversations, totalOrders,
     ] = await Promise.all([
       count('leads'),
       count('leads', (q) => q.gte('created_at', since)),
       count('conversations', (q) => q.eq('status', 'open')),
+      count('conversations'),
+      count('conversations', (q) => q.gte('created_at', since)),
       count('payments', (q) => q.eq('verification_status', 'unverified')),
       count('payments', (q) => q.eq('verification_status', 'verified')),
       count('leads', (q) => q.eq('stage', 'won')),
+      count('leads', (q) => q.in('stage', ['interested', 'quoted', 'payment_claimed', 'payment_verified'])),
+      count('conversations', (q) => q.eq('ai_enabled', true)),
+      count('conversations', (q) => q.eq('ai_enabled', false)),
+      count('conversations', (q) => q.gt('unread_count', 0)),
+      count('orders'),
     ]);
+
+    // Channel status for the Overview strip. Read through channels_safe so no
+    // secret is touched.
+    const { data: channels } = await ctx.db
+      .from('channels_safe')
+      .select('channel_type, status, display_name')
+      .eq('tenant_id', t);
 
     const { data: salesRows } = await ctx.db
       .from('payments').select('amount').eq('tenant_id', t).eq('verification_status', 'verified');
@@ -209,14 +224,28 @@ commerceRouter.get(
 
     res.json({
       stats: {
+        total_conversations: totalConversations,
+        new_conversations: newConversations,
+        active_conversations: activeConversations,
+        unread_conversations: unreadConversations,
+        ai_conversations: aiConversations,
+        human_conversations: humanConversations,
         total_leads: totalLeads,
         new_leads: newLeads,
-        active_conversations: activeConversations,
+        qualified_leads: qualifiedLeads,
+        converted_leads: wonLeads,
+        total_orders: totalOrders,
         payment_claims: paymentClaims,
         verified_payments: verifiedPayments,
         sales,
         conversion_rate: totalLeads ? Number(((wonLeads / totalLeads) * 100).toFixed(1)) : 0,
+        // Share of conversations the AI is still handling without a human
+        // having had to step in.
+        ai_resolution_rate: totalConversations
+          ? Number(((aiConversations / totalConversations) * 100).toFixed(1))
+          : 0,
       },
+      channels: channels ?? [],
       recent_conversations: recentConversations ?? [],
       recent_leads: recentLeads ?? [],
     });

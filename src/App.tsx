@@ -1,35 +1,29 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { initSupabase, getSupabase, api, ApiError } from './lib/api';
+import { RouterProvider } from 'react-router-dom';
+import { router } from './app/routes';
+import { SessionProvider, signOutOfSupabase } from './app/SessionContext';
 import { AuthScreen } from './pages/AuthScreen';
 import { CreateBusinessScreen } from './pages/CreateBusinessScreen';
-import { Shell } from './pages/Shell';
-
-export interface Session {
-  user: { id: string; email: string | null };
-  role: 'owner' | 'admin' | 'member' | 'viewer';
-  tenant: { id: string; business_name: string; currency: string; slug: string } | null;
-  memberships: Array<{ tenant_id: string; role: string; tenants?: { business_name: string } }>;
-}
+import { ToastProvider, LoadingState, ErrorState } from './components/ui';
+import { ApiError, getMe, getSupabase, initSupabase, setAuthFailureHandler } from './lib/api';
+import type { Me } from './types';
 
 type Status = 'booting' | 'signed-out' | 'no-tenant' | 'ready' | 'error';
 
 export default function App() {
   const [status, setStatus] = useState<Status>('booting');
-  const [session, setSession] = useState<Session | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadSession = useCallback(async () => {
     try {
-      const me = await api<Session>('/me');
-      setSession(me);
+      setMe(await getMe());
       setStatus('ready');
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'NO_TENANT') {
-        setStatus('no-tenant');
-      } else if (e instanceof ApiError && e.status === 401) {
-        setStatus('signed-out');
-      } else {
-        setError(e instanceof Error ? e.message : 'Something went wrong');
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'NO_TENANT') setStatus('no-tenant');
+      else if (err instanceof ApiError && err.isAuthError) setStatus('signed-out');
+      else {
+        setError(err instanceof Error ? err.message : 'Something went wrong.');
         setStatus('error');
       }
     }
@@ -37,62 +31,72 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+
+    // Any 401 from anywhere in the app returns the user to sign-in rather
+    // than leaving a half-authenticated screen on display.
+    setAuthFailureHandler(() => {
+      if (!cancelled) { setMe(null); setStatus('signed-out'); }
+    });
+
     (async () => {
       try {
         const sb = await initSupabase();
         const { data } = await sb.auth.getSession();
         if (cancelled) return;
-        if (!data.session) {
-          setStatus('signed-out');
-        } else {
-          await loadSession();
-        }
-        sb.auth.onAuthStateChange((_event, s) => {
-          if (!s) {
-            setSession(null);
-            setStatus('signed-out');
-          }
+        if (!data.session) setStatus('signed-out');
+        else await loadSession();
+
+        sb.auth.onAuthStateChange((_event, session) => {
+          if (cancelled) return;
+          if (!session) { setMe(null); setStatus('signed-out'); }
         });
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Could not start');
-          setStatus('error');
-        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Could not start the application.');
+        setStatus('error');
       }
     })();
+
     return () => { cancelled = true; };
   }, [loadSession]);
 
   const signOut = useCallback(async () => {
-    await getSupabase().auth.signOut();
-    setSession(null);
+    await signOutOfSupabase();
+    setMe(null);
     setStatus('signed-out');
   }, []);
 
+  let content: React.ReactNode;
   if (status === 'booting') {
-    return <CenterMessage title="Loading" body="Starting the dashboard…" />;
+    content = <Centered><LoadingState label="Starting…" /></Centered>;
+  } else if (status === 'error') {
+    content = (
+      <Centered>
+        <ErrorState message={error ?? 'Unknown error'} onRetry={() => window.location.reload()} />
+      </Centered>
+    );
+  } else if (status === 'signed-out') {
+    content = <AuthScreen onSignedIn={loadSession} />;
+  } else if (status === 'no-tenant') {
+    content = <CreateBusinessScreen onCreated={loadSession} onSignOut={signOut} />;
+  } else if (me) {
+    content = (
+      <SessionProvider me={me} onReload={loadSession} onSignOut={signOut}>
+        <RouterProvider router={router} />
+      </SessionProvider>
+    );
   }
-  if (status === 'error') {
-    return <CenterMessage title="Cannot start" body={error ?? 'Unknown error'} tone="error" />;
-  }
-  if (status === 'signed-out') {
-    return <AuthScreen onSignedIn={loadSession} />;
-  }
-  if (status === 'no-tenant') {
-    return <CreateBusinessScreen onCreated={loadSession} onSignOut={signOut} />;
-  }
-  return <Shell session={session!} onSignOut={signOut} onReloadSession={loadSession} />;
+
+  return <ToastProvider>{content}</ToastProvider>;
 }
 
-function CenterMessage({ title, body, tone }: { title: string; body: string; tone?: 'error' }) {
+function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--bg)' }}>
-      <div className="text-center max-w-md">
-        <h1 className="text-xl font-semibold mb-2" style={{ color: tone === 'error' ? '#f87171' : 'var(--text)' }}>
-          {title}
-        </h1>
-        <p className="text-sm" style={{ color: 'var(--text-2)' }}>{body}</p>
-      </div>
+    <div style={{
+      height: '100vh', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', background: 'var(--bg)',
+    }}>
+      {children}
     </div>
   );
 }
