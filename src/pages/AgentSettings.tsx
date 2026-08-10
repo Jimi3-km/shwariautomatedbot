@@ -27,8 +27,10 @@ interface FormState {
 }
 
 function toForm(a: AgentSettingsType): FormState {
-  const rules = a.escalation_rules as Record<string, unknown> | null;
-  const handover = rules && Array.isArray((rules as any).handover_if) ? (rules as any).handover_if as string[] : [];
+  const rules = (a.escalation_rules ?? {}) as { handover_if?: unknown };
+  const handover = Array.isArray(rules.handover_if)
+    ? rules.handover_if.filter((r): r is string => typeof r === 'string')
+    : [];
   return {
     persona: a.persona ?? '',
     customInstructions: a.custom_instructions ?? '',

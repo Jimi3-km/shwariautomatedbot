@@ -90,16 +90,18 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   const text = await res.text();
-  let json: any = null;
+  // Parsed response of unknown shape; callers assert via the generic.
+  let json: unknown = null;
   if (text) { try { json = JSON.parse(text); } catch { /* non-JSON error page */ } }
+  const asRecord = (json ?? {}) as { error?: unknown; code?: unknown };
 
   if (!res.ok) {
     // Never surface a raw database or stack message to the user.
-    const message = typeof json?.error === 'string' && json.error.length < 300
-      ? json.error
+    const message = typeof asRecord.error === 'string' && asRecord.error.length < 300
+      ? asRecord.error
       : defaultMessage(res.status);
     if (res.status === 401) onAuthFailure?.();
-    throw new ApiError(message, res.status, json?.code);
+    throw new ApiError(message, res.status, typeof asRecord.code === 'string' ? asRecord.code : undefined);
   }
   return json as T;
 }

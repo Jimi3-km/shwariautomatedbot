@@ -8,6 +8,7 @@ import {
   Avatar, Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, Pill, StatTile,
 } from '../components/ui';
 import { OnboardingChecklist } from '../components/OnboardingChecklist';
+import type { Conversation, Lead } from '../types';
 import { formatMoney, humanize, relativeTime } from '../lib/format';
 
 const CHANNELS: Array<{ type: string; label: string }> = [
@@ -135,7 +136,7 @@ function ChannelStatus({ channels }: { channels: Array<{ channel_type: string; s
   );
 }
 
-function RecentConversations({ items }: { items: Array<any> }) {
+function RecentConversations({ items }: { items: Conversation[] }) {
   const navigate = useNavigate();
   return (
     <Card>
@@ -177,7 +178,7 @@ function RecentConversations({ items }: { items: Array<any> }) {
   );
 }
 
-function RecentLeads({ items, currency }: { items: Array<any>; currency: string | null }) {
+function RecentLeads({ items, currency }: { items: Lead[]; currency: string | null }) {
   const navigate = useNavigate();
   return (
     <Card>
