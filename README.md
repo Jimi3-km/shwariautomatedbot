@@ -449,13 +449,3 @@ The goal was to take a common business process — selling through WhatsApp — 
 into one system.
 
 The current work focuses on taking what worked in the Shwari implementation and turning it into a reusable SaaS architecture.
-
----
-
-## Author
-
-**James Koikai**
-
-AI Engineer · Full-Stack Developer
-
-I build AI-powered applications, automation systems, and SaaS products that connect AI with real business workflows.
