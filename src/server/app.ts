@@ -9,6 +9,7 @@ import { commerceRouter } from './routes/commerce.js';
 import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
 import { analyticsRouter } from './routes/analytics.js';
+import { instagramAuthRouter } from './routes/auth/instagram.js';
 
 export function createApp() {
   const app = express();
@@ -31,6 +32,11 @@ export function createApp() {
   app.get('/api/public-config', (_req, res) => {
     res.json({ supabase_url: SUPABASE_URL, supabase_anon_key: SUPABASE_ANON_KEY });
   });
+
+  // Instagram OAuth is a pre-authentication browser redirect flow: there is no
+  // session yet and no tenant to steer, so it is mounted ahead of the tenancy
+  // guard and of the routers that require a bearer token.
+  app.use('/api', instagramAuthRouter);
 
   // Applied before every router: a client that tries to steer tenancy gets a
   // 400 rather than having the field quietly ignored.

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Sparkles } from 'lucide-react';
-import { getSupabase } from '../lib/api';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, Instagram } from 'lucide-react';
+import { getSupabase, request } from '../lib/api';
 import { Button, Field, Input, InlineError } from '../components/ui';
 
 type Mode = 'login' | 'signup' | 'reset';
@@ -18,6 +18,46 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [instagramAvailable, setInstagramAvailable] = useState(false);
+
+  // Only offer the button when the server can actually honour it, so a user
+  // never gets bounced to a 503.
+  useEffect(() => {
+    request<{ available: boolean }>('/auth/instagram/available')
+      .then((r) => setInstagramAvailable(r.available))
+      .catch(() => setInstagramAvailable(false));
+  }, []);
+
+  // The OAuth callback returns here with a single-use token. Exchanging it
+  // yields a genuine Supabase session, so auth.uid() and RLS keep working.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get('auth_error');
+    if (authError) {
+      setError(
+        authError === 'instagram_cancelled'
+          ? 'Instagram sign-in was cancelled.'
+          : 'Instagram sign-in did not complete. Please try again.'
+      );
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    const token = params.get('ig_token');
+    const email = params.get('ig_email');
+    if (!token || !email) return;
+
+    window.history.replaceState({}, '', window.location.pathname);
+    setBusy(true);
+    getSupabase()
+      .auth.verifyOtp({ type: 'magiclink', token_hash: token })
+      .then(({ error }) => {
+        if (error) throw error;
+        onSignedIn();
+      })
+      .catch(() => setError('Could not complete Instagram sign-in. Please try again.'))
+      .finally(() => setBusy(false));
+  }, [onSignedIn]);
 
   function switchMode(next: Mode) {
     setMode(next); setError(null); setNotice(null);
@@ -125,6 +165,23 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
             {copy.cta}
           </Button>
         </form>
+
+        {instagramAvailable && mode !== 'reset' && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '18px 0 14px' }}>
+              <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>or</span>
+              <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+            </div>
+            <Button
+              type="button" variant="outline" size="lg" style={{ width: '100%' }}
+              icon={<Instagram size={15} />} disabled={busy}
+              onClick={() => { window.location.href = '/api/auth/instagram'; }}
+            >
+              Continue with Instagram
+            </Button>
+          </>
+        )}
 
         <div style={{
           display: 'flex', justifyContent: 'space-between', marginTop: 18,
