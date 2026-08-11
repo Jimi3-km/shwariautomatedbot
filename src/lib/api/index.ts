@@ -4,6 +4,8 @@ import type {
   Conversation, ConversationDetail, ConversationMessage,
   Lead, LeadDetail, LeadStage, Product, Order, OrderStatus,
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
+  ChannelProviderInfo, ProviderId, ConnectStart, ConnectedChannel, ChannelHealth,
+  OnboardingState, LaunchResult, AgentTone,
 } from '../../types';
 
 export * from './client';
@@ -164,5 +166,53 @@ export const getChannelStatus = (id: string) =>
 export const disconnectChannel = (id: string) =>
   request<{ disconnected: boolean }>(`/channels/${id}`, { method: 'DELETE' });
 
-/** Currently answers 501 with the Meta credentials still required. */
-export const connectWhatsApp = () => request<never>('/channels/whatsapp', { method: 'POST', body: {} });
+export const getChannelProviders = () =>
+  request<{ providers: ChannelProviderInfo[] }>('/channels/providers');
+
+/**
+ * Start a connection. OAuth providers answer with a URL to navigate to;
+ * credential providers answer with the fields to collect.
+ */
+export const startChannelConnect = (provider: ProviderId) =>
+  request<ConnectStart>(`/channels/${provider}/connect`, { method: 'POST', body: {} });
+
+/** Finish a credential connection. Values are posted once and never returned. */
+export const submitChannelCredentials = (provider: ProviderId, values: Record<string, string>) =>
+  request<{ account: ConnectedChannel }>(`/channels/${provider}/credentials`, {
+    method: 'POST', body: values,
+  });
+
+export const getChannelHealth = (channelId: string) =>
+  request<ChannelHealth>(`/channels/${channelId}/health`);
+
+// ---------------------------------------------------------------------------
+// Setup wizard
+// ---------------------------------------------------------------------------
+export const getOnboardingState = () => request<OnboardingState>('/onboarding/state');
+
+export const createOnboardingBusiness = (body: {
+  business_name: string;
+  business_category?: string;
+  timezone?: string;
+  currency?: string;
+}) => request<{ business_name: string; created: boolean }>('/onboarding/business', { method: 'POST', body });
+
+export const getOnboardingChannels = (probe = false) =>
+  request<{ providers: ChannelProviderInfo[]; connected: ConnectedChannel[] }>(
+    `/onboarding/channels${qs({ probe: probe ? 1 : undefined })}`
+  );
+
+export const saveOnboardingAgent = (body: {
+  sells: string;
+  description?: string;
+  tone: AgentTone;
+  agent_name?: string;
+}) => request<{ agent_name: string; configured: boolean }>('/onboarding/agent', { method: 'POST', body });
+
+export const completeOnboarding = () =>
+  request<LaunchResult>('/onboarding/complete', { method: 'POST', body: {} });
+
+export const sendOnboardingTestMessage = (channelId: string, recipient: string) =>
+  request<{ sent: boolean }>('/onboarding/test-message', {
+    method: 'POST', body: { channel_id: channelId, recipient },
+  });

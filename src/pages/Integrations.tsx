@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Send, MessageCircle, Instagram, Globe, CheckCircle2, AlertTriangle, ExternalLink, Plug,
+  Send, MessageCircle, Instagram, Globe, CheckCircle2, ExternalLink, Plug,
 } from 'lucide-react';
 import {
-  getChannels, connectTelegram, disconnectChannel, getChannelStatus, connectWhatsApp, ApiError,
+  getChannels, connectTelegram, disconnectChannel, getChannelStatus,
+  getChannelProviders, startChannelConnect,
 } from '../lib/api';
-import type { Channel } from '../types';
+import type { Channel, ChannelProviderInfo, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
@@ -22,11 +23,35 @@ import { formatDateTime } from '../lib/format';
 export function Integrations() {
   const { isAdmin } = useSession();
   const state = useAsync(() => getChannels(), []);
+  const providers = useAsync(() => getChannelProviders(), []);
   const [telegramOpen, setTelegramOpen] = useState(false);
-  const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState<Channel | null>(null);
 
   const toast = useToast();
+
+  // Meta sends the browser back here after an authorization attempt.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('status');
+    if (!status) return;
+    window.history.replaceState({}, '', window.location.pathname);
+
+    if (status === 'connected') { toast.push('success', 'Connected.'); state.reload(); }
+    else if (status === 'cancelled') toast.push('info', 'That connection was cancelled.');
+    else if (status === 'expired') toast.push('error', 'That took too long, so we stopped for safety. Please try again.');
+    else toast.push('error', "We couldn't finish connecting. Please try again.");
+    // Runs once on mount; the query string is cleared immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** OAuth providers hand back a URL for the browser to follow. */
+  const beginOAuth = useMutation(async (provider: ProviderId) => {
+    const result = await startChannelConnect(provider);
+    if (result.mode === 'oauth') window.location.href = result.authorize_url;
+  });
+
+  const providerInfo = (id: ProviderId): ChannelProviderInfo | undefined =>
+    providers.data?.providers.find((p) => p.id === id);
 
   const disconnect = useMutation(async (id: string) => {
     await disconnectChannel(id);
@@ -38,6 +63,7 @@ export function Integrations() {
   const channels = state.data?.channels ?? [];
   const telegram = channels.filter((c) => c.channel_type === 'telegram' && c.status === 'active');
   const whatsapp = channels.filter((c) => c.channel_type === 'whatsapp' && c.status === 'active');
+  const instagram = channels.filter((c) => c.channel_type === 'instagram' && c.status === 'active');
 
   if (state.loading && !state.data) {
     return <><PageHeader title="Integrations" /><LoadingState /></>;
@@ -53,7 +79,7 @@ export function Integrations() {
         subtitle="Connect the places your customers already message you."
       />
 
-      <InlineError message={disconnect.error} />
+      <InlineError message={disconnect.error ?? beginOAuth.error} />
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
@@ -71,22 +97,40 @@ export function Integrations() {
             onDisconnect={setDisconnecting}
           />
 
-          <IntegrationCard
-            icon={<MessageCircle size={18} />}
-            name="WhatsApp Business"
-            description="Reach customers on WhatsApp through the Meta WhatsApp Business Cloud API."
-            connected={whatsapp.length > 0}
-            channels={whatsapp}
-            isAdmin={isAdmin}
-            pending
-            onConnect={() => setWhatsappOpen(true)}
-            onDisconnect={setDisconnecting}
-          />
+          {whatsapp.length > 0 || providerInfo('whatsapp')?.available ? (
+            <IntegrationCard
+              icon={<MessageCircle size={18} />}
+              name="WhatsApp Business"
+              description="Approve access with Meta and we'll set up your WhatsApp number for you."
+              connected={whatsapp.length > 0}
+              channels={whatsapp}
+              isAdmin={isAdmin}
+              onConnect={() => beginOAuth.run('whatsapp')}
+              onDisconnect={setDisconnecting}
+            />
+          ) : (
+            <ComingSoon icon={<MessageCircle size={18} />} name="WhatsApp Business"
+              description="Reach customers on WhatsApp from the same inbox." />
+          )}
+
+          {instagram.length > 0 || providerInfo('instagram')?.available ? (
+            <IntegrationCard
+              icon={<Instagram size={18} />}
+              name="Instagram"
+              description="Approve access with Instagram and we'll start handling your DMs."
+              connected={instagram.length > 0}
+              channels={instagram}
+              isAdmin={isAdmin}
+              onConnect={() => beginOAuth.run('instagram')}
+              onDisconnect={setDisconnecting}
+            />
+          ) : (
+            <ComingSoon icon={<Instagram size={18} />} name="Instagram"
+              description="Handle Instagram direct messages from the same inbox." />
+          )}
 
           <div className="section-label" style={{ marginTop: 8 }}>Coming soon</div>
 
-          <ComingSoon icon={<Instagram size={18} />} name="Instagram"
-            description="Handle Instagram direct messages from the same inbox." />
           <ComingSoon icon={<Globe size={18} />} name="Web chat"
             description="Embed the AI agent as a chat widget on your website." />
         </div>
@@ -97,8 +141,6 @@ export function Integrations() {
         onClose={() => setTelegramOpen(false)}
         onConnected={() => { setTelegramOpen(false); state.reload(); }}
       />
-
-      <WhatsAppModal open={whatsappOpen} onClose={() => setWhatsappOpen(false)} />
 
       <ConfirmDialog
         open={Boolean(disconnecting)}
@@ -275,73 +317,6 @@ function TelegramModal({
       >
         Telegram's guide to creating a bot <ExternalLink size={11} />
       </a>
-    </Modal>
-  );
-}
-
-/**
- * WhatsApp UI is built in full so the real Meta integration can be dropped in
- * behind it. The backend currently answers 501 and this dialog reports that
- * honestly rather than simulating a successful connection.
- */
-function WhatsAppModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [detail, setDetail] = useState<string[] | null>(null);
-  const attempt = useMutation(async () => {
-    try {
-      await connectWhatsApp();
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'CHANNEL_PENDING') {
-        setDetail([
-          'A Meta app with the WhatsApp product enabled',
-          'Your WhatsApp phone number ID',
-          'Your WhatsApp Business Account ID',
-          'A permanent system-user access token',
-          'A webhook verify token',
-        ]);
-        return;
-      }
-      throw err;
-    }
-  });
-
-  return (
-    <Modal
-      open={open} onClose={onClose} title="Connect WhatsApp Business" width={480}
-      footer={
-        <>
-          <Button variant="subtle" onClick={onClose}>Close</Button>
-          <Button variant="solid" loading={attempt.busy} onClick={() => attempt.run()}>
-            Check availability
-          </Button>
-        </>
-      }
-    >
-      <p style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
-        Connect your Meta Business account to send and receive WhatsApp messages
-        through your AI agent, in the same inbox as every other channel.
-      </p>
-
-      <div style={{
-        display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 14, padding: '11px 13px',
-        background: 'var(--warning-bg)', borderRadius: 'var(--radius)',
-      }}>
-        <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: 'var(--warning)', lineHeight: 1.55 }}>
-          This integration is not live yet. Your account, conversations and inbox already
-          support WhatsApp as a channel — what is still missing is the Meta connection itself.
-        </div>
-      </div>
-
-      <InlineError message={attempt.error} />
-
-      {detail && (
-        <div style={{ marginTop: 14 }}>
-          <div className="section-label" style={{ marginBottom: 7 }}>Still required</div>
-          <ul style={{ display: 'grid', gap: 5, fontSize: 12.5, color: 'var(--text-2)', paddingLeft: 16 }}>
-            {detail.map((d) => <li key={d} style={{ listStyle: 'disc' }}>{d}</li>)}
-          </ul>
-        </div>
-      )}
     </Modal>
   );
 }

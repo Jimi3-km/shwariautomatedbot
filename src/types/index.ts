@@ -23,6 +23,10 @@ export interface Tenant {
   status: string;
   business_name: string;
   business_description: string | null;
+  /** Chosen during onboarding. Free text, used to seed agent defaults. */
+  business_category: string | null;
+  /** Null while the setup wizard is still unfinished. */
+  onboarding_completed_at: string | null;
   agent_name: string;
   address: string | null;
   timezone: string;
@@ -55,7 +59,11 @@ export interface TenantUser {
 export interface Me {
   user: { id: string; email: string | null };
   role: Role;
-  tenant: Pick<Tenant, 'id' | 'business_name' | 'slug' | 'currency' | 'timezone' | 'agent_name' | 'order_prefix' | 'status'> | null;
+  tenant: Pick<
+    Tenant,
+    | 'id' | 'business_name' | 'slug' | 'currency' | 'timezone' | 'agent_name'
+    | 'order_prefix' | 'status' | 'business_category' | 'onboarding_completed_at'
+  > | null;
   memberships: Membership[];
 }
 
@@ -260,6 +268,77 @@ export interface Onboarding {
   total: number;
   dismissed: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Setup wizard
+// ---------------------------------------------------------------------------
+
+export type ProviderId = 'whatsapp' | 'instagram' | 'telegram';
+
+/** How a channel is connected: a redirect to the provider, or a token we take. */
+export type ConnectMode = 'oauth' | 'credential';
+
+export interface ChannelProviderInfo {
+  id: ProviderId;
+  label: string;
+  mode: ConnectMode;
+  available: boolean;
+  /** Plain-language reason. The server never sends variable names here. */
+  unavailable_reason: string | null;
+}
+
+export interface ChannelHealth {
+  healthy: boolean;
+  summary: string;
+  needs_reconnect: boolean;
+}
+
+export interface ConnectedChannel {
+  channel_id: string;
+  provider: ProviderId;
+  display_name: string | null;
+  status: ChannelStatus;
+  health: ChannelHealth | null;
+}
+
+export interface CredentialField {
+  name: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  secret: boolean;
+}
+
+export type ConnectStart =
+  | { mode: 'oauth'; authorize_url: string }
+  | { mode: 'credential'; fields: CredentialField[] };
+
+export type OnboardingStepId = 'business' | 'channels' | 'agent' | 'launch' | 'done';
+
+export interface OnboardingBusiness {
+  business_name: string;
+  business_category: string | null;
+  business_description: string | null;
+  agent_name: string;
+  timezone: string;
+  currency: string;
+}
+
+export interface OnboardingState {
+  step: OnboardingStepId;
+  complete: boolean;
+  business: OnboardingBusiness | null;
+  has_channel: boolean;
+  agent_configured: boolean;
+}
+
+export interface LaunchResult {
+  launched: boolean;
+  checks: Array<{ provider: ProviderId; healthy: boolean; summary: string }>;
+  all_healthy: boolean;
+}
+
+export type AgentTone = 'friendly' | 'professional' | 'concise' | 'enthusiastic';
 
 export interface TimelineEntry { at: string; kind: string; label: string }
 

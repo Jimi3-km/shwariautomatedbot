@@ -79,10 +79,15 @@ export function verifyState(state: string, maxAgeMs = 10 * 60 * 1000): boolean {
   return Number.isFinite(issuedAt) && Date.now() - issuedAt <= maxAgeMs;
 }
 
-export function buildAuthorizeUrl(state: string): string {
+/**
+ * `redirectUri` defaults to the sign-in callback. Connecting a channel to an
+ * existing workspace uses a different callback, and Meta requires the same URI
+ * on both the authorize and the exchange leg, so it is threaded through both.
+ */
+export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
   const params = new URLSearchParams({
     client_id: metaConfig.instagram.clientId,
-    redirect_uri: metaConfig.instagram.redirectUri,
+    redirect_uri: redirectUri || metaConfig.instagram.redirectUri,
     response_type: 'code',
     scope: SCOPES.join(','),
     state,
@@ -107,12 +112,15 @@ async function readMetaError(res: Response, fallback: string): Promise<never> {
 }
 
 /** Step 1: short-lived token (valid ~1 hour). */
-export async function exchangeCodeForToken(code: string): Promise<InstagramToken> {
+export async function exchangeCodeForToken(
+  code: string,
+  redirectUri?: string
+): Promise<InstagramToken> {
   const body = new URLSearchParams({
     client_id: metaConfig.instagram.clientId,
     client_secret: metaConfig.instagram.clientSecret,
     grant_type: 'authorization_code',
-    redirect_uri: metaConfig.instagram.redirectUri,
+    redirect_uri: redirectUri || metaConfig.instagram.redirectUri,
     code,
   });
 

@@ -189,7 +189,7 @@ catalogRouter.put(
 // ---------------------------------------------------------------------------
 
 const TENANT_EDITABLE = [
-  'business_name', 'business_description', 'agent_name', 'address', 'timezone',
+  'business_name', 'business_description', 'business_category', 'agent_name', 'address', 'timezone',
   'currency', 'business_hours', 'delivery_rules', 'payment_details', 'branding',
   'languages', 'contact_info', 'order_prefix', 'notification_channel', 'notification_target',
 ] as const;

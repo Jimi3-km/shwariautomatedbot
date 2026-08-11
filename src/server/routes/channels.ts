@@ -1,11 +1,26 @@
 import { Router } from 'express';
+import type { Request, Response } from 'express';
 import { requireAuth, requireAdmin, handler } from '../auth.js';
 import { serviceClient } from '../supabase.js';
 import {
   getMe, setWebhook, deleteWebhook, getWebhookInfo, generateSecretToken,
 } from '../channels/telegram.js';
+import {
+  allProviders, getProvider, ProviderError,
+} from '../channels/providers/index.js';
+import { verifyOAuthState } from '../services/meta/oauthState.js';
 
 export const channelsRouter = Router();
+
+/** Turns a provider failure into the wording a business owner should read. */
+function sendProviderError(res: Response, e: unknown, fallback: string) {
+  if (e instanceof ProviderError) {
+    console.warn(`[channels] ${e.code}: ${e.message}`);
+    return res.status(e.status).json({ error: e.userMessage, code: e.code });
+  }
+  console.error('[channels] unexpected provider failure:', e);
+  return res.status(500).json({ error: fallback });
+}
 
 const N8N_TELEGRAM_WEBHOOK_URL = process.env.N8N_TELEGRAM_WEBHOOK_URL || '';
 
@@ -148,7 +163,11 @@ channelsRouter.get(
   })
 );
 
-/** Disconnect: unregister at Telegram and clear the stored secrets. */
+/**
+ * Disconnect. Delegates to the provider so each one tears down its own remote
+ * state — Telegram unregisters the webhook, the Meta providers forget the
+ * encrypted token — before the row is disabled.
+ */
 channelsRouter.delete(
   '/channels/:id',
   requireAuth,
@@ -156,50 +175,165 @@ channelsRouter.delete(
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const { data: channel } = await serviceClient
-      .from('channels').select('id, channel_type, bot_token')
+      .from('channels').select('id, channel_type')
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId).maybeSingle();
-    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    if (!channel) return res.status(404).json({ error: 'That channel is no longer connected.' });
 
-    if (channel.channel_type === 'telegram' && channel.bot_token) {
-      try { await deleteWebhook(channel.bot_token); }
-      catch (e: any) { console.warn('[channels] deleteWebhook failed, disabling anyway:', e.message); }
+    const provider = getProvider(channel.channel_type);
+    if (!provider) {
+      const { error } = await serviceClient
+        .from('channels')
+        .update({ status: 'disabled', bot_token: null, secret_token: null, credentials_ref: null })
+        .eq('id', channel.id).eq('tenant_id', ctx.tenantId);
+      if (error) return res.status(500).json({ error: "We couldn't disconnect that channel." });
+      return res.json({ disconnected: true });
     }
 
-    const { error } = await serviceClient
-      .from('channels')
-      .update({ status: 'disabled', bot_token: null, secret_token: null })
-      .eq('id', channel.id).eq('tenant_id', ctx.tenantId);
-    if (error) return res.status(500).json({ error: 'Could not disconnect the channel' });
+    try {
+      await provider.disconnect(channel.id, ctx);
+      res.json({ disconnected: true });
+    } catch (e) {
+      sendProviderError(res, e, "We couldn't disconnect that channel. Please try again.");
+    }
+  })
+);
 
-    res.json({ disconnected: true });
+// ---------------------------------------------------------------------------
+// Provider-driven connection flows
+// ---------------------------------------------------------------------------
+
+/** What can be offered, and how each one connects. No secrets, no env names. */
+channelsRouter.get(
+  '/channels/providers',
+  requireAuth,
+  handler(async (_req, res) => {
+    res.json({
+      providers: allProviders().map((p) => {
+        const a = p.availability();
+        if (!a.available) {
+          console.warn(`[channels] provider ${p.id} unavailable, missing: ${a.missing.join(', ')}`);
+        }
+        return {
+          id: p.id,
+          label: p.label,
+          mode: p.mode,
+          available: a.available,
+          unavailable_reason: a.available ? null : `${p.label} isn't available yet.`,
+        };
+      }),
+    });
   })
 );
 
 /**
- * WhatsApp -- structure only.
+ * Start a connection.
  *
- * The database, the channel resolution path and the dashboard all treat
- * WhatsApp as a first-class channel already. What is missing is a real Meta
- * WhatsApp Business Cloud API app (phone_number_id, WABA id, permanent access
- * token, verify token). Rather than fake it, this records the intent and
- * reports the integration as pending.
+ * OAuth providers get back a URL for the browser to navigate to; the state in
+ * it is signed and carries this tenant, so the callback cannot be replayed
+ * against a different workspace. Credential providers get back the fields to
+ * collect.
  */
 channelsRouter.post(
-  '/channels/whatsapp',
+  '/channels/:provider/connect',
   requireAuth,
   requireAdmin,
   handler(async (req, res) => {
-    return res.status(501).json({
-      error: 'WhatsApp Cloud API integration is not implemented yet',
-      code: 'CHANNEL_PENDING',
-      required_from_operator: [
-        'Meta app with WhatsApp product enabled',
-        'phone_number_id',
-        'whatsapp_business_account_id',
-        'permanent system-user access token',
-        'webhook verify token',
-      ],
-      note: 'The channels table, tenant resolution and dashboard already support channel_type=whatsapp; only the Meta credentials and the inbound webhook mapping remain.',
-    });
+    const provider = getProvider(req.params.provider);
+    if (!provider) return res.status(404).json({ error: 'Unknown channel.' });
+    try {
+      res.json(await provider.connect(req.ctx!));
+    } catch (e) {
+      sendProviderError(res, e, "We couldn't start that connection. Please try again.");
+    }
+  })
+);
+
+/** Finish a credential-based connection (Telegram). */
+channelsRouter.post(
+  '/channels/:provider/credentials',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const provider = getProvider(req.params.provider);
+    if (!provider?.submitCredentials) {
+      return res.status(404).json({ error: 'Unknown channel.' });
+    }
+    const values = (req.body ?? {}) as Record<string, string>;
+    try {
+      const { account } = await provider.submitCredentials(values, req.ctx!);
+      res.status(201).json({ account });
+    } catch (e) {
+      sendProviderError(res, e, "We couldn't connect that channel. Please try again.");
+    }
+  })
+);
+
+/**
+ * OAuth return leg.
+ *
+ * Unauthenticated by necessity — it is a browser redirect from Meta with no
+ * Authorization header. The signed state is the only thing trusted here, and
+ * it is what supplies the tenant.
+ */
+channelsRouter.get(
+  '/channels/oauth/:provider/callback',
+  handler(async (req: Request, res: Response) => {
+    const providerId = req.params.provider;
+    const provider = getProvider(providerId);
+    const params = req.query as Record<string, string>;
+
+    const back = (status: string) =>
+      res.redirect(302, `/integrations?connect=${encodeURIComponent(providerId)}&status=${status}`);
+
+    if (!provider?.callback) return back('unknown');
+
+    if (params.error) {
+      console.log(`[channels] ${providerId} authorization declined: ${params.error}`);
+      return back(params.error === 'access_denied' ? 'cancelled' : 'failed');
+    }
+
+    const state = params.state ? verifyOAuthState(params.state) : null;
+    if (!state || state.provider !== providerId) {
+      console.warn(`[channels] ${providerId} callback state rejected`);
+      return back('expired');
+    }
+
+    try {
+      await provider.callback(params, { tenantId: state.tenantId, userId: state.userId });
+      return back('connected');
+    } catch (e) {
+      if (e instanceof ProviderError) {
+        console.warn(`[channels] ${providerId} callback failed (${e.code}): ${e.message}`);
+        return back(e.code === 'PROVIDER_ERROR' ? 'failed' : e.code.toLowerCase());
+      }
+      console.error(`[channels] ${providerId} callback failed:`, e);
+      return back('failed');
+    }
+  })
+);
+
+/** Plain-language health for one channel. */
+channelsRouter.get(
+  '/channels/:id/health',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data: channel } = await serviceClient
+      .from('channels').select('id, channel_type')
+      .eq('id', req.params.id).eq('tenant_id', ctx.tenantId).maybeSingle();
+
+    if (!channel) return res.status(404).json({ error: 'That channel is no longer connected.' });
+
+    const provider = getProvider(channel.channel_type);
+    if (!provider) {
+      return res.json({ healthy: false, summary: 'This channel cannot be checked.', needs_reconnect: false });
+    }
+
+    try {
+      res.json(await provider.healthCheck(channel.id, ctx));
+    } catch (e) {
+      console.warn('[channels] health check threw:', e instanceof Error ? e.message : e);
+      res.json({ healthy: false, summary: "We couldn't check this connection just now.", needs_reconnect: false });
+    }
   })
 );

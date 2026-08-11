@@ -9,6 +9,7 @@ import { commerceRouter } from './routes/commerce.js';
 import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
 import { analyticsRouter } from './routes/analytics.js';
+import { onboardingRouter } from './routes/onboarding.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
 
 export function createApp() {
@@ -49,6 +50,7 @@ export function createApp() {
   app.use('/api', channelsRouter);
   app.use('/api', receiptsRouter);
   app.use('/api', analyticsRouter);
+  app.use('/api', onboardingRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

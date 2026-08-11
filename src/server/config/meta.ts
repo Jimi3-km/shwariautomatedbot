@@ -23,7 +23,20 @@ export const metaConfig = {
   instagram: {
     clientId: process.env.INSTAGRAM_CLIENT_ID ?? '',
     clientSecret: process.env.INSTAGRAM_CLIENT_SECRET ?? '',
+    /** Callback for Instagram sign-in (creates an account). */
     redirectUri: process.env.INSTAGRAM_REDIRECT_URI ?? '',
+    /** Callback for attaching Instagram to an existing workspace. */
+    connectRedirectUri: process.env.INSTAGRAM_CONNECT_REDIRECT_URI ?? '',
+  },
+
+  whatsapp: {
+    /**
+     * Embedded Signup configuration id from the Meta app dashboard. This is
+     * what makes the popup walk the user through creating/selecting their
+     * WhatsApp Business account rather than asking them for tokens.
+     */
+    configId: process.env.META_WHATSAPP_CONFIG_ID ?? '',
+    redirectUri: process.env.META_WHATSAPP_REDIRECT_URI ?? '',
   },
 
   /** 32-byte key, hex or base64, used for AES-256-GCM token encryption. */
@@ -45,6 +58,26 @@ export const instagramOAuthConfigured = (): ConfigGap =>
     ['INSTAGRAM_CLIENT_ID', metaConfig.instagram.clientId],
     ['INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret],
     ['INSTAGRAM_REDIRECT_URI', metaConfig.instagram.redirectUri],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
+  ]);
+
+/** Attaching Instagram to an existing workspace, as opposed to signing in. */
+export const instagramConnectConfigured = (): ConfigGap =>
+  gap([
+    ['INSTAGRAM_CLIENT_ID', metaConfig.instagram.clientId],
+    ['INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret],
+    ['INSTAGRAM_CONNECT_REDIRECT_URI', metaConfig.instagram.connectRedirectUri],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
+  ]);
+
+/** WhatsApp Embedded Signup: the user never pastes a token. */
+export const whatsappEmbeddedSignupConfigured = (): ConfigGap =>
+  gap([
+    ['META_APP_ID', metaConfig.appId],
+    ['META_APP_SECRET', metaConfig.appSecret],
+    ['META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId],
+    ['META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri],
+    ['META_VERIFY_TOKEN', metaConfig.verifyToken],
     ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 

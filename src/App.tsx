@@ -3,12 +3,12 @@ import { RouterProvider } from 'react-router-dom';
 import { router } from './app/routes';
 import { SessionProvider, signOutOfSupabase } from './app/SessionContext';
 import { AuthScreen } from './pages/AuthScreen';
-import { CreateBusinessScreen } from './pages/CreateBusinessScreen';
+import { Onboarding } from './pages/Onboarding';
 import { ToastProvider, LoadingState, ErrorState } from './components/ui';
 import { ApiError, getMe, getSupabase, initSupabase, setAuthFailureHandler } from './lib/api';
 import type { Me } from './types';
 
-type Status = 'booting' | 'signed-out' | 'no-tenant' | 'ready' | 'error';
+type Status = 'booting' | 'signed-out' | 'onboarding' | 'ready' | 'error';
 
 export default function App() {
   const [status, setStatus] = useState<Status>('booting');
@@ -17,10 +17,14 @@ export default function App() {
 
   const loadSession = useCallback(async () => {
     try {
-      setMe(await getMe());
-      setStatus('ready');
+      const next = await getMe();
+      setMe(next);
+      // A workspace that has not finished the wizard goes back into it. The
+      // server owns that flag, so the dashboard cannot be reached half set up.
+      setStatus(next.tenant?.onboarding_completed_at ? 'ready' : 'onboarding');
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'NO_TENANT') setStatus('no-tenant');
+      // No workspace yet: the wizard's first step creates one.
+      if (err instanceof ApiError && err.code === 'NO_TENANT') setStatus('onboarding');
       else if (err instanceof ApiError && err.isAuthError) setStatus('signed-out');
       else {
         setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -77,8 +81,8 @@ export default function App() {
     );
   } else if (status === 'signed-out') {
     content = <AuthScreen onSignedIn={loadSession} />;
-  } else if (status === 'no-tenant') {
-    content = <CreateBusinessScreen onCreated={loadSession} onSignOut={signOut} />;
+  } else if (status === 'onboarding') {
+    content = <Onboarding onFinished={loadSession} onSignOut={signOut} />;
   } else if (me) {
     content = (
       <SessionProvider me={me} onReload={loadSession} onSignOut={signOut}>

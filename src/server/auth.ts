@@ -101,6 +101,35 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** Set by requireUser. Present before a tenant exists. */
+      authUser?: { id: string; email: string | null; accessToken: string };
+    }
+  }
+}
+
+/**
+ * Verifies the JWT but does not require a tenant.
+ *
+ * Only the first step of onboarding needs this: a user who has just signed up
+ * has no tenant_users row yet and so cannot satisfy requireAuth. Every route
+ * that touches tenant data must still use requireAuth.
+ */
+export async function requireUser(req: Request, res: Response, next: NextFunction) {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Unauthorized: missing bearer token' });
+
+  const { data, error } = await serviceClient.auth.getUser(token);
+  if (error || !data?.user) {
+    return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
+  }
+  req.authUser = { id: data.user.id, email: data.user.email ?? null, accessToken: token };
+  next();
+}
+
 /** Rejects any request that tries to steer tenancy from the client. */
 export function rejectClientTenantId(req: Request, res: Response, next: NextFunction) {
   const inBody = req.body && typeof req.body === 'object' && 'tenant_id' in req.body;
