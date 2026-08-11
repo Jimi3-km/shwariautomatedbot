@@ -255,13 +255,13 @@ export function Modal({ open, onClose, title, children, footer, width = 520 }: {
         className="modal" role="dialog" aria-modal="true" aria-label={title}
         style={{ maxWidth: width }} onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           <h2 style={{ fontSize: 15, fontWeight: 600 }}>{title}</h2>
           <button onClick={onClose} aria-label="Close" style={{ color: 'var(--text-3)' }}><X size={17} /></button>
         </div>
         <div className="scroll-y px-5 py-4" style={{ flex: 1 }}>{children}</div>
         {footer && (
-          <div className="flex justify-end gap-2 px-5 py-3.5" style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-3.5" style={{ borderTop: '1px solid var(--border)', flexShrink: 0 }}>
             {footer}
           </div>
         )}

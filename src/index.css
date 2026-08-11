@@ -817,7 +817,9 @@ body { overflow: hidden; }
   border-radius: var(--radius-sm);
 }
 
-.scroll-y { overflow-y: auto; overscroll-behavior: contain; }
+/* min-height:0 lets a flex-child scroll container actually shrink and scroll
+   internally instead of growing past its frame (a no-op on non-flex blocks). */
+.scroll-y { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
 .scroll-y::-webkit-scrollbar { width: 10px; height: 10px; }
 .scroll-y::-webkit-scrollbar-thumb {
   background: var(--border-2); border-radius: 8px; border: 3px solid transparent; background-clip: content-box;

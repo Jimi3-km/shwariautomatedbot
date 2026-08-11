@@ -408,7 +408,7 @@ function ConversationPane({
             </Button>
           </form>
         ) : (
-          <div style={{ padding: 12, borderTop: '1px solid var(--border)', fontSize: 12.5, color: 'var(--text-3)' }}>
+          <div style={{ padding: 12, borderTop: '1px solid var(--border)', fontSize: 12.5, color: 'var(--text-3)', flexShrink: 0 }}>
             Your role is view-only, so you cannot reply.
           </div>
         )}
