@@ -60,7 +60,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     .eq('user_id', user.id);
 
   if (mErr) {
-    return res.status(500).json({ error: 'Failed to resolve tenant membership' });
+    // This was previously swallowed, which made a 42501 "permission denied for
+    // table tenant_users" indistinguishable from any other failure. Log the
+    // database error (never the token) so the cause is visible in the server
+    // log rather than only as an opaque 500.
+    console.error(
+      `[auth] tenant membership lookup failed for user ${user.id}:`,
+      { code: mErr.code, message: mErr.message, details: mErr.details, hint: mErr.hint }
+    );
+    return res.status(500).json({
+      error: 'Failed to resolve tenant membership',
+      code: 'MEMBERSHIP_LOOKUP_FAILED',
+    });
   }
   if (!memberships || memberships.length === 0) {
     return res.status(403).json({ error: 'No tenant is associated with this account', code: 'NO_TENANT' });

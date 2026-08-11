@@ -1,22 +1,50 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 let supabase: SupabaseClient | null = null;
+let initPromise: Promise<SupabaseClient> | null = null;
 
 /**
  * The browser receives only the project URL and the publishable anon key,
  * fetched from the server at boot. The service-role key never leaves the
  * server, and no channel secret or bot token is ever sent to the browser.
+ *
+ * This is the ONLY place a browser Supabase client is constructed. The
+ * in-flight promise is memoised, not just the resolved client: there is an
+ * await between the guard and the assignment, so two concurrent callers
+ * (React StrictMode double-invokes effects in development) would otherwise
+ * each construct a client. That produced "Multiple GoTrueClient instances
+ * detected in the same browser context", and — worse — two clients racing to
+ * consume the same single-use token from an email confirmation link, so one
+ * of them would fail and could overwrite the stored session.
  */
-export async function initSupabase(): Promise<SupabaseClient> {
-  if (supabase) return supabase;
-  const r = await fetch('/api/public-config');
-  if (!r.ok) throw new Error('Could not load application configuration');
-  const cfg = (await r.json()) as { supabase_url?: string; supabase_anon_key?: string };
-  if (!cfg.supabase_url || !cfg.supabase_anon_key) {
-    throw new Error('The server is not configured yet. Set the Supabase environment variables.');
-  }
-  supabase = createClient(cfg.supabase_url, cfg.supabase_anon_key);
-  return supabase;
+export function initSupabase(): Promise<SupabaseClient> {
+  if (supabase) return Promise.resolve(supabase);
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
+    const r = await fetch('/api/public-config');
+    if (!r.ok) throw new Error('Could not load application configuration');
+    const cfg = (await r.json()) as { supabase_url?: string; supabase_anon_key?: string };
+    if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+      throw new Error('The server is not configured yet. Set the Supabase environment variables.');
+    }
+    supabase = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        // Consume the token on the email-confirmation / password-reset link.
+        detectSessionInUrl: true,
+        // One explicit storage key, so a second instance could never quietly
+        // read or write a different slot.
+        storageKey: 'shwari-dashboard-auth',
+      },
+    });
+    return supabase;
+  })();
+
+  // A failed init must not poison every later attempt.
+  initPromise.catch(() => { initPromise = null; });
+  return initPromise;
 }
 
 export function getSupabase(): SupabaseClient {

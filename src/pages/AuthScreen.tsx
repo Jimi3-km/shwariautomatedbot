@@ -35,7 +35,16 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         onSignedIn();
       } else if (mode === 'signup') {
         if (password.length < 8) throw new Error('Please use at least 8 characters.');
-        const { data, error } = await sb.auth.signUp({ email, password });
+        // Send the confirmation link back to whatever origin the user signed up
+        // on, so local development lands on http://localhost:3000 instead of
+        // whatever the project's Site URL happens to be. The origin must also
+        // be listed under Supabase -> Authentication -> URL Configuration ->
+        // Redirect URLs for it to be honoured.
+        const { data, error } = await sb.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: `${window.location.origin}/` },
+        });
         if (error) throw error;
         if (data.session) onSignedIn();
         else setNotice('Check your email to confirm your account, then sign in.');
