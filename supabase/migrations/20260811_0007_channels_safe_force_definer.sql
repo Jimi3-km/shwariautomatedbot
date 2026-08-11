@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Force channels_safe to run as its OWNER (security_invoker off).
+-- ----------------------------------------------------------------------------
+-- Root cause of GET /api/channels returning 400 on the Integrations page:
+--
+--   Supabase's Postgres defaults every view to security_invoker=on. Even when
+--   migration 0003 issued `CREATE VIEW ... WITH (security_invoker = false)`,
+--   the reloption remained "on" — CREATE OR REPLACE doesn't clear reloptions
+--   set by a prior definition, and even a fresh DROP + CREATE picks up the
+--   Supabase default. Confirmed with `select reloptions from pg_class`.
+--
+-- With security_invoker=on, the view runs as the caller. The caller
+-- (authenticated) has SELECT on the view but no column privilege on
+-- channels.secret_token / bot_token / credentials_ref (revoked in 0003), so
+-- evaluating (bot_token IS NOT NULL) fails with:
+--
+--     42501 permission denied for table channels
+--
+-- which supabase-js surfaces as an error object, which our channels handler
+-- returns as HTTP 400.
+--
+-- Fix: ALTER VIEW ... SET (security_invoker = off). The view now runs as its
+-- owner (postgres), which holds full access to the underlying columns. The
+-- caller still needs SELECT on the view itself, and never gains access to
+-- the raw secret columns of `channels`. The view's own WHERE filter uses
+-- current_tenant_ids() -> auth.uid(), so it still cannot expose another
+-- tenant's channel row.
+--
+-- Verified after applying: the previously-failing query returns rows for the
+-- caller's own tenant, raw secret columns remain blocked (42501), and a
+-- cross-tenant filter still returns 0.
+-- ============================================================================
+
+alter view public.channels_safe set (security_invoker = off);
