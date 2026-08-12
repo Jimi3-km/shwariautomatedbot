@@ -1,4 +1,5 @@
 import { serviceClient } from '../../supabase.js';
+import { generateSecretToken } from '../telegram.js';
 import { instagramConnectConfigured, metaConfig } from '../../config/meta.js';
 import { createOAuthState } from '../../services/meta/oauthState.js';
 import {
@@ -125,6 +126,9 @@ export const instagramProvider: ChannelProvider = {
       display_name: profile.username ? `@${profile.username}` : 'Instagram',
       // Points at meta_tokens rather than holding a credential itself.
       credentials_ref: `meta_tokens:${ctx.tenantId}:instagram`,
+      // Authenticates this channel to the automation pipeline, exactly as the
+      // Telegram webhook secret does. Not a Meta credential.
+      secret_token: generateSecretToken(),
       status: 'active' as const,
     };
 

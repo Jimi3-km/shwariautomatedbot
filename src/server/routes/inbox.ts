@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireWrite, handler } from '../auth.js';
 import { serviceClient } from '../supabase.js';
-import { sendTelegramMessage } from '../channels/telegram.js';
+import { getProvider, ProviderError } from '../channels/providers/index.js';
 
 export const inboxRouter = Router();
 
@@ -162,11 +162,11 @@ inboxRouter.post(
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId).maybeSingle();
     if (!convo) return res.status(404).json({ error: 'Conversation not found' });
 
-    // The bot token lives behind the service client; it is never sent to the
-    // browser and never leaves this process.
+    // Credentials stay behind the service client; they are never sent to the
+    // browser and never leave this process.
     const { data: channel } = await serviceClient
       .from('channels')
-      .select('id, tenant_id, channel_type, bot_token, status')
+      .select('id, tenant_id, channel_type, status')
       .eq('id', convo.channel_id ?? '')
       .eq('tenant_id', ctx.tenantId)      // re-assert tenancy on the privileged read
       .maybeSingle();
@@ -175,18 +175,23 @@ inboxRouter.post(
       return res.status(409).json({ error: 'No active channel is connected for this conversation' });
     }
 
+    // Dispatch through the provider registry rather than branching on the
+    // channel type here, so every channel a business can connect can also be
+    // replied to without another special case in this handler.
+    const provider = getProvider(channel.channel_type);
+    if (!provider) {
+      return res.status(400).json({ error: 'This conversation is on a channel we cannot reply to.' });
+    }
+
     try {
-      if (channel.channel_type === 'telegram') {
-        if (!channel.bot_token) return res.status(409).json({ error: 'Telegram channel has no bot token' });
-        await sendTelegramMessage(channel.bot_token, convo.customer_id, text);
-      } else {
-        return res.status(501).json({
-          error: `Outbound sending for ${channel.channel_type} is not implemented yet`,
-          code: 'CHANNEL_PENDING',
-        });
+      await provider.sendMessage(channel.id, convo.customer_id, text, ctx);
+    } catch (e) {
+      if (e instanceof ProviderError) {
+        console.warn(`[inbox] reply failed on ${channel.channel_type} (${e.code}): ${e.message}`);
+        return res.status(e.status).json({ error: e.userMessage, code: e.code });
       }
-    } catch (e: any) {
-      return res.status(502).json({ error: `Channel rejected the message: ${e.message}` });
+      console.error('[inbox] reply failed:', e);
+      return res.status(502).json({ error: "We couldn't send that message. Please try again." });
     }
 
     const now = new Date().toISOString();

@@ -107,6 +107,8 @@ declare global {
     interface Request {
       /** Set by requireUser. Present before a tenant exists. */
       authUser?: { id: string; email: string | null; accessToken: string };
+      /** Exact request bytes, kept by the body parser for HMAC verification. */
+      rawBody?: Buffer;
     }
   }
 }

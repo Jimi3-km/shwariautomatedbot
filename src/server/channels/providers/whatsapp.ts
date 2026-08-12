@@ -1,4 +1,5 @@
 import { serviceClient } from '../../supabase.js';
+import { generateSecretToken } from '../telegram.js';
 import { whatsappEmbeddedSignupConfigured } from '../../config/meta.js';
 import { createOAuthState } from '../../services/meta/oauthState.js';
 import {
@@ -129,6 +130,9 @@ export const whatsappProvider: ChannelProvider = {
         ? `${phone.verifiedName} (${phone.displayPhoneNumber})`
         : phone.displayPhoneNumber,
       credentials_ref: `meta_tokens:${ctx.tenantId}:whatsapp`,
+      // Authenticates this channel to the automation pipeline, exactly as the
+      // Telegram webhook secret does. Not a Meta credential.
+      secret_token: generateSecretToken(),
       status: 'active' as const,
     };
 
