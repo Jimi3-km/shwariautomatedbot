@@ -9,6 +9,11 @@ credential exists. Steps 3 and 4 add WhatsApp and Instagram.
 At any point, sign in as an admin and call `GET /api/setup/status` to see what
 is still missing. It names the exact variables and never prints a value.
 
+> **Getting the Meta values:** see **[META_CREDENTIALS.md](./META_CREDENTIALS.md)**
+> for a click-by-click walkthrough against the `builtwithai dm agent` app
+> (App ID `1561926828265582`). This page is the reference; that one is the
+> procedure.
+
 ---
 
 ## 1. Core (required)
