@@ -15,8 +15,6 @@ export const INSTAGRAM_GRAPH_URL = 'https://graph.instagram.com';
 export const metaConfig = {
   appId: process.env.META_APP_ID ?? '',
   appSecret: process.env.META_APP_SECRET ?? '',
-  /** System-user token for the platform-owned WhatsApp numbers. */
-  accessToken: process.env.META_ACCESS_TOKEN ?? '',
   /** Echoed back during webhook subscription (hub.verify_token). */
   verifyToken: process.env.META_VERIFY_TOKEN ?? '',
 
@@ -61,12 +59,23 @@ export const instagramOAuthConfigured = (): ConfigGap =>
     ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 
-/** Attaching Instagram to an existing workspace, as opposed to signing in. */
+/**
+ * Attaching Instagram to an existing workspace, as opposed to signing in.
+ *
+ * META_APP_SECRET and META_VERIFY_TOKEN are here because connecting is only
+ * half the job: inbound DMs arrive on the Meta webhook, whose signature is
+ * verified with the app secret and whose subscription handshake echoes the
+ * verify token. Without them a business could connect Instagram, see a green
+ * tick, and silently never receive a message — so the readiness check covers
+ * the whole round trip rather than just the authorization leg.
+ */
 export const instagramConnectConfigured = (): ConfigGap =>
   gap([
     ['INSTAGRAM_CLIENT_ID', metaConfig.instagram.clientId],
     ['INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret],
     ['INSTAGRAM_CONNECT_REDIRECT_URI', metaConfig.instagram.connectRedirectUri],
+    ['META_APP_SECRET', metaConfig.appSecret],
+    ['META_VERIFY_TOKEN', metaConfig.verifyToken],
     ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 
@@ -78,14 +87,6 @@ export const whatsappEmbeddedSignupConfigured = (): ConfigGap =>
     ['META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId],
     ['META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri],
     ['META_VERIFY_TOKEN', metaConfig.verifyToken],
-    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
-  ]);
-
-export const whatsappConfigured = (): ConfigGap =>
-  gap([
-    ['META_APP_ID', metaConfig.appId],
-    ['META_APP_SECRET', metaConfig.appSecret],
-    ['META_ACCESS_TOKEN', metaConfig.accessToken],
     ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 

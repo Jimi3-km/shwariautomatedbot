@@ -256,13 +256,27 @@ async function upsertLead(event: NormalizedInboundEvent, conversationId: string)
  * Telegram, so n8n resolves the channel — and therefore the tenant — from its
  * own database read rather than from anything in this body.
  */
+/**
+ * The hand-off endpoint.
+ *
+ * Named for the agent rather than for Meta, because web chat uses the same
+ * entry point — the pipeline resolves the channel from the secret and does not
+ * care which product the message came from. The old name is still honoured so
+ * an existing deployment does not go quiet on upgrade.
+ */
+export function pipelineUrl(): string {
+  return process.env.N8N_AGENT_WEBHOOK_URL || process.env.N8N_META_WEBHOOK_URL || '';
+}
+
 export async function forwardToPipeline(
   event: NormalizedInboundEvent,
   secretToken: string | null
 ): Promise<{ forwarded: boolean; reason?: string }> {
-  const url = process.env.N8N_META_WEBHOOK_URL;
+  const url = pipelineUrl();
   if (!url) {
-    console.warn('[inbound] N8N_META_WEBHOOK_URL is not set; message stored but no AI reply will be generated');
+    console.warn(
+      '[inbound] N8N_AGENT_WEBHOOK_URL is not set; message stored but no AI reply will be generated'
+    );
     return { forwarded: false, reason: 'pipeline_not_configured' };
   }
   if (!secretToken) {

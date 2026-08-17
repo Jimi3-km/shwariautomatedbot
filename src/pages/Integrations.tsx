@@ -7,6 +7,7 @@ import {
   getChannelProviders, startChannelConnect,
 } from '../lib/api';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
+import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
 import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -28,6 +29,7 @@ export function Integrations() {
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState<Channel | null>(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
+  const [confirming, setConfirming] = useState<ProviderId | null>(null);
 
   const toast = useToast();
 
@@ -135,7 +137,7 @@ export function Integrations() {
               connected={whatsapp.length > 0}
               channels={whatsapp}
               isAdmin={isAdmin}
-              onConnect={() => beginOAuth.run('whatsapp')}
+              onConnect={() => setConfirming('whatsapp')}
               onDisconnect={setDisconnecting}
             />
           ) : (
@@ -151,7 +153,7 @@ export function Integrations() {
               connected={instagram.length > 0}
               channels={instagram}
               isAdmin={isAdmin}
-              onConnect={() => beginOAuth.run('instagram')}
+              onConnect={() => setConfirming('instagram')}
               onDisconnect={setDisconnecting}
             />
           ) : (
@@ -174,6 +176,14 @@ export function Integrations() {
           {liveEmbed && <EmbedSnippetBlock embed={liveEmbed} />}
         </div>
       </div>
+
+      <ConnectChannelDialog
+        provider={confirming}
+        open={Boolean(confirming)}
+        busy={beginOAuth.busy}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => confirming && beginOAuth.run(confirming)}
+      />
 
       <TelegramModal
         open={telegramOpen}

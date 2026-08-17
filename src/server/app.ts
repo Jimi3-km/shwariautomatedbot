@@ -10,6 +10,7 @@ import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { onboardingRouter } from './routes/onboarding.js';
+import { setupRouter } from './routes/setup.js';
 import { metaWebhookRouter } from './routes/webhooks/meta.js';
 import { internalRouter } from './routes/internal.js';
 import { webchatRouter } from './routes/webchat.js';
@@ -86,6 +87,7 @@ export function createApp() {
   app.use('/api', receiptsRouter);
   app.use('/api', analyticsRouter);
   app.use('/api', onboardingRouter);
+  app.use('/api', setupRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

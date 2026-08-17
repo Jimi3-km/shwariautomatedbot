@@ -13,6 +13,7 @@ import {
   Button, Card, Field, Input, Textarea, Select, Pill, InlineError, LoadingState,
 } from '../components/ui';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
+import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
 import type {
   AgentTone, ChannelProviderInfo, ConnectedChannel, CredentialField,
   EmbedSnippet, LaunchResult, OnboardingStepId, ProviderId,
@@ -288,6 +289,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     { provider: ProviderId; label: string; fields: CredentialField[] } | null
   >(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
+  const [confirming, setConfirming] = useState<ProviderId | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -397,7 +399,12 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
                 <Button
                   size="sm" variant={p.available ? 'solid' : 'subtle'}
                   disabled={!p.available} loading={start.busy}
-                  onClick={() => void start.run(p.id, p.label)}
+                  onClick={() => {
+                    // Meta hands the visitor off to another site, so explain
+                    // what is about to happen before leaving ours.
+                    if (p.mode === 'oauth') setConfirming(p.id);
+                    else void start.run(p.id, p.label);
+                  }}
                 >
                   Connect {p.label}
                 </Button>
@@ -408,6 +415,18 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
       </div>
 
       {embed && <EmbedSnippetBlock embed={embed} />}
+
+      <ConnectChannelDialog
+        provider={confirming}
+        open={Boolean(confirming)}
+        busy={start.busy}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => {
+          if (!confirming) return;
+          const label = providers.find((p) => p.id === confirming)?.label ?? confirming;
+          void start.run(confirming, label);
+        }}
+      />
 
       {credentialFor && (
         <CredentialForm
