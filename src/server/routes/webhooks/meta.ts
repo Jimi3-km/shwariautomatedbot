@@ -39,7 +39,13 @@ metaWebhookRouter.get('/webhooks/meta', (req: Request, res: Response) => {
 // POST — inbound events
 // ---------------------------------------------------------------------------
 metaWebhookRouter.post('/webhooks/meta', (req: Request, res: Response) => {
-  const signature = verifyMetaSignature(req.rawBody, req.headers['x-hub-signature-256']);
+  /**
+   * express.raw() leaves the exact bytes on req.body. Falling back to rawBody
+   * keeps this working if the route is ever mounted behind the JSON parser
+   * instead.
+   */
+  const raw: Buffer | undefined = Buffer.isBuffer(req.body) ? req.body : req.rawBody;
+  const signature = verifyMetaSignature(raw, req.headers['x-hub-signature-256']);
 
   if (signature !== 'ok') {
     if (signature === 'not_configured') {
@@ -50,11 +56,22 @@ metaWebhookRouter.post('/webhooks/meta', (req: Request, res: Response) => {
     return res.sendStatus(401);
   }
 
+  // Only now is the payload worth interpreting: parsing before the signature
+  // check would mean acting on bytes anyone could have sent.
+  let payload: unknown;
+  try {
+    payload = Buffer.isBuffer(req.body) ? JSON.parse(raw!.toString('utf8')) : req.body;
+  } catch {
+    // A verified but unparseable body is Meta's problem, not a retry candidate.
+    console.warn('[webhooks/meta] verified delivery was not valid JSON; ignoring');
+    return res.sendStatus(200);
+  }
+
   // Ack immediately, then do the work. Meta's timeout is short, and a slow
   // AI turn must not turn into a retried delivery.
   res.sendStatus(200);
 
-  void handleEvents(req.body).catch((e) => {
+  void handleEvents(payload).catch((e) => {
     console.error('[webhooks/meta] processing failed:', e instanceof Error ? e.message : e);
   });
 });

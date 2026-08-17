@@ -20,12 +20,25 @@ export function createApp() {
   const app = express();
 
   /**
-   * Keep the exact bytes of the request alongside the parsed body.
+   * The Meta webhook is parsed as a raw Buffer, and only on its own path.
    *
-   * Meta signs the raw payload, and re-serialising the parsed object does not
-   * reproduce it — key order and whitespace both differ — so signature checks
-   * would fail against anything but the original buffer.
+   * Meta signs the exact bytes it sent. Re-serialising a parsed object does not
+   * reproduce them — key order and whitespace both differ — so the signature can
+   * only be checked against the original buffer. A `verify` hook on the JSON
+   * parser also captures that buffer, but it depends on this process being the
+   * first thing to read the request stream, which is not true everywhere: some
+   * serverless runtimes, Vercel's Node runtime among them, parse the body
+   * before the handler runs, leaving the hook with nothing and every delivery
+   * failing signature verification.
+   *
+   * Taking the raw body explicitly on this one route removes that dependency.
+   * The route JSON-parses it itself, after the signature has been checked —
+   * which is the right order anyway: nothing should interpret an unverified
+   * payload.
    */
+  app.use('/api/webhooks/meta', express.raw({ type: '*/*', limit: '1mb' }));
+
+  /** Everything else is ordinary JSON. */
   app.use(
     express.json({
       limit: '1mb',
