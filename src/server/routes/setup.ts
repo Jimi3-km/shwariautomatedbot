@@ -4,6 +4,7 @@ import { allProviders } from '../channels/providers/index.js';
 import { pipelineUrl } from '../services/inbound.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
+import { llmConfigured, llmModel } from '../ai/llm.js';
 
 export const setupRouter = Router();
 
@@ -39,6 +40,7 @@ setupRouter.get(
     // mode worth surfacing: it looks fine until no message ever arrives.
     const pipeline = pipelineUrl();
     const deliveryReady = Boolean(pipeline);
+    const shwariGate = llmConfigured();
 
     res.json({
       channels,
@@ -59,8 +61,15 @@ setupRouter.get(
         instagram_signin_redirect_uri: `${origin}/api/auth/instagram/callback`,
         subscribe_to_fields: ['messages'],
       },
+      /** Shwari runs in this process rather than in n8n, so it has its own key. */
+      shwari: {
+        ready: shwariGate.configured,
+        missing_environment_variables: shwariGate.missing,
+        model: shwariGate.configured ? llmModel() : null,
+        telegram_webhook_url: `${origin}/api/webhooks/telegram`,
+      },
       public_api_url: origin,
-      all_ready: channels.every((c) => c.ready) && deliveryReady,
+      all_ready: channels.every((c) => c.ready) && deliveryReady && shwariGate.configured,
     });
   })
 );

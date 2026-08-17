@@ -12,6 +12,8 @@ import { analyticsRouter } from './routes/analytics.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { setupRouter } from './routes/setup.js';
 import { metaWebhookRouter } from './routes/webhooks/meta.js';
+import { telegramWebhookRouter } from './routes/webhooks/telegram.js';
+import { shwariRouter } from './routes/shwari.js';
 import { internalRouter } from './routes/internal.js';
 import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
@@ -73,12 +75,13 @@ export function createApp() {
   /**
    * Machine callers, mounted ahead of the tenancy guard and the JWT routers.
    *
-   * Meta's webhook authenticates with an HMAC over the raw body; n8n
-   * authenticates with a shared secret. Neither has a dashboard session, and
-   * neither may be reached by a browser, so both do their own checks rather
-   * than borrowing requireAuth.
+   * Meta's webhook authenticates with an HMAC over the raw body; Telegram with
+   * the secret header it echoes back to us; n8n with a shared secret. None has
+   * a dashboard session, and none may be reached by a browser, so each does its
+   * own check rather than borrowing requireAuth.
    */
   app.use('/api', metaWebhookRouter);
+  app.use('/api', telegramWebhookRouter);
   app.use('/api', internalRouter);
 
   /**
@@ -101,6 +104,7 @@ export function createApp() {
   app.use('/api', analyticsRouter);
   app.use('/api', onboardingRouter);
   app.use('/api', setupRouter);
+  app.use('/api', shwariRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

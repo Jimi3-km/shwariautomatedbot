@@ -23,7 +23,22 @@ import {
  * before. Only the call site moves.
  */
 
-const webhookUrl = () => process.env.N8N_TELEGRAM_WEBHOOK_URL || '';
+/**
+ * Where Telegram delivers updates.
+ *
+ * This used to be n8n directly, which meant no Telegram message was ever seen
+ * by this application: the workflow logged the customer's message only after
+ * the agent had answered, and Shwari could not be reached on Telegram at all.
+ * Updates now come here first and are handed on to n8n from the dispatcher, so
+ * the pipeline still answers customers — it is just no longer the front door.
+ *
+ * Bots connected before this change still point at n8n. healthCheck notices
+ * ("delivering messages somewhere else") and the fix is to reconnect.
+ */
+const webhookUrl = () => {
+  const base = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
+  return base ? `${base}/api/webhooks/telegram` : '';
+};
 
 const SELECT_SAFE = 'id, tenant_id, channel_type, channel_account_id, display_name, status, created_at';
 
@@ -56,7 +71,7 @@ export const telegramProvider: ChannelProvider = {
   mode: 'credential',
 
   availability(): ProviderAvailability {
-    const missing = webhookUrl() ? [] : ['N8N_TELEGRAM_WEBHOOK_URL'];
+    const missing = webhookUrl() ? [] : ['PUBLIC_API_URL'];
     return { available: missing.length === 0, missing };
   },
 

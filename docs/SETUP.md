@@ -39,8 +39,13 @@ automated reply.
 | Variable | Value |
 |---|---|
 | `N8N_AGENT_WEBHOOK_URL` | The production URL of the **Meta Inbound** webhook node in n8n, e.g. `https://<you>.app.n8n.cloud/webhook/meta-in`. Used by WhatsApp, Instagram **and web chat**. |
-| `N8N_TELEGRAM_WEBHOOK_URL` | The production URL of the **Telegram Inbound** node, e.g. `.../webhook/telegram-in`. |
 | `INTERNAL_API_SECRET` | Invent one: `openssl rand -hex 32`. Lets n8n send replies back through this API. |
+| `SHWARI_API_KEY` | An NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). Powers the Shwari agent — see [SHWARI_AGENT.md](SHWARI_AGENT.md). |
+
+`N8N_TELEGRAM_WEBHOOK_URL` is no longer read. Telegram delivers to
+`<PUBLIC_API_URL>/api/webhooks/telegram` now, and the API hands the message on
+to the pipeline. Bots connected before that change still point at n8n;
+Integrations flags them and reconnecting fixes it.
 
 `N8N_META_WEBHOOK_URL` is still accepted as the old name for
 `N8N_AGENT_WEBHOOK_URL`, so an existing deployment keeps working.
