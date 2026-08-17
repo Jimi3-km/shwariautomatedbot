@@ -351,6 +351,39 @@ export interface LaunchResult {
 
 export type AgentTone = 'friendly' | 'professional' | 'concise' | 'enthusiastic';
 
+/**
+ * Operator readiness. The one payload that names environment variables to the
+ * browser — admin-only, and it lists what is *missing*, never a value that is
+ * set. See GET /api/setup/status.
+ */
+export interface SetupChannelStatus {
+  id: ProviderId;
+  label: string;
+  mode: ConnectMode;
+  ready: boolean;
+  missing_environment_variables: string[];
+}
+
+export interface SetupStatus {
+  channels: SetupChannelStatus[];
+  delivery: {
+    pipeline_configured: boolean;
+    missing_environment_variables: string[];
+    internal_send_configured: boolean;
+    internal_send_missing: string[];
+  };
+  register_with_meta: {
+    webhook_callback_url: string;
+    verify_token_is_set: boolean;
+    whatsapp_redirect_uri: string;
+    instagram_connect_redirect_uri: string;
+    instagram_signin_redirect_uri: string;
+    subscribe_to_fields: string[];
+  };
+  public_api_url: string;
+  all_ready: boolean;
+}
+
 export interface TimelineEntry { at: string; kind: string; label: string }
 
 export interface LeadDetail {

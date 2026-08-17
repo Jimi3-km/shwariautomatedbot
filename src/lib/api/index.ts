@@ -5,7 +5,7 @@ import type {
   Lead, LeadDetail, LeadStage, Product, Order, OrderStatus,
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
   ChannelProviderInfo, ProviderId, ConnectStart, ConnectedChannel, ChannelHealth,
-  OnboardingState, LaunchResult, AgentTone,
+  OnboardingState, LaunchResult, AgentTone, SetupStatus,
 } from '../../types';
 
 export * from './client';
@@ -189,6 +189,9 @@ export const getChannelHealth = (channelId: string) =>
 // Setup wizard
 // ---------------------------------------------------------------------------
 export const getOnboardingState = () => request<OnboardingState>('/onboarding/state');
+
+/** Operator readiness. Admin-only; 403 for anyone else. */
+export const getSetupStatus = () => request<SetupStatus>('/setup/status');
 
 export const createOnboardingBusiness = (body: {
   business_name: string;

@@ -8,6 +8,7 @@ import {
 } from '../lib/api';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
+import { SetupReadinessPanel } from '../components/SetupReadinessPanel';
 import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -115,6 +116,9 @@ export function Integrations() {
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
+
+          {/* Renders nothing once the server is fully configured. */}
+          {isAdmin && <SetupReadinessPanel />}
 
           <div className="section-label">Messaging</div>
 
