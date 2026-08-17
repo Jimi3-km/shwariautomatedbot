@@ -10,9 +10,9 @@ import { META_GRAPH_URL, META_GRAPH_VERSION, metaConfig } from '../../config/met
  * Graph API — the user never sees or pastes a token, a WABA id or a phone
  * number id.
  *
- * The redirect-based variant is used rather than Meta's JS SDK so the browser
- * loads no third-party script and the callback follows the same signed-state
- * path as every other provider here.
+ * Meta offers this as a hosted redirect as well as a JS SDK popup. The
+ * redirect is used here so the browser loads no third-party script and the
+ * callback follows the same signed-state path as every other provider.
  */
 
 export class WhatsAppError extends Error {
@@ -42,36 +42,74 @@ async function graph<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * Where the browser is sent to start Embedded Signup.
+ * Embedded Signup v4, redirect flow.
  *
- * VERIFY BEFORE PRODUCTION USE. Meta's current Embedded Signup guide (v4)
- * documents the JavaScript SDK as the entry point: FB.login() with the
- * config_id, returning the exchangeable code in a JS callback and the WABA and
- * phone number ids via a postMessage 'WA_EMBEDDED_SIGNUP' event. This
- * redirect-based entry is the older pattern and may be rejected for a WhatsApp
- * Embedded Signup configuration.
+ * Meta hosts a redirect entry point for Embedded Signup at
+ * business.facebook.com/messaging/whatsapp/onboard/ alongside the JS SDK
+ * variant. It takes app_id (not client_id), the Facebook Login for Business
+ * config_id, and an `extras` JSON blob that pins the flow version — without
+ * `extras` you get an older flow, and v2 is retired on 15 October 2026.
  *
- * Everything after the code — exchangeSignupCode, discoverWabaId via
- * debug_token granular_scopes, listPhoneNumbers, subscribeApp — matches the
- * current documentation and is unaffected either way. If the redirect is
- * refused, only this function needs replacing with an SDK-driven popup.
- *
- * Two further constraints from the same guide: the exchangeable code has a
- * 30 second TTL, and Embedded Signup v2 is deprecated on 15 October 2026.
+ * redirect_uri is passed per request so it lands on our callback rather than
+ * the app root, which is what lets the signed state come back with it. The URI
+ * must be registered under Facebook Login for Business -> Valid OAuth redirect
+ * URIs, and its domain under Allowed domains, or Meta refuses the request.
  */
+export const EMBEDDED_SIGNUP_URL =
+  'https://business.facebook.com/messaging/whatsapp/onboard/';
+
+/** Pins the flow to v4 with the session-info shape that returns account ids. */
+const EMBEDDED_SIGNUP_EXTRAS = {
+  version: 'v4',
+  sessionInfoVersion: '3',
+  featureType: 'whatsapp_business_app_onboarding',
+} as const;
+
 export function buildEmbeddedSignupUrl(state: string): string {
   const params = new URLSearchParams({
-    client_id: metaConfig.appId,
+    app_id: metaConfig.appId,
     config_id: metaConfig.whatsapp.configId,
+    extras: JSON.stringify(EMBEDDED_SIGNUP_EXTRAS),
     redirect_uri: metaConfig.whatsapp.redirectUri,
-    response_type: 'code',
-    // Embedded Signup returns an authorization code rather than the default
-    // token response; without this the callback receives a fragment we cannot
-    // read server-side.
-    override_default_response_type: 'true',
     state,
   });
-  return `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth?${params}`;
+  return `${EMBEDDED_SIGNUP_URL}?${params}`;
+}
+
+/**
+ * What Meta hands back on the redirect.
+ *
+ * sessionInfoVersion 3 can return the WABA and phone number ids directly, which
+ * saves a Graph round trip. They are treated as a hint rather than a guarantee:
+ * when absent, discoverWabaId falls back to debug_token, which is the
+ * documented path and always works.
+ */
+export interface EmbeddedSignupReturn {
+  code?: string;
+  wabaId?: string;
+  phoneNumberId?: string;
+}
+
+export function readSignupReturn(params: Record<string, string>): EmbeddedSignupReturn {
+  let wabaId = params.waba_id;
+  let phoneNumberId = params.phone_number_id;
+
+  // Some variants nest the ids in a session_info JSON blob instead.
+  if ((!wabaId || !phoneNumberId) && params.session_info) {
+    try {
+      const info = JSON.parse(params.session_info) as {
+        data?: { waba_id?: string; phone_number_id?: string };
+        waba_id?: string;
+        phone_number_id?: string;
+      };
+      wabaId = wabaId || info.data?.waba_id || info.waba_id;
+      phoneNumberId = phoneNumberId || info.data?.phone_number_id || info.phone_number_id;
+    } catch {
+      // Malformed session_info is not fatal: the Graph fallback covers it.
+    }
+  }
+
+  return { code: params.code, wabaId, phoneNumberId };
 }
 
 /** Exchange the Embedded Signup code for the business access token. */

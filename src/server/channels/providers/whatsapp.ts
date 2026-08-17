@@ -10,6 +10,7 @@ import {
   subscribeApp,
   listSubscribedApps,
   sendWhatsAppMessage,
+  readSignupReturn,
   WhatsAppError,
 } from '../../services/meta/whatsapp.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
@@ -67,19 +68,29 @@ export const whatsappProvider: ChannelProvider = {
   },
 
   async callback(params, ctx): Promise<CallbackResult> {
-    const code = params.code;
-    if (!code) throw new ProviderError("WhatsApp couldn't be connected. Please try again.");
+    const signup = readSignupReturn(params);
+    if (!signup.code) {
+      throw new ProviderError("WhatsApp couldn't be connected. Please try again.");
+    }
 
     let accessToken: string;
     let wabaId: string;
     let phone;
 
     try {
-      ({ accessToken } = await exchangeSignupCode(code));
-      wabaId = await discoverWabaId(accessToken);
+      // The code is short-lived — Meta gives it 30 seconds — so the exchange
+      // happens before anything else.
+      ({ accessToken } = await exchangeSignupCode(signup.code));
+
+      // Embedded Signup v4 usually hands back the WABA id directly; the
+      // debug_token lookup is the documented fallback when it does not.
+      wabaId = signup.wabaId ?? (await discoverWabaId(accessToken));
 
       const numbers = await listPhoneNumbers(wabaId, accessToken);
-      phone = numbers[0];
+      phone = signup.phoneNumberId
+        ? numbers.find((n) => n.id === signup.phoneNumberId) ?? numbers[0]
+        : numbers[0];
+
       if (!phone) {
         throw new ProviderError(
           'No WhatsApp number was set up. Finish adding a phone number in the WhatsApp dialog, then try again.',

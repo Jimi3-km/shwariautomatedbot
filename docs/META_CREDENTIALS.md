@@ -19,7 +19,7 @@ Meta will not accept a webhook it cannot reach, and every redirect URI has to
 match the deployed origin exactly.
 
 ```bash
-PUBLIC_API_URL=https://app.yourdomain.com     # no trailing slash
+PUBLIC_API_URL=https://shwariautomatedbot.vercel.app    # no trailing slash
 ```
 
 Everything below writes `<PUBLIC_API_URL>` where that value goes.
@@ -100,8 +100,10 @@ Business, not under the WhatsApp product.
    every extra asset is another screen your customers can abandon on
 5. Finish, then copy the **configuration ID**
 
+Already created for this app:
+
 ```bash
-META_WHATSAPP_CONFIG_ID=<paste>
+META_WHATSAPP_CONFIG_ID=1089974970383116
 ```
 
 ### Also, once, on the same product
@@ -204,20 +206,20 @@ WhatsApp and Instagram will now appear as connectable in onboarding.
 ## The complete `.env` block
 
 ```bash
-PUBLIC_API_URL=https://app.yourdomain.com
+PUBLIC_API_URL=https://shwariautomatedbot.vercel.app
 
 META_APP_ID=1561926828265582
 META_APP_SECRET=
 META_VERIFY_TOKEN=
 META_TOKEN_ENCRYPTION_KEY=
 
-META_WHATSAPP_CONFIG_ID=
-META_WHATSAPP_REDIRECT_URI=https://app.yourdomain.com/api/channels/oauth/whatsapp/callback
+META_WHATSAPP_CONFIG_ID=1089974970383116
+META_WHATSAPP_REDIRECT_URI=https://shwariautomatedbot.vercel.app/api/channels/oauth/whatsapp/callback
 
 INSTAGRAM_CLIENT_ID=
 INSTAGRAM_CLIENT_SECRET=
-INSTAGRAM_CONNECT_REDIRECT_URI=https://app.yourdomain.com/api/channels/oauth/instagram/callback
-INSTAGRAM_REDIRECT_URI=https://app.yourdomain.com/api/auth/instagram/callback
+INSTAGRAM_CONNECT_REDIRECT_URI=https://shwariautomatedbot.vercel.app/api/channels/oauth/instagram/callback
+INSTAGRAM_REDIRECT_URI=https://shwariautomatedbot.vercel.app/api/auth/instagram/callback
 
 INTERNAL_API_SECRET=
 N8N_AGENT_WEBHOOK_URL=https://<you>.app.n8n.cloud/webhook/meta-in
@@ -239,19 +241,32 @@ If you go looking for them you will waste an afternoon:
 
 ---
 
-## Two things that are still open
+## The one thing you must still add in the dashboard
 
-**Embedded Signup entry point.** Meta's current v4 guide documents the
-JavaScript SDK (`FB.login` with the config id) as the way to start the flow.
-This codebase uses a redirect. The server half — code exchange, WABA
-discovery, phone number lookup, app subscription — matches the docs and is
-unaffected either way. If Meta refuses the redirect for a WhatsApp ES
-configuration, only `buildEmbeddedSignupUrl` in
-`src/server/services/meta/whatsapp.ts` needs replacing. Try it first; it is one
-function either way.
+The Embedded Signup URL Meta generated for you returns to the **app root**:
 
-**What I read from the API vs what you have.** When I inspected the app I saw
-no OAuth redirect URIs and no webhook subscriptions on the legacy settings
-endpoint. On a use-case-configured app that endpoint does not reflect
-per-use-case configuration, so this is expected rather than contradictory —
-but it does mean step 6 and step 7 are worth confirming rather than assuming.
+    redirect_uri=https://shwariautomatedbot.vercel.app/
+
+The code sends users to the same entry point but returns to the **callback**:
+
+    https://shwariautomatedbot.vercel.app/api/channels/oauth/whatsapp/callback
+
+That is deliberate. The callback is what carries the signed `state` back, and
+the state is what tells the server which tenant is connecting. Returning to the
+root would leave a code with no way to attribute it to a business — the server
+refuses that rather than guessing.
+
+So add the callback URL to **Facebook Login for Business → Settings → Valid
+OAuth redirect URIs**, and `shwariautomatedbot.vercel.app` to **Allowed
+domains**. Strict Mode requires an exact match, so paste it character for
+character, with no trailing slash.
+
+---
+
+## Note on what the API reported
+
+When I inspected the app I saw no OAuth redirect URIs and no webhook
+subscriptions on the legacy settings endpoint. On a use-case-configured app
+that endpoint does not reflect per-use-case configuration, so this is expected
+rather than contradictory — but steps 6 and 7 are still worth confirming
+rather than assuming.
