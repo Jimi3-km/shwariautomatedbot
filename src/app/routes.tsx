@@ -2,6 +2,7 @@ import React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AppShell } from '../layouts/AppShell';
 import { Overview } from '../pages/Overview';
+import { Shwari } from '../pages/Shwari';
 import { Inbox } from '../pages/Inbox';
 import { Leads } from '../pages/Leads';
 import { LeadDetail } from '../pages/LeadDetail';
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <Overview /> },
+      { path: 'shwari', element: <Shwari /> },
       { path: 'inbox', element: <Inbox /> },
       { path: 'inbox/:conversationId', element: <Inbox /> },
       { path: 'leads', element: <Leads /> },

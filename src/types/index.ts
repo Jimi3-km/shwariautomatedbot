@@ -380,8 +380,74 @@ export interface SetupStatus {
     instagram_signin_redirect_uri: string;
     subscribe_to_fields: string[];
   };
+  shwari: {
+    ready: boolean;
+    missing_environment_variables: string[];
+    model: string | null;
+    telegram_webhook_url: string;
+  };
   public_api_url: string;
   all_ready: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Shwari
+// ---------------------------------------------------------------------------
+
+export type AgentRole = 'manager' | 'sales' | 'support';
+export type AgentStatus = 'draft' | 'active' | 'disabled';
+
+export interface TeamMember {
+  role: AgentRole;
+  name: string;
+  status: AgentStatus;
+}
+
+export interface KnowledgeGap {
+  question: string;
+  times_seen: number;
+}
+
+export interface ShwariStatus {
+  /** False when the server has no model key, or the agent could not be loaded. */
+  available: boolean;
+  team: TeamMember[];
+  open_questions: KnowledgeGap[];
+}
+
+export interface ShwariMessage {
+  from: 'you' | 'shwari';
+  text: string;
+  at: string;
+}
+
+export interface ShwariReply {
+  reply: string;
+  /** True when the turn changed something, so the page knows to reload. */
+  changed: boolean;
+}
+
+export interface PairingCode {
+  code: string;
+  expires_at: string;
+  where: Array<{ channel: string; name: string | null }>;
+  instructions: string;
+}
+
+export interface LinkedAdmin {
+  id: string;
+  channel_type: string;
+  created_at: string;
+}
+
+/** One tool call, as the activity log shows it. */
+export interface AgentActivity {
+  agent_role: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  error: string | null;
+  created_at: string;
 }
 
 export interface TimelineEntry { at: string; kind: string; label: string }

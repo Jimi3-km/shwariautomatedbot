@@ -6,6 +6,7 @@ import type {
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
   ChannelProviderInfo, ProviderId, ConnectStart, ConnectedChannel, ChannelHealth,
   OnboardingState, LaunchResult, AgentTone, SetupStatus,
+  ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
 } from '../../types';
 
 export * from './client';
@@ -219,3 +220,33 @@ export const sendOnboardingTestMessage = (channelId: string, recipient: string) 
   request<{ sent: boolean }>('/onboarding/test-message', {
     method: 'POST', body: { channel_id: channelId, recipient },
   });
+
+// ---------------------------------------------------------------------------
+// Shwari
+// ---------------------------------------------------------------------------
+
+/** Whether Shwari can run at all, plus the team and what it still needs to know. */
+export const getShwariStatus = () => request<ShwariStatus>('/shwari/status');
+
+export const getShwariHistory = () =>
+  request<{ messages: ShwariMessage[] }>('/shwari/history');
+
+/**
+ * One turn. This is slow by nature — the agent reasons and calls tools — so
+ * callers should show the message as sent rather than waiting in silence.
+ */
+export const sendToShwari = (message: string) =>
+  request<ShwariReply>('/shwari/chat', { method: 'POST', body: { message } });
+
+/** Returned once and never readable again. Admin-only. */
+export const createPairingCode = () =>
+  request<PairingCode>('/shwari/pairing-code', { method: 'POST', body: {} });
+
+export const getLinkedAdmins = () => request<{ linked: LinkedAdmin[] }>('/shwari/linked');
+
+export const unlinkAdmin = (id: string) =>
+  request<{ removed: boolean }>(`/shwari/linked/${id}`, { method: 'DELETE' });
+
+/** The audit trail: every tool an agent called, newest first. */
+export const getAgentActivity = () =>
+  request<{ activity: AgentActivity[] }>('/shwari/activity');
