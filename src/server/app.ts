@@ -12,6 +12,7 @@ import { analyticsRouter } from './routes/analytics.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { metaWebhookRouter } from './routes/webhooks/meta.js';
 import { internalRouter } from './routes/internal.js';
+import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
 
 export function createApp() {
@@ -65,6 +66,13 @@ export function createApp() {
    */
   app.use('/api', metaWebhookRouter);
   app.use('/api', internalRouter);
+
+  /**
+   * Web chat is called by anonymous visitors on our customers' websites, so it
+   * is public by design. It authenticates a visitor with a signed token issued
+   * against the channel's own secret, and rate-limits every route.
+   */
+  app.use('/api', webchatRouter);
 
   // Applied before every router: a client that tries to steer tenancy gets a
   // 400 rather than having the field quietly ignored.

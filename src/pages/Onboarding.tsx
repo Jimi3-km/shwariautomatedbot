@@ -12,9 +12,10 @@ import { useMutation } from '../hooks';
 import {
   Button, Card, Field, Input, Textarea, Select, Pill, InlineError, LoadingState,
 } from '../components/ui';
+import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import type {
   AgentTone, ChannelProviderInfo, ConnectedChannel, CredentialField,
-  LaunchResult, OnboardingStepId, ProviderId,
+  EmbedSnippet, LaunchResult, OnboardingStepId, ProviderId,
 } from '../types';
 
 /**
@@ -54,6 +55,7 @@ const TONES: Array<{ value: AgentTone; label: string; blurb: string }> = [
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   whatsapp: "You'll approve access with Meta, and we'll set up your WhatsApp number for you.",
   instagram: "You'll approve access with Instagram, and we'll start handling your DMs.",
+  webchat: 'Add a chat bubble to your own website. Nothing to sign up for — ready in one click.',
   telegram: 'Create a bot in Telegram and paste the code it gives you.',
 };
 
@@ -285,6 +287,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
   const [credentialFor, setCredentialFor] = useState<
     { provider: ProviderId; label: string; fields: CredentialField[] } | null
   >(null);
+  const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -318,8 +321,17 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
 
   const start = useMutation(async (provider: ProviderId, label: string) => {
     const result = await startChannelConnect(provider);
+
     if (result.mode === 'oauth') {
       window.location.href = result.authorize_url;
+      return;
+    }
+    if (result.mode === 'instant') {
+      // Web chat is connected the moment it is asked for; what is left is
+      // giving the owner the snippet to paste into their site.
+      if (result.embed) setEmbed(result.embed);
+      setNotice('Web chat is on. Add the snippet below to your website.');
+      await load();
       return;
     }
     setCredentialFor({ provider, label, fields: result.fields });
@@ -394,6 +406,8 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           );
         })}
       </div>
+
+      {embed && <EmbedSnippetBlock embed={embed} />}
 
       {credentialFor && (
         <CredentialForm

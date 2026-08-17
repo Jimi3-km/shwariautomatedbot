@@ -273,10 +273,13 @@ export interface Onboarding {
 // Setup wizard
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'whatsapp' | 'instagram' | 'telegram';
+export type ProviderId = 'whatsapp' | 'instagram' | 'webchat' | 'telegram';
 
-/** How a channel is connected: a redirect to the provider, or a token we take. */
-export type ConnectMode = 'oauth' | 'credential';
+/**
+ * How a channel is connected: a redirect to the provider, a token we take, or
+ * nothing at all (web chat, which we mint ourselves).
+ */
+export type ConnectMode = 'oauth' | 'credential' | 'instant';
 
 export interface ChannelProviderInfo {
   id: ProviderId;
@@ -309,9 +312,17 @@ export interface CredentialField {
   secret: boolean;
 }
 
+export interface EmbedSnippet {
+  /** Ready-to-paste HTML. Contains a public site key, never a secret. */
+  html: string;
+  site_key: string;
+  script_url: string;
+}
+
 export type ConnectStart =
   | { mode: 'oauth'; authorize_url: string }
-  | { mode: 'credential'; fields: CredentialField[] };
+  | { mode: 'credential'; fields: CredentialField[] }
+  | { mode: 'instant'; account: ConnectedChannel; embed?: EmbedSnippet };
 
 export type OnboardingStepId = 'business' | 'channels' | 'agent' | 'launch' | 'done';
 

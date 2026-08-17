@@ -6,7 +6,8 @@ import {
   getChannels, connectTelegram, disconnectChannel, getChannelStatus,
   getChannelProviders, startChannelConnect,
 } from '../lib/api';
-import type { Channel, ChannelProviderInfo, ProviderId } from '../types';
+import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
+import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
@@ -26,6 +27,7 @@ export function Integrations() {
   const providers = useAsync(() => getChannelProviders(), []);
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState<Channel | null>(null);
+  const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
 
   const toast = useToast();
 
@@ -43,6 +45,19 @@ export function Integrations() {
     // Runs once on mount; the query string is cleared immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * Web chat connects in place: there is nothing to authorize, so the response
+   * already contains the channel and the snippet to paste.
+   */
+  const connectWebchat = useMutation(async () => {
+    const result = await startChannelConnect('webchat');
+    if (result.mode === 'instant') {
+      if (result.embed) setEmbed(result.embed);
+      toast.push('success', 'Web chat is on. Copy the snippet into your website.');
+      state.reload();
+    }
+  });
 
   /** OAuth providers hand back a URL for the browser to follow. */
   const beginOAuth = useMutation(async (provider: ProviderId) => {
@@ -64,6 +79,21 @@ export function Integrations() {
   const telegram = channels.filter((c) => c.channel_type === 'telegram' && c.status === 'active');
   const whatsapp = channels.filter((c) => c.channel_type === 'whatsapp' && c.status === 'active');
   const instagram = channels.filter((c) => c.channel_type === 'instagram' && c.status === 'active');
+  const webchat = channels.filter((c) => c.channel_type === 'webchat' && c.status === 'active');
+
+  /**
+   * An already-connected widget still needs its snippet on screen. The site key
+   * is part of the ordinary channel listing because it is public, so the
+   * snippet is rebuilt from it rather than requiring a reconnect.
+   */
+  const scriptUrl = `${window.location.origin}/api/webchat/widget.js`;
+  const liveEmbed: EmbedSnippet | null = embed ?? (webchat[0]
+    ? {
+        site_key: webchat[0].channel_account_id,
+        script_url: scriptUrl,
+        html: `<script src="${scriptUrl}" data-site-key="${webchat[0].channel_account_id}" async></script>`,
+      }
+    : null);
 
   if (state.loading && !state.data) {
     return <><PageHeader title="Integrations" /><LoadingState /></>;
@@ -79,7 +109,7 @@ export function Integrations() {
         subtitle="Connect the places your customers already message you."
       />
 
-      <InlineError message={disconnect.error ?? beginOAuth.error} />
+      <InlineError message={disconnect.error ?? beginOAuth.error ?? connectWebchat.error} />
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
@@ -129,10 +159,19 @@ export function Integrations() {
               description="Handle Instagram direct messages from the same inbox." />
           )}
 
-          <div className="section-label" style={{ marginTop: 8 }}>Coming soon</div>
+          <IntegrationCard
+            icon={<Globe size={18} />}
+            name="Web chat"
+            description="Add a chat bubble to your own website. Nothing to sign up for."
+            connected={webchat.length > 0}
+            channels={webchat}
+            isAdmin={isAdmin}
+            onConnect={() => connectWebchat.run()}
+            onDisconnect={setDisconnecting}
+          />
 
-          <ComingSoon icon={<Globe size={18} />} name="Web chat"
-            description="Embed the AI agent as a chat widget on your website." />
+          {/* The snippet is the whole of the setup, so it sits with the card. */}
+          {liveEmbed && <EmbedSnippetBlock embed={liveEmbed} />}
         </div>
       </div>
 

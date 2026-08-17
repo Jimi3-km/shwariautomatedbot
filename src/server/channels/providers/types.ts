@@ -16,9 +16,16 @@
  * server.
  */
 
-export type ProviderId = 'telegram' | 'instagram' | 'whatsapp';
+export type ProviderId = 'telegram' | 'instagram' | 'whatsapp' | 'webchat';
 
-export type ConnectMode = 'oauth' | 'credential';
+/**
+ * How a channel gets connected:
+ *
+ *   'oauth'       the user is sent to the provider and comes back on a callback
+ *   'credential'  the user supplies a token we validate (Telegram/BotFather)
+ *   'instant'     nothing to authorize; we mint the connection ourselves
+ */
+export type ConnectMode = 'oauth' | 'credential' | 'instant';
 
 /** What the operator still has to configure before a provider can be used. */
 export interface ProviderAvailability {
@@ -30,7 +37,20 @@ export interface ProviderAvailability {
 /** Result of starting a connection. */
 export type ConnectStart =
   | { mode: 'oauth'; authorize_url: string }
-  | { mode: 'credential'; fields: CredentialField[] };
+  | { mode: 'credential'; fields: CredentialField[] }
+  /**
+   * Connected there and then. `embed` is the snippet the user pastes into
+   * their site; it contains a public site key, never a secret.
+   */
+  | { mode: 'instant'; account: ConnectedAccount; embed?: EmbedSnippet };
+
+export interface EmbedSnippet {
+  /** Ready-to-paste HTML. */
+  html: string;
+  /** The public identifier inside it, so the UI can show it separately. */
+  site_key: string;
+  script_url: string;
+}
 
 export interface CredentialField {
   name: string;
