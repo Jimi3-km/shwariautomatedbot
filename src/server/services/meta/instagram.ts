@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {
+  INSTAGRAM_AUTHORIZE_URL,
   INSTAGRAM_GRAPH_URL,
   INSTAGRAM_OAUTH_URL,
   metaConfig,
@@ -92,7 +93,8 @@ export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
     scope: SCOPES.join(','),
     state,
   });
-  return `${INSTAGRAM_OAUTH_URL}/oauth/authorize?${params}`;
+  // The consent window lives on www.instagram.com, not the API host.
+  return `${INSTAGRAM_AUTHORIZE_URL}/oauth/authorize?${params}`;
 }
 
 async function readMetaError(res: Response, fallback: string): Promise<never> {
@@ -131,13 +133,25 @@ export async function exchangeCodeForToken(
   });
   if (!res.ok) await readMetaError(res, 'Instagram rejected the authorization code');
 
-  const json = (await res.json()) as { access_token: string; user_id: number | string };
-  if (!json.access_token) {
+  /**
+   * Instagram Login for Business returns the grant inside a `data` array —
+   * { data: [{ access_token, user_id, permissions }] } — not at the top level.
+   * The flat shape is the older Basic Display response, so both are accepted:
+   * reading only the flat one silently yields an undefined token.
+   */
+  const json = (await res.json()) as {
+    data?: Array<{ access_token?: string; user_id?: number | string; permissions?: string }>;
+    access_token?: string;
+    user_id?: number | string;
+  };
+
+  const grant = json.data?.[0] ?? json;
+  if (!grant?.access_token) {
     throw new InstagramOAuthError('Instagram did not return an access token');
   }
   return {
-    accessToken: json.access_token,
-    userId: String(json.user_id),
+    accessToken: grant.access_token,
+    userId: String(grant.user_id ?? ''),
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   };
 }

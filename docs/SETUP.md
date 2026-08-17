@@ -115,6 +115,32 @@ Creator) account, and must have messaging access enabled.
 
 ---
 
+## 4a. Verified against Meta's live docs
+
+Checked via the Meta Developer Tools MCP, so these are current rather than
+remembered:
+
+- **Instagram uses three hosts.** `www.instagram.com/oauth/authorize` for the
+  consent window, `api.instagram.com/oauth/access_token` for the code
+  exchange, `graph.instagram.com` for long-lived tokens and data. Using the API
+  host for the authorize step silently fails.
+- **The Instagram token response is nested**: `{ data: [{ access_token,
+  user_id, permissions }] }`, not a flat object. The flat shape is the older
+  Basic Display API.
+- **Scopes are `instagram_business_*`.** The old `business_basic` style values
+  were deprecated on 27 January 2025.
+- **Instagram Login for Business needs no linked Facebook Page.**
+- **WhatsApp Embedded Signup v4 documents the JavaScript SDK** as the entry
+  point, not a plain redirect. See the note in
+  `src/server/services/meta/whatsapp.ts` — the server-side half (code
+  exchange, WABA discovery via `debug_token`, phone number lookup, app
+  subscription) matches the docs and is unaffected.
+- **Embedded Signup v2 is deprecated on 15 October 2026**; v4 is current.
+- **The Embedded Signup exchangeable code lives 30 seconds.**
+- **Graph API version is pinned to v25.0**, matching current documentation.
+- WhatsApp Embedded Signup additionally expects you to subscribe to the
+  `account_update` webhook, and to be a Solution Partner or Tech Provider.
+
 ## 5. App Review
 
 Before Meta approves your app, only users you add as testers can complete the

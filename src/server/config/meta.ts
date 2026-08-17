@@ -6,9 +6,18 @@
  * refusing to run. That mirrors how N8N_TELEGRAM_WEBHOOK_URL already behaves.
  */
 
-export const META_GRAPH_VERSION = 'v21.0';
+// Kept current with Meta's docs; v21 is several releases behind and each
+// version has a ~2 year support window.
+export const META_GRAPH_VERSION = 'v25.0';
 export const META_GRAPH_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
-/** Instagram Basic Display / Instagram Login uses its own host for token exchange. */
+/**
+ * Instagram Login for Business uses three different hosts, and mixing them up
+ * is silent breakage:
+ *   www.instagram.com    the authorization window the user sees
+ *   api.instagram.com    code -> short-lived token
+ *   graph.instagram.com  long-lived token, refresh, and all data calls
+ */
+export const INSTAGRAM_AUTHORIZE_URL = 'https://www.instagram.com';
 export const INSTAGRAM_OAUTH_URL = 'https://api.instagram.com';
 export const INSTAGRAM_GRAPH_URL = 'https://graph.instagram.com';
 

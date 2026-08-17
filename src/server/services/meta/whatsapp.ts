@@ -41,7 +41,24 @@ async function graph<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Where the browser is sent to start Embedded Signup. */
+/**
+ * Where the browser is sent to start Embedded Signup.
+ *
+ * VERIFY BEFORE PRODUCTION USE. Meta's current Embedded Signup guide (v4)
+ * documents the JavaScript SDK as the entry point: FB.login() with the
+ * config_id, returning the exchangeable code in a JS callback and the WABA and
+ * phone number ids via a postMessage 'WA_EMBEDDED_SIGNUP' event. This
+ * redirect-based entry is the older pattern and may be rejected for a WhatsApp
+ * Embedded Signup configuration.
+ *
+ * Everything after the code — exchangeSignupCode, discoverWabaId via
+ * debug_token granular_scopes, listPhoneNumbers, subscribeApp — matches the
+ * current documentation and is unaffected either way. If the redirect is
+ * refused, only this function needs replacing with an SDK-driven popup.
+ *
+ * Two further constraints from the same guide: the exchangeable code has a
+ * 30 second TTL, and Embedded Signup v2 is deprecated on 15 October 2026.
+ */
 export function buildEmbeddedSignupUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: metaConfig.appId,
