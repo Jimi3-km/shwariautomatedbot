@@ -5,6 +5,7 @@ import { runAgentTurn, loadAgent, AgentUnavailableError } from '../ai/agent.js';
 import { llmConfigured } from '../ai/llm.js';
 import { issuePairingCode } from '../ai/admins.js';
 import { attentionNeeded } from '../ai/tools/insight.js';
+import { AGENT_BLUEPRINTS } from '../ai/roles.js';
 
 export const shwariRouter = Router();
 
@@ -290,5 +291,151 @@ shwariRouter.get(
       console.error('[shwari] attention failed:', e instanceof Error ? e.message : e);
       res.status(502).json({ error: "We couldn't work that out just now." });
     }
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Configuring agents by hand
+// ---------------------------------------------------------------------------
+
+/**
+ * The manual alternative to talking to Shwari.
+ *
+ * Everything here can also be done by asking Shwari in plain English, and most
+ * owners will. But an agent is a row, and a person should be able to see and
+ * edit that row directly — to check what an agent was actually told, to fix
+ * something without a conversation, or simply because they prefer a form.
+ *
+ * The guards match the ones in the tool layer exactly, because the tool layer
+ * is not the only way in. `tools`, `permissions` and the manager's own row are
+ * not editable from here either: what an agent is capable of is the platform's
+ * decision, not a per-tenant setting, and the reasons are the same whether the
+ * request came from a model or from a browser.
+ */
+
+const EDITABLE_ROLES = ['sales', 'support'] as const;
+const AGENT_STATES = ['draft', 'active', 'disabled'] as const;
+
+shwariRouter.get(
+  '/agents',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data, error } = await serviceClient
+      .from('agents')
+      .select('id, role, name, objective, instructions, escalation, status, tools, created_at, updated_at')
+      .eq('tenant_id', ctx.tenantId)
+      .order('role');
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({
+      agents: (data ?? []).map((a) => ({
+        ...a,
+        // What it can do, as a count rather than a list of internal names.
+        capability_count: Array.isArray(a.tools) ? a.tools.length : 0,
+        tools: undefined,
+        editable: (EDITABLE_ROLES as readonly string[]).includes(a.role),
+      })),
+      /** Roles this business could still add, for the "add agent" control. */
+      available: EDITABLE_ROLES.filter((r) => !(data ?? []).some((a) => a.role === r)).map((role) => ({
+        role,
+        name: AGENT_BLUEPRINTS[role].defaultName,
+        summary: AGENT_BLUEPRINTS[role].summary,
+      })),
+    });
+  })
+);
+
+shwariRouter.post(
+  '/agents',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const role = String(req.body?.role ?? '');
+
+    if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
+      return res.status(400).json({ error: `role must be one of: ${EDITABLE_ROLES.join(', ')}` });
+    }
+
+    const blueprint = AGENT_BLUEPRINTS[role as 'sales' | 'support'];
+    const { data, error } = await serviceClient
+      .from('agents')
+      .insert({
+        tenant_id: ctx.tenantId,
+        role,
+        name: String(req.body?.name ?? '').trim().slice(0, 60) || blueprint.defaultName,
+        objective: blueprint.objective,
+        instructions: '',
+        // Capability comes from the blueprint, never from the request body.
+        tools: blueprint.tools,
+        permissions: blueprint.permissions,
+        escalation: blueprint.escalation,
+        status: 'draft',
+      })
+      .select('id, role, name, objective, instructions, escalation, status')
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: `You already have a ${role} agent.` });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(201).json(data);
+  })
+);
+
+shwariRouter.patch(
+  '/agents/:role',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const role = String(req.params.role);
+
+    if (role === 'manager') {
+      return res.status(403).json({
+        error: 'Shwari runs your other agents, so its own capabilities are fixed. You can still tell it how to work in conversation.',
+      });
+    }
+    if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
+      return res.status(404).json({ error: 'No such agent.' });
+    }
+
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+    if (req.body?.name !== undefined) {
+      const name = String(req.body.name).trim();
+      if (!name) return res.status(400).json({ error: 'Give the agent a name.' });
+      updates.name = name.slice(0, 60);
+    }
+    if (req.body?.objective !== undefined) updates.objective = String(req.body.objective).slice(0, 500);
+    if (req.body?.instructions !== undefined) updates.instructions = String(req.body.instructions).slice(0, 4000);
+    if (req.body?.escalation !== undefined) updates.escalation = String(req.body.escalation).slice(0, 1000);
+
+    if (req.body?.status !== undefined) {
+      if (!(AGENT_STATES as readonly string[]).includes(req.body.status)) {
+        return res.status(400).json({ error: `status must be one of: ${AGENT_STATES.join(', ')}` });
+      }
+      updates.status = req.body.status;
+    }
+
+    if (Object.keys(updates).length === 1) {
+      return res.status(400).json({ error: 'Nothing to change.' });
+    }
+
+    const { data, error } = await serviceClient
+      .from('agents')
+      .update(updates)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('role', role)
+      .select('id, role, name, objective, instructions, escalation, status')
+      .maybeSingle();
+
+    if (error) return res.status(400).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'That agent does not exist yet.' });
+    res.json(data);
   })
 );

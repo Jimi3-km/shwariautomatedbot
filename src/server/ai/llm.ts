@@ -16,6 +16,26 @@
 const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 const DEFAULT_MODEL = 'meta/llama-3.3-70b-instruct';
 
+/**
+ * Reasoning models spend the token budget twice.
+ *
+ * A model like Nemotron thinks before it answers, and those thinking tokens
+ * count against max_tokens just as the reply does. Ask for 900 and the thinking
+ * can consume all of it, leaving the reply truncated or empty — which surfaces
+ * as the agent repeating its own briefing instead of answering, because a
+ * half-finished generation is whatever the model had produced so far.
+ *
+ * So the ceiling is generous, and thinking is off by default. Shwari's turns
+ * are short conversational exchanges over tools that already validate
+ * themselves; extended reasoning makes them slower and no more correct. Set
+ * SHWARI_THINKING=on for a model that genuinely needs it.
+ */
+const DEFAULT_MAX_TOKENS = 4096;
+
+function thinkingEnabled(): boolean {
+  return /^(1|on|true|yes)$/i.test(process.env.SHWARI_THINKING ?? '');
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -130,8 +150,13 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
         model: llmModel(),
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
-        max_tokens: opts.maxTokens ?? 1024,
+        max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
         stream: false,
+        /**
+         * Ignored by models that do not reason, honoured by the ones that do.
+         * Sending it unconditionally keeps one code path for both.
+         */
+        chat_template_kwargs: { enable_thinking: thinkingEnabled() },
         ...(opts.tools?.length
           ? {
               tools: opts.tools.map((t) => ({
@@ -180,9 +205,30 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
         }))
     : [];
 
+  /**
+   * A reasoning model returns its scratchpad separately, in reasoning_content.
+   * That is the model thinking out loud, not something the customer or the
+   * owner should ever read, so it is dropped here rather than downstream —
+   * there is no path by which it can reach a reply.
+   */
   const text = typeof message.content === 'string' && message.content.trim()
-    ? message.content
+    ? message.content.trim()
     : null;
+
+  /**
+   * Ran out of budget mid-thought. Whatever is in `content` at that point is a
+   * fragment — often the model restating its own briefing — and sending it on
+   * would put nonsense in front of a customer. Better to say nothing and let
+   * the caller offer its fallback.
+   */
+  const finish = json?.choices?.[0]?.finish_reason;
+  if (finish === 'length' && !toolCalls.length) {
+    const reasoned = typeof message.reasoning_content === 'string' && message.reasoning_content.length;
+    console.warn(
+      `[llm] hit the token ceiling before finishing a reply${reasoned ? ' (the budget went on reasoning)' : ''}`
+    );
+    return { text: null, toolCalls: [] };
+  }
 
   return { text, toolCalls };
 }

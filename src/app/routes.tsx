@@ -5,6 +5,7 @@ import { Overview } from '../pages/Overview';
 import { Shwari } from '../pages/Shwari';
 import { Appointments } from '../pages/Appointments';
 import { Tickets } from '../pages/Tickets';
+import { Agents } from '../pages/Agents';
 import { Inbox } from '../pages/Inbox';
 import { Leads } from '../pages/Leads';
 import { LeadDetail } from '../pages/LeadDetail';
@@ -34,6 +35,7 @@ export const router = createBrowserRouter([
       { path: 'support', element: <Tickets /> },
       { path: 'payments', element: <Payments /> },
       { path: 'analytics', element: <Analytics /> },
+      { path: 'agents', element: <Agents /> },
       { path: 'agent', element: <AgentSettings /> },
       { path: 'integrations', element: <Integrations /> },
       { path: 'settings', element: <Settings /> },

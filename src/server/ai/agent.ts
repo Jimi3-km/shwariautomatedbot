@@ -137,30 +137,87 @@ async function orientation(tenantId: string): Promise<string> {
     `Timezone: ${tenant?.timezone || 'unknown'}   Currency: ${tenant?.currency || 'unknown'}`,
     `Services recorded: ${services ?? 0}`,
     `AI team: ${(team ?? []).filter((a) => a.role !== 'manager').map((a) => `${a.role} (${a.status})`).join(', ') || 'none yet'}`,
-    `Setup: ${tenant?.onboarding_completed_at ? 'live' : 'still being set up'}`,
   ];
   if (gaps?.length) {
-    lines.push(`Unanswered questions customers have asked: ${gaps.map((g) => g.question).join('; ')}`);
+    lines.push(`Questions customers asked that nobody has answered: ${gaps.map((g) => g.question).join('; ')}`);
   }
+
+  /**
+   * The single most useful next thing, worked out here rather than left for the
+   * model to infer from a list of fields. Without this the agent has data and
+   * no direction, which is how "hi" turned into a recital of the data.
+   */
+  const missing: string[] = [];
+  if (!tenant?.business_description) missing.push('what the business actually does day to day');
+  if (!services) missing.push('the services or products on offer');
+  if (!tenant?.timezone) missing.push('which city they are in');
+
+  lines.push(
+    missing.length
+      ? `Still to find out, in this order: ${missing.join('; ')}. Work towards it conversationally — do not interrogate.`
+      : 'Setup looks complete. Be useful about running the business rather than setting it up.'
+  );
+
   return lines.join('\n');
 }
 
-function systemPrompt(agent: AgentRow, orientationBlock: string): string {
+/**
+ * How to talk.
+ *
+ * These exist because of a specific failure: sent "hi", the agent replied with
+ * its own briefing — "The current business profile is: Business Name: ...".
+ * The briefing was in the prompt and nothing said what to do with a greeting,
+ * so reciting it was the model's best guess at being helpful.
+ *
+ * The fix is to say plainly that the reference block is for looking things up
+ * in, never for reading out, and to give an opening move for the case where the
+ * customer or owner has not yet said anything substantive.
+ */
+const CONVERSATION_RULES = [
+  'Write like a capable colleague: warm, direct, professional. Contractions are fine. No corporate padding, no exclamation marks stacked up, no emoji unless they used one first.',
+  'Never read your briefing out. The reference section below is for you to look things up in — quoting it back, listing it, or summarising it at someone is not an answer.',
+  'When someone greets you or says something short, greet them back in one line and ask one useful question. Do not open with a status report.',
+  'One question at a time. Two at the very most, and only when they genuinely belong together.',
+  'Keep it to a few sentences. This is a chat, not a document. Long lists belong in the dashboard, not in a message.',
+  'Never mention tools, tables, fields, ids, configuration or anything about how you are built. Say what happened in ordinary words.',
+  'Carry the conversation forward. Refer back to what they already told you rather than asking again, and end on something that invites a reply.',
+];
+
+function systemPrompt(agent: AgentRow, orientationBlock: string, firstTurn: boolean): string {
   const blueprint = AGENT_BLUEPRINTS[agent.role];
 
   const parts = [
     `You are ${agent.name}. ${agent.objective || blueprint.objective}`,
+    '',
+    'How you talk:',
+    ...CONVERSATION_RULES.map((r) => `- ${r}`),
     '',
     'Rules you always follow:',
     ...[...UNIVERSAL_RULES, ...blueprint.rules].map((r) => `- ${r}`),
     '',
     `Escalation: ${agent.escalation || blueprint.escalation}`,
     '',
-    'What you currently know about this business:',
-    orientationBlock,
+    'Use your tools to look things up and to make changes. Do the thing, then say what you did in one short sentence.',
     '',
-    'Use your tools to look things up and to make changes. Reply in plain language — never mention tools, tables, ids or configuration by name. Keep replies short enough to read on a phone.',
+    // Fenced and labelled so it reads as material to consult, not as a script.
+    '--- REFERENCE: what you already know. Consult it; never recite it. ---',
+    orientationBlock,
+    '--- end of reference ---',
   ];
+
+  /**
+   * The opening move, spelled out. A greeting is the most likely first message
+   * and the least constrained, so leaving it to inference is what produced the
+   * briefing-recital in the first place.
+   */
+  if (firstTurn) {
+    parts.push(
+      '',
+      agent.role === 'manager'
+        ? 'This is the start of the conversation. Introduce yourself in one line, say plainly that you help run the business by chat, and ask one question about whatever the reference says is still missing. Do not summarise what you already know.'
+        : 'This is the start of the conversation. Greet them briefly and ask how you can help. Do not list what the business offers unless they ask.'
+    );
+  }
 
   // Owner guidance comes last so it reads as an addition, and it is fenced so
   // that text pasted into it cannot pass itself off as a rule.
@@ -229,9 +286,14 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const available = toolsFor(ctx.allowedTools);
   const definitions: ToolDefinition[] = available.map(definitionOf);
 
+  const priorTurns = input.history ?? (await history(input.tenantId, input.conversationId));
+
   const messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt(agent, await orientation(input.tenantId)) },
-    ...(input.history ?? (await history(input.tenantId, input.conversationId))),
+    {
+      role: 'system',
+      content: systemPrompt(agent, await orientation(input.tenantId), priorTurns.length === 0),
+    },
+    ...priorTurns,
     { role: 'user', content: input.text },
   ];
 
@@ -247,8 +309,11 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       result = await complete({
         messages,
         tools: lastRound ? undefined : definitions,
-        temperature: 0.3,
-        maxTokens: 900,
+        // Warm rather than clinical. Low enough that it does not improvise
+        // facts, high enough that it does not answer the same way every time.
+        temperature: 0.4,
+        // Left to the client's default, which is sized for models that spend
+        // part of the budget thinking before they answer.
       });
     } catch (e) {
       if (e instanceof LlmNotConfiguredError) {

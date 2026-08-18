@@ -547,3 +547,25 @@ export interface AttentionReport {
   unanswered_questions: Array<{ question: string; times_seen: number }>;
   waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
 }
+
+/** An agent as the manual editor sees it. Capabilities are a count, not a list. */
+export interface AgentConfig {
+  id: string;
+  role: AgentRole;
+  name: string;
+  objective: string;
+  instructions: string;
+  escalation: string;
+  status: AgentStatus;
+  capability_count: number;
+  /** False for the manager: its own capabilities are fixed. */
+  editable: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AvailableAgent {
+  role: AgentRole;
+  name: string;
+  summary: string;
+}

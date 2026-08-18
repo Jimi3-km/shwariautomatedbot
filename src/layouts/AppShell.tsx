@@ -20,7 +20,7 @@ const NAV = [
   { to: '/support', label: 'Support', icon: LifeBuoy },
   { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'claims' as const },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/agent', label: 'AI Agent', icon: Bot },
+  { to: '/agents', label: 'AI team', icon: Bot },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];

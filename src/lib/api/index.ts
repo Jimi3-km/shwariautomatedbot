@@ -9,6 +9,7 @@ import type {
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
+  AgentConfig, AvailableAgent, AgentRole, AgentStatus,
 } from '../../types';
 
 export * from './client';
@@ -294,3 +295,23 @@ export const cancelFollowUp = (id: string) =>
 
 /** Proactive insight, available whether or not a model key is configured. */
 export const getAttention = () => request<AttentionReport>('/shwari/attention');
+
+// ---------------------------------------------------------------------------
+// Agents, configured by hand
+// ---------------------------------------------------------------------------
+
+export const getAgents = () =>
+  request<{ agents: AgentConfig[]; available: AvailableAgent[] }>('/agents');
+
+export const createAgent = (body: { role: AgentRole; name?: string }) =>
+  request<AgentConfig>('/agents', { method: 'POST', body });
+
+/**
+ * Name, objective, instructions, escalation and status only. Capabilities are
+ * not editable by anyone — the server rejects them, and the manager's own row
+ * is not editable at all.
+ */
+export const updateAgent = (
+  role: AgentRole,
+  body: { name?: string; objective?: string; instructions?: string; escalation?: string; status?: AgentStatus }
+) => request<AgentConfig>(`/agents/${role}`, { method: 'PATCH', body });
