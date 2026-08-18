@@ -7,6 +7,8 @@ import type {
   ChannelProviderInfo, ProviderId, ConnectStart, ConnectedChannel, ChannelHealth,
   OnboardingState, LaunchResult, AgentTone, SetupStatus,
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
+  Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
+  FollowUp, FollowUpStatus, AttentionReport,
 } from '../../types';
 
 export * from './client';
@@ -250,3 +252,45 @@ export const unlinkAdmin = (id: string) =>
 /** The audit trail: every tool an agent called, newest first. */
 export const getAgentActivity = () =>
   request<{ activity: AgentActivity[] }>('/shwari/activity');
+
+// ---------------------------------------------------------------------------
+// Operations: appointments, tickets, follow-ups
+// ---------------------------------------------------------------------------
+
+export const getAppointments = (params: { status?: string; from?: string; to?: string } = {}) =>
+  request<{ appointments: Appointment[] }>(`/appointments${qs(params)}`);
+
+export const createAppointment = (body: {
+  service_name: string;
+  starts_at: string;
+  duration_minutes?: number;
+  customer_name?: string;
+  notes?: string;
+}) => request<Appointment>('/appointments', { method: 'POST', body });
+
+export const updateAppointment = (
+  id: string,
+  body: { status?: AppointmentStatus; starts_at?: string; notes?: string }
+) => request<Appointment>(`/appointments/${id}`, { method: 'PATCH', body });
+
+export const getTickets = (status?: TicketStatus | '') =>
+  request<{ tickets: SupportTicket[] }>(`/tickets${qs({ status })}`);
+
+export const createTicket = (body: {
+  subject: string; body?: string; priority?: TicketPriority; customer_name?: string;
+}) => request<SupportTicket>('/tickets', { method: 'POST', body });
+
+export const updateTicket = (
+  id: string,
+  body: { status?: TicketStatus; priority?: TicketPriority; resolution?: string; claim?: boolean }
+) => request<SupportTicket>(`/tickets/${id}`, { method: 'PATCH', body });
+
+/** Pending by default: what the AI is about to send, before it sends it. */
+export const getFollowUps = (status?: FollowUpStatus | '') =>
+  request<{ follow_ups: FollowUp[] }>(`/follow-ups${qs({ status })}`);
+
+export const cancelFollowUp = (id: string) =>
+  request<{ cancelled: boolean }>(`/follow-ups/${id}`, { method: 'DELETE' });
+
+/** Proactive insight, available whether or not a model key is configured. */
+export const getAttention = () => request<AttentionReport>('/shwari/attention');

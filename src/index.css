@@ -1017,3 +1017,32 @@ select.field { appearance: none; cursor: pointer; padding-right: 30px; }
   .shwari-thread { height: 68vh; }
   .shwari-side { max-height: none; overflow: visible; }
 }
+
+/* ── Appointments & tickets ────────────── */
+/* Rows that stay readable when a service name or a subject is long: the text
+   column is the one allowed to shrink, and the actions never wrap under it on
+   a desktop. */
+.appointment-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 13px 15px;
+}
+.appointment-time {
+  flex-shrink: 0; width: 62px; text-align: right;
+  padding-top: 1px;
+}
+.appointment-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.ticket-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 13px 15px;
+  background: none; border: 0; text-align: left; cursor: pointer;
+  color: inherit; font: inherit;
+}
+.ticket-row:hover { background: var(--surface-2); }
+
+@media (max-width: 640px) {
+  .appointment-row { flex-wrap: wrap; }
+  .appointment-time { width: auto; text-align: left; }
+  /* Buttons drop to their own line rather than squeezing the customer name. */
+  .appointment-actions { width: 100%; justify-content: flex-end; }
+}

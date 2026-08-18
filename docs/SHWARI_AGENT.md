@@ -131,18 +131,46 @@ to the model.
 
 Current tools:
 
-| Area | Tools |
-|---|---|
-| Profile | `get_business_profile`, `update_business_profile` |
-| Services | `list_services`, `save_service`, `remove_service` |
-| Hours | `get_opening_hours`, `set_opening_hours` |
-| Knowledge | `search_business_knowledge`, `save_business_fact` |
-| Learning | `record_knowledge_gap`, `list_knowledge_gaps` |
-| Team | `list_team`, `recommend_team`, `add_agent`, `configure_agent`, `activate_agent` |
-| Readiness | `setup_status` |
+| Area | Tools | Who holds them |
+|---|---|---|
+| Profile | `get_business_profile`, `update_business_profile` | manager |
+| Services | `list_services`, `save_service`, `remove_service` | manager (read: all) |
+| Products | `list_products`, `save_product` | manager (read: sales) |
+| Hours | `get_opening_hours`, `set_opening_hours` | manager (read: all) |
+| Knowledge | `search_business_knowledge`, `save_business_fact` | manager (read: all) |
+| Learning | `record_knowledge_gap`, `list_knowledge_gaps` | all / manager |
+| Team | `list_team`, `recommend_team`, `add_agent`, `configure_agent`, `activate_agent` | manager |
+| Readiness | `setup_status` | manager |
+| Metrics | `business_metrics`, `attention_needed` | manager |
+| CRM | `find_customers`, `update_customer` | manager (update: all) |
+| Appointments | `list_appointments`, `book_appointment`, `reschedule_appointment`, `cancel_appointment` | manager, support; sales books |
+| Orders | `record_order` | sales |
+| Tickets | `open_ticket`, `list_tickets`, `update_ticket` | manager, support opens |
+| Escalation | `escalate_to_human` | sales, support |
+| Follow-ups | `schedule_follow_up`, `list_follow_ups`, `cancel_follow_up` | manager; sales and support queue |
 
 Adding a tool to the catalogue does not hand it to anyone: what an agent may
 call is its `tools` column, enforced on every invocation.
+
+### Four lines the tools hold
+
+**No agent can mark a payment received.** `record_order` has no field for
+status, payment state or currency, and `update_customer` refuses the
+`payment_verified` and `won` stages. Verification stays where it was: a person,
+through the commerce route, behind a database trigger.
+
+**An agent never messages a customer directly.** `schedule_follow_up` writes a
+row; the message sits on the Support page where a person can read and cancel it,
+and only the scheduled dispatcher turns it into a real message.
+
+**An agent cannot act on a customer it cannot see.** No tool takes a customer
+name. Either the agent is in that customer's conversation, or it passes a
+`lead_id` it got from `find_customers` — an id the tool then verifies against
+the tenant.
+
+**Customer-facing agents cannot read the customer base.** Sales and support hold
+no `find_customers`, no `business_metrics`, no `attention_needed`. They answer
+the person in front of them.
 
 ---
 
@@ -191,6 +219,19 @@ asks. That is the whole control: knowledge grows from owner statements, not
 from model confidence.
 
 ---
+
+## Working without a model key
+
+Everything except the conversation is read straight from the database, so the
+dashboard is fully usable before any AI is configured:
+
+- **Appointments** — the diary, bookable by hand
+- **Support** — tickets, and the messages agents have queued but not sent
+- **Needs you today** — payments to check, customers waiting on a reply,
+  appointments today, customers gone quiet
+
+The Shwari page still renders all of that with the composer disabled and a line
+saying what is missing. Nothing crashes and nothing is faked.
 
 ## Talking to Shwari
 
@@ -257,8 +298,9 @@ the working system rather than on top of it.
 ## Tests
 
 ```bash
-npx tsx src/server/ai/__tests__/tools.test.mjs           # 20
-npx tsx src/server/ai/__tests__/business.test.mjs        # 21
+npx tsx src/server/ai/__tests__/tools.test.mjs                  # 23
+npx tsx src/server/ai/__tests__/business.test.mjs               # 21
+npx tsx src/server/ai/__tests__/operations.test.mjs             # 29
 npx tsx src/server/routes/webhooks/__tests__/telegram.test.mjs  # 18
 ```
 
@@ -266,3 +308,27 @@ The tool tests are the ones to keep honest: they assert against the real
 `runTool` that an agent cannot call a tool it lacks, that a model-supplied
 `tenant_id` is dropped before any query is built, that a thrown tool becomes
 data rather than an exception, and that Shwari cannot reconfigure itself.
+
+---
+
+## Sending the queued follow-ups
+
+Agents write follow-ups; they never send them. One scheduled call turns the
+ones still standing into real messages:
+
+```
+POST <PUBLIC_API_URL>/api/internal/follow-ups/dispatch
+     x-internal-secret: <INTERNAL_API_SECRET>
+```
+
+Point an n8n Schedule trigger at it — every 15 minutes is ample. A schedule is
+exactly the deterministic work n8n is good at, and keeping it there means this
+application needs no timer of its own.
+
+It is safe to call as often as you like: each row is claimed before it is sent,
+so two overlapping runs cannot message the same customer twice. The response is
+`{ due, sent, failed }`.
+
+Until that schedule exists, queued follow-ups simply wait — visible on the
+Support page, sending to nobody. That is a deliberate default: an unattended
+system that has not been told to send should not start messaging customers.

@@ -204,11 +204,47 @@ await t('a stale tool name is inert rather than fatal', () => {
   assert.equal(resolved[0].name, 'list_services');
 });
 
-await t('customer-facing agents hold no configuration tools', () => {
+/**
+ * Customer-facing agents now act — they book, record orders and open tickets —
+ * so "holds no mutating tool" is no longer the invariant. What still has to
+ * hold is that acting for a customer never becomes reconfiguring the business.
+ */
+const CONFIGURATION_TOOLS = [
+  'update_business_profile', 'save_service', 'remove_service', 'save_product',
+  'set_opening_hours', 'save_business_fact',
+  'add_agent', 'configure_agent', 'activate_agent',
+];
+
+await t('customer-facing agents cannot reconfigure the business', () => {
   for (const role of ['sales', 'support']) {
-    for (const name of AGENT_BLUEPRINTS[role].tools) {
-      assert.ok(!TOOLS.get(name).mutates || name === 'record_knowledge_gap',
-        `${role} should not be able to change the business with ${name}`);
+    for (const name of CONFIGURATION_TOOLS) {
+      assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name),
+        `${role} must not be able to change the business with ${name}`);
+    }
+  }
+});
+
+await t('customer-facing agents cannot read the whole customer base', () => {
+  for (const role of ['sales', 'support']) {
+    for (const name of ['find_customers', 'business_metrics', 'attention_needed']) {
+      assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name),
+        `${role} answers one customer; ${name} would hand it everyone's data`);
+    }
+  }
+});
+
+await t('an agent that can act can also hand over to a person', () => {
+  for (const role of ['sales', 'support']) {
+    assert.ok(AGENT_BLUEPRINTS[role].tools.includes('escalate_to_human'),
+      `${role} must always have a way out to a human`);
+  }
+});
+
+await t('no agent can mark a payment received', () => {
+  for (const blueprint of Object.values(AGENT_BLUEPRINTS)) {
+    for (const name of blueprint.tools) {
+      assert.ok(!/payment|verify|refund/.test(name),
+        `${blueprint.role} must not hold ${name}: a person verifies every payment`);
     }
   }
 });

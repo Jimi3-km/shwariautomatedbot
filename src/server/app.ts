@@ -14,6 +14,7 @@ import { setupRouter } from './routes/setup.js';
 import { metaWebhookRouter } from './routes/webhooks/meta.js';
 import { telegramWebhookRouter } from './routes/webhooks/telegram.js';
 import { shwariRouter } from './routes/shwari.js';
+import { operationsRouter } from './routes/operations.js';
 import { internalRouter } from './routes/internal.js';
 import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
@@ -105,6 +106,7 @@ export function createApp() {
   app.use('/api', onboardingRouter);
   app.use('/api', setupRouter);
   app.use('/api', shwariRouter);
+  app.use('/api', operationsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

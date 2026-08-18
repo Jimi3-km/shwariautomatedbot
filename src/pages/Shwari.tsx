@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Send, Sparkles, Link2, Check, Copy, Trash2, HelpCircle } from 'lucide-react';
 import {
-  getShwariStatus, getShwariHistory, sendToShwari,
+  Send, Sparkles, Link2, Check, Copy, Trash2, HelpCircle, AlertTriangle,
+} from 'lucide-react';
+import {
+  getShwariStatus, getShwariHistory, sendToShwari, getAttention,
   createPairingCode, getLinkedAdmins, unlinkAdmin, ApiError,
 } from '../lib/api';
-import type { ShwariMessage, ShwariStatus, PairingCode } from '../types';
+import type { ShwariMessage, ShwariStatus, PairingCode, AttentionReport } from '../types';
 import { useAsync } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
@@ -12,6 +14,7 @@ import {
   LoadingState, Modal, PageHeader, Pill, useToast,
 } from '../components/ui';
 import { relativeTime } from '../lib/format';
+import { Link } from 'react-router-dom';
 
 /**
  * Talking to Shwari.
@@ -71,7 +74,10 @@ export function Shwari() {
 
     try {
       const result = await sendToShwari(message);
-      setMessages((m) => [...m, { from: 'shwari', text: result.reply, at: new Date().toISOString() }]);
+      setMessages((m) => [...m, {
+        from: 'shwari', text: result.reply, at: new Date().toISOString(),
+        actions: result.actions,
+      }]);
       // A turn that changed something invalidates the team and the open
       // questions, both of which are shown beside the conversation.
       if (result.changed) status.reload();
@@ -91,7 +97,7 @@ export function Shwari() {
     // messaging app uses, and this reads as one.
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void send(draft);
+      if (!offline) void send(draft);
     }
   }
 
@@ -104,31 +110,17 @@ export function Shwari() {
 
   const s = status.data as ShwariStatus;
 
-  if (!s.available) {
-    return (
-      <>
-        <PageHeader title="Shwari" />
-        <div className="p-5">
-          <EmptyState
-            icon={<Sparkles size={22} />}
-            title="Shwari isn't switched on yet"
-            body={
-              isAdmin
-                ? 'The server needs a model key before Shwari can answer. Integrations shows exactly what is missing.'
-                : 'Ask an administrator to finish setting this up.'
-            }
-          />
-        </div>
-      </>
-    );
-  }
+  // A missing model key disables the conversation, not the page. Everything
+  // beside it — what needs attention, the team, the open questions — is read
+  // straight from the database and stays useful either way.
+  const offline = !s.available;
 
   return (
     <>
       <PageHeader
         title="Shwari"
         subtitle="Tell me about your business and I'll set it up."
-        actions={isAdmin && (
+        actions={isAdmin && !offline && (
           <Button size="sm" icon={<Link2 size={14} />} onClick={() => setPairing(true)}>
             Talk on Telegram
           </Button>
@@ -141,7 +133,7 @@ export function Shwari() {
             {history.loading && !messages.length && <LoadingState rows={3} />}
 
             {!history.loading && !messages.length && (
-              <Greeting onPick={(text) => send(text)} />
+              offline ? <Offline isAdmin={isAdmin} /> : <Greeting onPick={(text) => send(text)} />
             )}
 
             {messages.map((m, i) => (
@@ -159,7 +151,12 @@ export function Shwari() {
                 className="input"
                 rows={1}
                 value={draft}
-                placeholder="Tell Shwari about your business…"
+                disabled={offline}
+                placeholder={
+                  offline
+                    ? 'Shwari needs a model key before it can answer.'
+                    : 'Tell Shwari about your business…'
+                }
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}
                 style={{ resize: 'none', maxHeight: 140, flex: 1 }}
@@ -168,7 +165,7 @@ export function Shwari() {
                 variant="accent"
                 icon={<Send size={14} />}
                 loading={thinking}
-                disabled={!draft.trim()}
+                disabled={offline || !draft.trim()}
                 onClick={() => send(draft)}
               >
                 Send
@@ -178,6 +175,7 @@ export function Shwari() {
         </div>
 
         <aside className="shwari-side">
+          <AttentionPanel />
           <TeamPanel status={s} />
           <QuestionsPanel status={s} onAnswer={(q) => { setDraft(q); composer.current?.focus(); }} />
           {isAdmin && <LinkedPanel />}
@@ -232,11 +230,85 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
+/**
+ * What a turn actually did, said the way the owner would say it.
+ *
+ * Only tools that changed something reach here, and each is named as an
+ * outcome rather than as a function. Anything unmapped is dropped instead of
+ * being shown raw: a tool name leaking into the conversation would be exactly
+ * the kind of internal this product does not show.
+ */
+const ACTION_LABELS: Record<string, string> = {
+  update_business_profile: 'Updated your business details',
+  save_service: 'Saved a service',
+  remove_service: 'Stopped offering a service',
+  save_product: 'Saved a product',
+  set_opening_hours: 'Set your opening hours',
+  save_business_fact: 'Saved that for future reference',
+  record_knowledge_gap: 'Noted a question to come back to',
+  add_agent: 'Added an agent to your team',
+  configure_agent: 'Changed how an agent works',
+  activate_agent: 'Switched an agent on or off',
+  book_appointment: 'Booked an appointment',
+  reschedule_appointment: 'Moved an appointment',
+  cancel_appointment: 'Cancelled an appointment',
+  record_order: 'Recorded an order',
+  open_ticket: 'Opened a ticket',
+  update_ticket: 'Updated a ticket',
+  escalate_to_human: 'Handed a conversation to a person',
+  schedule_follow_up: 'Queued a follow-up message',
+  cancel_follow_up: 'Cancelled a queued message',
+  update_customer: 'Updated a customer',
+};
+
+function ActionList({ actions }: { actions: string[] }) {
+  const labels = [...new Set(actions.map((a) => ACTION_LABELS[a]).filter(Boolean))];
+  if (!labels.length) return null;
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
+      {labels.map((label) => (
+        <span
+          key={label}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            fontSize: 11, padding: '3px 8px', borderRadius: 999,
+            background: 'var(--success-bg)', color: 'var(--success)',
+          }}
+        >
+          <Check size={10} /> {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Shown in place of the greeting when no model key is configured, so the page
+ * says what is missing rather than looking broken.
+ */
+function Offline({ isAdmin }: { isAdmin: boolean }) {
+  return (
+    <div style={{ maxWidth: 460, margin: '40px auto' }}>
+      <EmptyState
+        icon={<Sparkles size={22} />}
+        title="Shwari can't answer yet"
+        body={
+          isAdmin
+            ? "This server has no model key, so the conversation is switched off. Everything else on this page still works. Integrations names exactly what's missing."
+            : 'Ask an administrator to finish setting this up. Everything else on this page still works.'
+        }
+      />
+    </div>
+  );
+}
+
 function Bubble({ message }: { message: ShwariMessage }) {
   const mine = message.from === 'you';
   return (
     <div style={{
-      display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start', marginBottom: 12,
+      display: 'flex', flexDirection: 'column',
+      alignItems: mine ? 'flex-end' : 'flex-start', marginBottom: 12,
     }}>
       <div style={{
         maxWidth: '76%',
@@ -255,6 +327,8 @@ function Bubble({ message }: { message: ShwariMessage }) {
       }}>
         {message.text}
       </div>
+
+      {!mine && message.actions?.length ? <ActionList actions={message.actions} /> : null}
     </div>
   );
 }
@@ -287,6 +361,92 @@ const ROLE_LABELS: Record<string, string> = {
   sales: 'Sales',
   support: 'Reception',
 };
+
+/**
+ * What needs a person today.
+ *
+ * Computed from the database, not from the model, so it is populated on a
+ * server with no AI configured at all. Each line is a link into the page that
+ * owns the problem rather than a description of it.
+ */
+function AttentionPanel() {
+  const state = useAsync(() => getAttention(), []);
+
+  if (state.loading && !state.data) {
+    return <Card><LoadingState rows={2} /></Card>;
+  }
+  // A failed read here is not worth an error card beside a working
+  // conversation; the panels below still render.
+  if (state.error || !state.data) return null;
+
+  const a = state.data as AttentionReport;
+  const items: Array<{ key: string; label: string; to: string; tone: 'warning' | 'info' }> = [];
+
+  if (a.appointments_today.length) {
+    items.push({
+      key: 'appointments',
+      label: `${a.appointments_today.length} appointment${a.appointments_today.length === 1 ? '' : 's'} today`,
+      to: '/appointments', tone: 'info',
+    });
+  }
+  if (a.unverified_payment_claims) {
+    items.push({
+      key: 'payments',
+      label: `${a.unverified_payment_claims} payment${a.unverified_payment_claims === 1 ? '' : 's'} to check`,
+      to: '/payments', tone: 'warning',
+    });
+  }
+  if (a.waiting_on_a_person.length) {
+    items.push({
+      key: 'waiting',
+      label: `${a.waiting_on_a_person.length} customer${a.waiting_on_a_person.length === 1 ? '' : 's'} waiting on a reply`,
+      to: '/inbox', tone: 'warning',
+    });
+  }
+  if (a.open_tickets.length) {
+    items.push({
+      key: 'tickets',
+      label: `${a.open_tickets.length} open ticket${a.open_tickets.length === 1 ? '' : 's'}`,
+      to: '/support', tone: 'info',
+    });
+  }
+  if (a.silent_customers.length) {
+    items.push({
+      key: 'silent',
+      label: `${a.silent_customers.length} customer${a.silent_customers.length === 1 ? '' : 's'} gone quiet`,
+      to: '/leads', tone: 'warning',
+    });
+  }
+
+  if (!items.length) return null;
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
+        <AlertTriangle size={14} style={{ color: 'var(--warning)' }} />
+        <div className="section-label">Needs you today</div>
+      </div>
+
+      <div style={{ display: 'grid', gap: 6 }}>
+        {items.map((item) => (
+          <Link
+            key={item.key}
+            to={item.to}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: 8, padding: '9px 10px', borderRadius: 'var(--radius)',
+              background: 'var(--surface-2)', fontSize: 12.5, color: 'inherit',
+              textDecoration: 'none', lineHeight: 1.4,
+            }}
+          >
+            <span style={{ minWidth: 0 }}>{item.label}</span>
+            <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>›</span>
+          </Link>
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 function TeamPanel({ status }: { status: ShwariStatus }) {
   // The manager is the agent the owner is talking to; listing it as a team

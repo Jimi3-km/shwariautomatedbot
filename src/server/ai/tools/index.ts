@@ -9,6 +9,15 @@ import {
 import {
   listTeam, recommendTeam, addAgent, configureAgent, activateAgent, setupStatus,
 } from './team.js';
+import {
+  listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
+  recordOrder, openTicket, listTickets, updateTicket, escalateToHuman,
+  scheduleFollowUp, listFollowUps, cancelFollowUp,
+} from './operations.js';
+import {
+  listProducts, saveProduct, findCustomers, updateCustomer,
+  businessMetrics, attentionNeeded,
+} from './insight.js';
 
 /**
  * The tool catalogue.
@@ -25,6 +34,11 @@ const ALL: Tool[] = [
   searchBusinessKnowledge, saveBusinessFact,
   recordKnowledgeGap, listKnowledgeGaps,
   listTeam, recommendTeam, addAgent, configureAgent, activateAgent, setupStatus,
+  listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
+  recordOrder, openTicket, listTickets, updateTicket, escalateToHuman,
+  scheduleFollowUp, listFollowUps, cancelFollowUp,
+  listProducts, saveProduct, findCustomers, updateCustomer,
+  businessMetrics, attentionNeeded,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));

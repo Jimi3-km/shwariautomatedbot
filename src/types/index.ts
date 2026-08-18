@@ -419,12 +419,16 @@ export interface ShwariMessage {
   from: 'you' | 'shwari';
   text: string;
   at: string;
+  /** Present on replies that did something. */
+  actions?: string[];
 }
 
 export interface ShwariReply {
   reply: string;
   /** True when the turn changed something, so the page knows to reload. */
   changed: boolean;
+  /** Which actions the turn actually carried out, for the UI to name. */
+  actions: string[];
 }
 
 export interface PairingCode {
@@ -465,4 +469,81 @@ export interface ConversationDetail {
   messages: ConversationMessage[];
   lead: Lead | null;
   payments: Payment[];
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+export type AppointmentStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+
+export interface Appointment {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  channel_type: ChannelType | null;
+  service_id: string | null;
+  service_name: string;
+  starts_at: string;
+  duration_minutes: number;
+  status: AppointmentStatus;
+  notes: string | null;
+  /** The agent role that booked it, or null when a person did. */
+  booked_by_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TicketStatus = 'open' | 'in_progress' | 'waiting' | 'resolved' | 'closed';
+export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface SupportTicket {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  conversation_id: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  subject: string;
+  body: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  assigned_to: string | null;
+  opened_by_agent: string | null;
+  resolution: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FollowUpStatus = 'pending' | 'sent' | 'cancelled' | 'failed';
+
+export interface FollowUp {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  conversation_id: string | null;
+  customer_id: string;
+  channel_type: ChannelType;
+  due_at: string;
+  message: string;
+  reason: string | null;
+  status: FollowUpStatus;
+  sent_at: string | null;
+  failure_reason: string | null;
+  created_by_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What needs a person's attention, computed without the model. */
+export interface AttentionReport {
+  silent_customers: Array<{ id: number; customer_name: string | null; stage: string | null; last_contact: string | null }>;
+  unverified_payment_claims: number;
+  open_tickets: Array<{ id: string; subject: string; priority: string; created_at: string }>;
+  appointments_today: Array<{ id: string; customer_name: string | null; service_name: string; starts_at: string }>;
+  unanswered_questions: Array<{ question: string; times_seen: number }>;
+  waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
 }

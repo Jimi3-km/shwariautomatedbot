@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin, handler } from '../auth.js';
 import { runAgentTurn, loadAgent, AgentUnavailableError } from '../ai/agent.js';
 import { llmConfigured } from '../ai/llm.js';
 import { issuePairingCode } from '../ai/admins.js';
+import { attentionNeeded } from '../ai/tools/insight.js';
 
 export const shwariRouter = Router();
 
@@ -33,7 +34,7 @@ const CONTEXT_TURNS = 12;
 async function thread(tenantId: string, userId: string, limit: number) {
   const { data } = await serviceClient
     .from('shwari_messages')
-    .select('role, body, created_at')
+    .select('role, body, actions, created_at')
     .eq('tenant_id', tenantId)
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
@@ -99,7 +100,10 @@ shwariRouter.post(
       tenant_id: ctx.tenantId, user_id: ctx.userId, role: 'shwari', body: reply, actions,
     });
 
-    res.json({ reply, changed: actions.length > 0 });
+    // The tool names go to the browser so it can say what happened in the
+    // owner's language. They are action identifiers, not internals: nothing
+    // here names a table, a column or an environment variable.
+    res.json({ reply, changed: actions.length > 0, actions });
   })
 );
 
@@ -119,6 +123,7 @@ shwariRouter.get(
         from: m.role === 'owner' ? 'you' : 'shwari',
         text: m.body,
         at: m.created_at,
+        actions: Array.isArray(m.actions) ? m.actions : [],
       })),
     });
   })
@@ -254,5 +259,36 @@ shwariRouter.get(
       team: (team ?? []).map((a) => ({ role: a.role, name: a.name, status: a.status })),
       open_questions: gaps ?? [],
     });
+  })
+);
+
+/**
+ * What needs attention, without asking the model anything.
+ *
+ * This runs the same query the agent's own tool runs, so the panel and the
+ * conversation can never disagree — and it keeps working when no model key is
+ * configured, which is the point: the dashboard should be useful before the AI
+ * is switched on, not after.
+ */
+shwariRouter.get(
+  '/shwari/attention',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    try {
+      const result = await attentionNeeded.run({}, {
+        tenantId: ctx.tenantId,
+        userId: ctx.userId,
+        agentRole: 'manager',
+        conversationId: null,
+        // Called directly rather than through runTool: there is no agent here,
+        // and a person reading their own dashboard is not a tool call to audit.
+        allowedTools: [],
+      });
+      res.json(result);
+    } catch (e) {
+      console.error('[shwari] attention failed:', e instanceof Error ? e.message : e);
+      res.status(502).json({ error: "We couldn't work that out just now." });
+    }
   })
 );

@@ -3,6 +3,8 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AppShell } from '../layouts/AppShell';
 import { Overview } from '../pages/Overview';
 import { Shwari } from '../pages/Shwari';
+import { Appointments } from '../pages/Appointments';
+import { Tickets } from '../pages/Tickets';
 import { Inbox } from '../pages/Inbox';
 import { Leads } from '../pages/Leads';
 import { LeadDetail } from '../pages/LeadDetail';
@@ -28,6 +30,8 @@ export const router = createBrowserRouter([
       { path: 'leads/:leadId', element: <LeadDetail /> },
       { path: 'products', element: <Products /> },
       { path: 'orders', element: <Orders /> },
+      { path: 'appointments', element: <Appointments /> },
+      { path: 'support', element: <Tickets /> },
       { path: 'payments', element: <Payments /> },
       { path: 'analytics', element: <Analytics /> },
       { path: 'agent', element: <AgentSettings /> },
