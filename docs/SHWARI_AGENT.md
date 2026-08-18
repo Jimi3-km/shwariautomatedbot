@@ -138,7 +138,8 @@ Current tools:
 |---|---|---|
 | Profile | `get_business_profile`, `update_business_profile` | manager |
 | Services | `list_services`, `save_service`, `remove_service` | manager (read: all) |
-| Products | `list_products`, `save_product` | manager (read: sales) |
+| | Also editable by hand on the **Services** page — same rows, no second copy | |
+| Products | `list_products`, `save_product`, `remove_product` | manager (read: sales) |
 | Hours | `get_opening_hours`, `set_opening_hours` | manager (read: all) |
 | Knowledge | `search_business_knowledge`, `save_business_fact` | manager (read: all) |
 | Learning | `record_knowledge_gap`, `list_knowledge_gaps` | all / manager |

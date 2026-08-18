@@ -15,7 +15,7 @@ import {
   scheduleFollowUp, listFollowUps, cancelFollowUp,
 } from './operations.js';
 import {
-  listProducts, saveProduct, findCustomers, updateCustomer,
+  listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
   businessMetrics, attentionNeeded,
 } from './insight.js';
 
@@ -38,7 +38,7 @@ const ALL: Tool[] = [
   recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
   openTicket, listTickets, updateTicket, escalateToHuman,
   scheduleFollowUp, listFollowUps, cancelFollowUp,
-  listProducts, saveProduct, findCustomers, updateCustomer,
+  listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
   businessMetrics, attentionNeeded,
 ];
 

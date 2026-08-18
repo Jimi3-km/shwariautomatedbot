@@ -9,7 +9,7 @@ import type {
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
-  AgentConfig, AgentRole, AgentStatus,
+  AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
 } from '../../types';
 
 export * from './client';
@@ -312,3 +312,25 @@ export const updateAgent = (
   role: AgentRole,
   body: { name?: string; objective?: string; instructions?: string; escalation?: string; status?: AgentStatus }
 ) => request<AgentConfig>(`/agents/${role}`, { method: 'PATCH', body });
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+// The same rows the agents read. A service added here is one the sales and
+// booking agents can talk about immediately — there is no separate copy.
+
+export const getServices = (activeOnly = false) =>
+  request<{ services: Service[] }>(`/services${qs({ active: activeOnly ? 'true' : undefined })}`);
+
+export const createService = (body: ServiceInput) =>
+  request<Service>('/services', { method: 'POST', body });
+
+export const updateService = (id: string, body: ServiceInput) =>
+  request<Service>(`/services/${id}`, { method: 'PUT', body });
+
+/** Switches it off; past appointments keep making sense. */
+export const archiveService = (id: string) =>
+  request<{ archived: boolean }>(`/services/${id}`, { method: 'DELETE' });
+
+export const deleteService = (id: string) =>
+  request<{ deleted: boolean }>(`/services/${id}?hard=true`, { method: 'DELETE' });

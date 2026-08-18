@@ -10,6 +10,7 @@ import { Inbox } from '../pages/Inbox';
 import { Leads } from '../pages/Leads';
 import { LeadDetail } from '../pages/LeadDetail';
 import { Products } from '../pages/Products';
+import { Services } from '../pages/Services';
 import { Orders } from '../pages/Orders';
 import { Payments } from '../pages/Payments';
 import { Analytics } from '../pages/Analytics';
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
       { path: 'leads', element: <Leads /> },
       { path: 'leads/:leadId', element: <LeadDetail /> },
       { path: 'products', element: <Products /> },
+      { path: 'services', element: <Services /> },
       { path: 'orders', element: <Orders /> },
       { path: 'appointments', element: <Appointments /> },
       { path: 'support', element: <Tickets /> },

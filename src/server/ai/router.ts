@@ -1,5 +1,6 @@
 import { serviceClient } from '../supabase.js';
 import { complete } from './llm.js';
+import { ensureWorkforce } from './agent.js';
 import { DEPARTMENTS, AGENT_BLUEPRINTS, type AgentRole } from './roles.js';
 
 /**
@@ -24,6 +25,14 @@ export interface Routed {
 }
 
 export async function chooseDepartment(tenantId: string, text: string): Promise<Routed | null> {
+  /**
+   * A customer can arrive before anyone has opened the dashboard. Without this
+   * the query below finds nothing, every customer message falls through to the
+   * n8n pipeline, and the departments never answer anyone until an owner
+   * happens to visit the AI team page.
+   */
+  await ensureWorkforce(tenantId);
+
   const { data: rows } = await serviceClient
     .from('agents')
     .select('role, status')

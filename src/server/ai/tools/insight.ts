@@ -397,3 +397,31 @@ export const attentionNeeded: Tool = {
     };
   },
 };
+
+export const removeProduct: Tool = {
+  name: 'remove_product',
+  description:
+    'Take a product out of stock so it is no longer offered. It is kept rather than deleted, so past orders still make sense.',
+  parameters: {
+    type: 'object',
+    properties: { name: { type: 'string' } },
+    required: ['name'],
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    const name = str(args, 'name', { required: true, max: 200 });
+
+    const { data, error } = await serviceClient
+      .from('products')
+      .update({ in_stock: false })
+      .eq('tenant_id', ctx.tenantId)
+      .ilike('name', name)
+      .select('id, name');
+
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new ToolInputError(`There is no product called "${name}". List them first.`);
+    return { removed: data.map((d) => d.name) };
+  },
+};

@@ -567,3 +567,38 @@ export interface AgentConfig {
   editable: boolean;
   updated_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+/**
+ * How a service can be taken. This is the field the booking agent reads before
+ * offering a slot, so it is a real behavioural setting rather than a label.
+ */
+export type BookingMode = 'direct' | 'consultation' | 'enquiry';
+
+export interface Service {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  /** Null means the price genuinely is not fixed; agents must say so. */
+  price_amount: number | null;
+  price_note: string | null;
+  duration_minutes: number | null;
+  booking_mode: BookingMode;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceInput {
+  name: string;
+  description?: string;
+  price_amount?: number | null;
+  price_note?: string | null;
+  duration_minutes?: number | null;
+  booking_mode?: BookingMode;
+  active?: boolean;
+}

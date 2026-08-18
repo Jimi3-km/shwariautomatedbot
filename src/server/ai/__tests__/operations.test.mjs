@@ -25,7 +25,7 @@ const {
   bookAppointment, rescheduleAppointment, recordOrder,
   scheduleFollowUp, escalateToHuman, openTicket, updateTicket,
 } = await import('../tools/operations.ts');
-const { saveProduct, updateCustomer, businessMetrics, findCustomers } =
+const { saveProduct, removeProduct, updateCustomer, businessMetrics, findCustomers } =
   await import('../tools/insight.ts');
 const { ToolInputError } = await import('../tools/types.ts');
 
@@ -232,6 +232,14 @@ await t('a negative silence window is refused', () =>
 await t('reads are marked as reads', () => {
   assert.equal(businessMetrics.mutates, false);
   assert.equal(findCustomers.mutates, false);
+});
+
+await t('removing a product needs a name', () =>
+  rejects(() => removeProduct.run({}, noConversation), /name is required/));
+
+await t('a product is taken out of stock, never deleted', () => {
+  assert.match(removeProduct.description, /kept rather than deleted/,
+    'past orders have to keep making sense');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

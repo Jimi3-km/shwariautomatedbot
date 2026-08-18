@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy,
+  Sparkles, CalendarDays, LifeBuoy, Wrench,
 } from 'lucide-react';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'unread' as const },
   { to: '/leads', label: 'Leads', icon: Users },
   { to: '/products', label: 'Products', icon: Package },
+  { to: '/services', label: 'Services', icon: Wrench },
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
   { to: '/appointments', label: 'Appointments', icon: CalendarDays },
   { to: '/support', label: 'Support', icon: LifeBuoy },

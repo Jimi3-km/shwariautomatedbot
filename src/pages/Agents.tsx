@@ -50,6 +50,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   remove_service: 'Stop offering a service',
   list_products: 'Look up your products',
   save_product: 'Add or change a product',
+  remove_product: 'Take a product out of stock',
   get_opening_hours: 'Check your opening hours',
   set_opening_hours: 'Set your opening hours',
   search_business_knowledge: 'Search what your business has told it',

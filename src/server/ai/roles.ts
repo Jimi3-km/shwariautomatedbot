@@ -74,7 +74,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       // Knowing the business
       'get_business_profile', 'update_business_profile',
       'list_services', 'save_service', 'remove_service',
-      'list_products', 'save_product',
+      'list_products', 'save_product', 'remove_product',
       'get_opening_hours', 'set_opening_hours',
       'search_business_knowledge', 'save_business_fact',
       'list_knowledge_gaps', 'record_knowledge_gap',
