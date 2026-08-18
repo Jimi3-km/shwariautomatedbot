@@ -104,8 +104,11 @@ The split that matters is between the **blueprint** and the **instructions**.
 That is why "make the sales agent more proactive" is a safe request and "ignore
 your pricing rules" is not.
 
-Three roles exist now: `manager` (Shwari), `sales`, `support`. The manager is
-created on first use; the other two the owner asks for.
+Five roles, the same five for every business: `manager` (Shwari), `sales`,
+`support`, `booking` and `orders`. They are provisioned together the first time
+anything needs one — there is no assembly step, no choosing a team, and no
+create endpoint. An owner renames a department, adjusts how it works, or
+switches it off; that is all.
 
 ### Shwari cannot modify itself
 

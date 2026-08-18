@@ -394,7 +394,7 @@ export interface SetupStatus {
 // Shwari
 // ---------------------------------------------------------------------------
 
-export type AgentRole = 'manager' | 'sales' | 'support';
+export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders';
 export type AgentStatus = 'draft' | 'active' | 'disabled';
 
 export interface TeamMember {
@@ -548,24 +548,22 @@ export interface AttentionReport {
   waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
 }
 
-/** An agent as the manual editor sees it. Capabilities are a count, not a list. */
+/** One of the five agents every business has. */
 export interface AgentConfig {
   id: string;
   role: AgentRole;
   name: string;
+  /** One line on what this agent is for. */
+  summary: string;
   objective: string;
+  /** What it handles, in the owner's words. */
+  responsibilities: string[];
   instructions: string;
   escalation: string;
   status: AgentStatus;
-  capability_count: number;
-  /** False for the manager: its own capabilities are fixed. */
+  /** The real tool names this agent holds. Not decorative. */
+  capabilities: string[];
+  /** False for the manager: it directs the others, so its setup is fixed. */
   editable: boolean;
-  created_at: string;
   updated_at: string;
-}
-
-export interface AvailableAgent {
-  role: AgentRole;
-  name: string;
-  summary: string;
 }

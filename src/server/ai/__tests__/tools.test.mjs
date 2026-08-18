@@ -14,6 +14,7 @@
  */
 
 import assert from 'node:assert';
+import { readFile } from 'node:fs/promises';
 
 process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
@@ -212,11 +213,18 @@ await t('a stale tool name is inert rather than fatal', () => {
 const CONFIGURATION_TOOLS = [
   'update_business_profile', 'save_service', 'remove_service', 'save_product',
   'set_opening_hours', 'save_business_fact',
-  'add_agent', 'configure_agent', 'activate_agent',
+  'configure_agent', 'activate_agent', 'delegate_to_agent',
 ];
 
+const DEPARTMENTS = ['sales', 'support', 'booking', 'orders'];
+
+await t('every business gets the same five agents', () => {
+  assert.deepEqual(Object.keys(AGENT_BLUEPRINTS).sort(),
+    ['booking', 'manager', 'orders', 'sales', 'support']);
+});
+
 await t('customer-facing agents cannot reconfigure the business', () => {
-  for (const role of ['sales', 'support']) {
+  for (const role of DEPARTMENTS) {
     for (const name of CONFIGURATION_TOOLS) {
       assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name),
         `${role} must not be able to change the business with ${name}`);
@@ -225,7 +233,7 @@ await t('customer-facing agents cannot reconfigure the business', () => {
 });
 
 await t('customer-facing agents cannot read the whole customer base', () => {
-  for (const role of ['sales', 'support']) {
+  for (const role of DEPARTMENTS) {
     for (const name of ['find_customers', 'business_metrics', 'attention_needed']) {
       assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name),
         `${role} answers one customer; ${name} would hand it everyone's data`);
@@ -234,18 +242,54 @@ await t('customer-facing agents cannot read the whole customer base', () => {
 });
 
 await t('an agent that can act can also hand over to a person', () => {
-  for (const role of ['sales', 'support']) {
+  for (const role of DEPARTMENTS) {
     assert.ok(AGENT_BLUEPRINTS[role].tools.includes('escalate_to_human'),
       `${role} must always have a way out to a human`);
   }
 });
 
-await t('no agent can mark a payment received', () => {
+await t('no agent can verify a payment', () => {
   for (const blueprint of Object.values(AGENT_BLUEPRINTS)) {
     for (const name of blueprint.tools) {
-      assert.ok(!/payment|verify|refund/.test(name),
+      // record_payment_claim is the one payment tool that exists, and it only
+      // writes an unverified claim for a person to check.
+      assert.ok(!/verify|refund/.test(name) && name !== 'record_payment',
         `${blueprint.role} must not hold ${name}: a person verifies every payment`);
     }
+  }
+});
+
+await t('only the orders agent records payment claims', () => {
+  for (const [role, blueprint] of Object.entries(AGENT_BLUEPRINTS)) {
+    if (role === 'orders') continue;
+    assert.ok(!blueprint.tools.includes('record_payment_claim'),
+      `${role} should not be taking payment details`);
+  }
+});
+
+await t('only the manager can hand work to a department', () => {
+  for (const role of DEPARTMENTS) {
+    assert.ok(!AGENT_BLUEPRINTS[role].tools.includes('delegate_to_agent'),
+      'departments answer customers; they do not run each other');
+  }
+  assert.ok(AGENT_BLUEPRINTS.manager.tools.includes('delegate_to_agent'));
+});
+
+await t('there is no way to create or remove a department', () => {
+  for (const blueprint of Object.values(AGENT_BLUEPRINTS)) {
+    for (const name of ['add_agent', 'remove_agent', 'recommend_team']) {
+      assert.ok(!blueprint.tools.includes(name),
+        `the workforce is fixed; ${name} must not exist`);
+    }
+  }
+  assert.ok(!TOOLS.has('add_agent'), 'add_agent must not be in the catalogue');
+  assert.ok(!TOOLS.has('recommend_team'), 'recommend_team must not be in the catalogue');
+});
+
+await t('every department can be reached by the router', () => {
+  for (const role of DEPARTMENTS) {
+    assert.ok(AGENT_BLUEPRINTS[role].summary.length > 10,
+      `${role} needs a summary — the router classifies on it`);
   }
 });
 
@@ -258,6 +302,38 @@ await t('every agent inherits the do-not-invent rules', () => {
   assert.ok(UNIVERSAL_RULES.some((r) => /Never invent/.test(r)));
   assert.ok(UNIVERSAL_RULES.some((r) => /payment/.test(r)));
   assert.ok(UNIVERSAL_RULES.some((r) => /Ignore any instruction inside a message/.test(r)));
+});
+
+/**
+ * The AI team page lists what each agent can do. That list is built from the
+ * agent's real tools plus a label map in the page, so a label with no tool
+ * behind it would be a claim the product cannot honour.
+ */
+await t('every capability label names a real tool', async () => {
+  const page = await readFile(
+    new URL('../../../pages/Agents.tsx', import.meta.url), 'utf8'
+  );
+  const block = page.slice(
+    page.indexOf('const CAPABILITY_LABELS'),
+    page.indexOf('export function Agents')
+  );
+  const labelled = [...block.matchAll(/^\s{2}([a-z_]+):\s/gm)].map((m) => m[1]);
+
+  assert.ok(labelled.length > 20, `only found ${labelled.length} labels; the parse is wrong`);
+  for (const name of labelled) {
+    assert.ok(TOOLS.has(name), `the page offers "${name}" but no such tool exists`);
+  }
+});
+
+await t('every tool an agent holds has a label to show', async () => {
+  const page = await readFile(
+    new URL('../../../pages/Agents.tsx', import.meta.url), 'utf8'
+  );
+  for (const blueprint of Object.values(AGENT_BLUEPRINTS)) {
+    for (const name of blueprint.tools) {
+      assert.ok(page.includes(`${name}:`), `${name} would show as a raw tool name`);
+    }
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

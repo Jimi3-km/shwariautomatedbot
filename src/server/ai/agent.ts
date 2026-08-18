@@ -1,7 +1,7 @@
 import { serviceClient } from '../supabase.js';
 import { complete, LlmNotConfiguredError, type ChatMessage, type ToolDefinition } from './llm.js';
 import { TOOLS, toolsFor, runTool, definitionOf, type AgentContext } from './tools/index.js';
-import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, type AgentRole } from './roles.js';
+import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, ALL_ROLES, type AgentRole } from './roles.js';
 
 /**
  * The agent runtime.
@@ -66,48 +66,98 @@ interface AgentRow {
 }
 
 /**
- * Load an agent, creating the manager on first use.
+ * Make sure this business has its workforce.
  *
- * Every tenant needs a manager the moment its owner first says hello, and
- * making that a migration would leave tenants created afterwards without one.
- * Sales and support are never conjured this way — those the owner asks for.
+ * Every tenant gets the same five agents, and they are created together the
+ * first time anything needs one. There is no assembly step and no choosing:
+ * a business that signs up today has a manager and four departments before its
+ * owner types a word.
+ *
+ * Idempotent by construction — the unique constraint on (tenant_id, role) means
+ * a concurrent call inserts nothing rather than duplicating a department.
+ */
+export async function ensureWorkforce(tenantId: string): Promise<void> {
+  const { data: existing } = await serviceClient
+    .from('agents').select('role').eq('tenant_id', tenantId);
+
+  const have = new Set((existing ?? []).map((a) => a.role));
+  const missing = ALL_ROLES.filter((r) => !have.has(r));
+  if (!missing.length) return;
+
+  const { error } = await serviceClient.from('agents').insert(
+    missing.map((role) => {
+      const blueprint = AGENT_BLUEPRINTS[role];
+      return {
+        tenant_id: tenantId,
+        role,
+        name: blueprint.defaultName,
+        objective: blueprint.objective,
+        instructions: '',
+        tools: blueprint.tools,
+        permissions: blueprint.permissions,
+        escalation: blueprint.escalation,
+        // Ready to work. A department nobody switched on is a department that
+        // silently does nothing, which is worse than one that is visibly on.
+        status: 'active',
+      };
+    })
+  );
+
+  // A duplicate key means another request got there first, which is the
+  // outcome we wanted anyway.
+  if (error && error.code !== '23505') {
+    console.error('[agent] could not provision the workforce:', error.message);
+  }
+}
+
+/**
+ * Load one agent, provisioning the workforce if this tenant has none yet.
  */
 export async function loadAgent(tenantId: string, role: AgentRole): Promise<AgentRow | null> {
-  const { data } = await serviceClient
-    .from('agents')
-    .select('role, name, objective, instructions, tools, permissions, escalation, status')
-    .eq('tenant_id', tenantId)
-    .eq('role', role)
-    .maybeSingle();
+  const read = () =>
+    serviceClient
+      .from('agents')
+      .select('role, name, objective, instructions, tools, permissions, escalation, status')
+      .eq('tenant_id', tenantId)
+      .eq('role', role)
+      .maybeSingle();
 
+  const { data } = await read();
   if (data) return data as AgentRow;
-  if (role !== 'manager') return null;
 
-  const blueprint = AGENT_BLUEPRINTS.manager;
-  const { data: created, error } = await serviceClient
-    .from('agents')
-    .insert({
-      tenant_id: tenantId,
-      role: 'manager',
-      name: blueprint.defaultName,
-      objective: blueprint.objective,
-      instructions: '',
-      tools: blueprint.tools,
-      permissions: blueprint.permissions,
-      escalation: blueprint.escalation,
-      status: 'active',
-    })
-    .select('role, name, objective, instructions, tools, permissions, escalation, status')
-    .single();
+  await ensureWorkforce(tenantId);
+  const { data: provisioned } = await read();
+  return (provisioned as AgentRow) ?? null;
+}
 
-  if (error) {
-    // A concurrent first message can lose the race against the unique
-    // constraint; the other insert's row is just as good.
-    if (error.code === '23505') return loadAgent(tenantId, role);
-    console.error('[agent] could not create the manager agent:', error.message);
-    return null;
+/**
+ * Keep a row's capabilities in step with its blueprint.
+ *
+ * Tools are not stored because they are configurable — they are stored so the
+ * runtime can read them in one query. When a release adds a capability to a
+ * department, every existing row should get it; nothing about that is a
+ * per-tenant decision.
+ */
+export async function syncCapabilities(tenantId: string): Promise<void> {
+  const { data: rows } = await serviceClient
+    .from('agents').select('role, tools').eq('tenant_id', tenantId);
+
+  for (const row of rows ?? []) {
+    const blueprint = AGENT_BLUEPRINTS[row.role as AgentRole];
+    if (!blueprint) continue;
+
+    const current = Array.isArray(row.tools) ? row.tools : [];
+    const same =
+      current.length === blueprint.tools.length &&
+      blueprint.tools.every((t) => current.includes(t));
+    if (same) continue;
+
+    await serviceClient
+      .from('agents')
+      .update({ tools: blueprint.tools, permissions: blueprint.permissions })
+      .eq('tenant_id', tenantId)
+      .eq('role', row.role);
   }
-  return created as AgentRow;
 }
 
 // ---------------------------------------------------------------------------

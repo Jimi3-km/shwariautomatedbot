@@ -6,12 +6,12 @@ import {
   searchBusinessKnowledge, saveBusinessFact,
   recordKnowledgeGap, listKnowledgeGaps,
 } from './business.js';
-import {
-  listTeam, recommendTeam, addAgent, configureAgent, activateAgent, setupStatus,
-} from './team.js';
+import { listTeam, configureAgent, activateAgent, setupStatus } from './team.js';
+import { delegateToAgent } from './delegate.js';
 import {
   listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
-  recordOrder, openTicket, listTickets, updateTicket, escalateToHuman,
+  recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
+  openTicket, listTickets, updateTicket, escalateToHuman,
   scheduleFollowUp, listFollowUps, cancelFollowUp,
 } from './operations.js';
 import {
@@ -33,9 +33,10 @@ const ALL: Tool[] = [
   getOpeningHours, setOpeningHours,
   searchBusinessKnowledge, saveBusinessFact,
   recordKnowledgeGap, listKnowledgeGaps,
-  listTeam, recommendTeam, addAgent, configureAgent, activateAgent, setupStatus,
+  listTeam, configureAgent, activateAgent, setupStatus, delegateToAgent,
   listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
-  recordOrder, openTicket, listTickets, updateTicket, escalateToHuman,
+  recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
+  openTicket, listTickets, updateTicket, escalateToHuman,
   scheduleFollowUp, listFollowUps, cancelFollowUp,
   listProducts, saveProduct, findCustomers, updateCustomer,
   businessMetrics, attentionNeeded,

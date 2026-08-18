@@ -682,3 +682,172 @@ export const cancelFollowUp: Tool = {
     return { cancelled: true };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Order tracking and payment claims
+// ---------------------------------------------------------------------------
+
+const ORDER_STATES = ['pending', 'confirmed', 'delivered', 'cancelled'] as const;
+
+export const listOrders: Tool = {
+  name: 'list_orders',
+  description:
+    'Look up orders — for one customer, or the most recent across the business. Use this to answer "where is my order?".',
+  parameters: {
+    type: 'object',
+    properties: {
+      lead_id: { type: 'number', description: "Only this customer's orders." },
+      order_ref: { type: 'string', description: 'A specific order reference.' },
+    },
+    additionalProperties: false,
+  },
+  mutates: false,
+
+  async run(args, ctx) {
+    const ref = str(args, 'order_ref', { max: 40 });
+    const leadId = num(args, 'lead_id');
+
+    let q = serviceClient
+      .from('orders')
+      .select('id, order_ref, items, total, currency, status, payment_status, delivery_location, created_at')
+      .eq('tenant_id', ctx.tenantId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (ref) q = q.eq('order_ref', ref.toUpperCase());
+    else if (leadId !== null) q = q.eq('lead_id', leadId);
+    else if (ctx.conversationId) {
+      // In a customer's own conversation, "my orders" means theirs — never
+      // everyone's. Without this a customer could ask an agent to read the
+      // whole order book back to them.
+      const customer = await resolveCustomer({}, ctx).catch(() => null);
+      if (customer?.leadId) q = q.eq('lead_id', customer.leadId);
+      else return { orders: [] };
+    }
+
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return { orders: data ?? [] };
+  },
+};
+
+export const updateOrderStatus: Tool = {
+  name: 'update_order_status',
+  description:
+    'Move an order along: confirmed, delivered or cancelled. This is the fulfilment status only — it says nothing about whether the order has been paid for, which only a person can decide.',
+  parameters: {
+    type: 'object',
+    properties: {
+      order_ref: { type: 'string' },
+      status: { type: 'string', enum: [...ORDER_STATES] },
+    },
+    required: ['order_ref', 'status'],
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    const ref = str(args, 'order_ref', { required: true, max: 40 }).toUpperCase();
+    const status = oneOf(args, 'status', ORDER_STATES, null);
+
+    const { data, error } = await serviceClient
+      .from('orders')
+      // payment_status is deliberately absent. It changes only through the
+      // verification route, which requires a real staff user and is enforced
+      // by a database trigger independently of this code.
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('tenant_id', ctx.tenantId)
+      .eq('order_ref', ref)
+      .select('order_ref, status, payment_status')
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!data) throw new ToolInputError(`There is no order ${ref}.`);
+    return { updated: data };
+  },
+};
+
+export const recordPaymentClaim: Tool = {
+  name: 'record_payment_claim',
+  description:
+    'Write down what a customer says about a payment they have made, so a person can check it. This does NOT mean the money arrived — it goes onto a list for your team to verify. Always tell the customer someone will confirm shortly; never tell them the payment is confirmed.',
+  parameters: {
+    type: 'object',
+    properties: {
+      amount: { type: 'number', description: 'The amount the customer says they sent.' },
+      transaction_code: { type: 'string', description: 'The reference they gave you, exactly as they gave it.' },
+      payment_method: { type: 'string', description: 'How they say they paid.' },
+      order_ref: { type: 'string', description: 'The order it is for, if there is one.' },
+      lead_id: { type: 'number' },
+    },
+    required: ['transaction_code'],
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    const code = str(args, 'transaction_code', { required: true, max: 80 });
+    const amount = num(args, 'amount');
+    if (amount !== null && amount < 0) throw new ToolInputError('amount cannot be negative.');
+
+    const customer = await resolveCustomer(args, ctx).catch(() => null);
+    const ref = str(args, 'order_ref', { max: 40 }).toUpperCase();
+
+    let orderId: string | null = null;
+    if (ref) {
+      const { data: order } = await serviceClient
+        .from('orders').select('id').eq('tenant_id', ctx.tenantId).eq('order_ref', ref).maybeSingle();
+      if (!order) throw new ToolInputError(`There is no order ${ref}.`);
+      orderId = order.id;
+    }
+
+    // The same reference twice is the customer repeating themselves, not a
+    // second payment. Two claims would mean two things for staff to verify.
+    const { data: existing } = await serviceClient
+      .from('payments')
+      .select('id, verification_status')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('transaction_code', code)
+      .maybeSingle();
+
+    if (existing) {
+      return {
+        recorded: false,
+        already_known: true,
+        note: 'That reference is already on the list. Tell the customer it is being checked.',
+      };
+    }
+
+    const { data: tenant } = await serviceClient
+      .from('tenants').select('currency').eq('id', ctx.tenantId).single();
+
+    const { data, error } = await serviceClient
+      .from('payments')
+      .insert({
+        tenant_id: ctx.tenantId,
+        lead_id: customer?.leadId ?? null,
+        order_id: orderId,
+        conversation_id: ctx.conversationId,
+        customer_id: customer?.customerId ?? null,
+        transaction_code: code,
+        amount,
+        currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
+        payment_method: str(args, 'payment_method', { max: 60 }) || null,
+        // Both fixed. An agent records a claim; it never records an outcome.
+        // verified_by and verified_at stay null, which the database trigger
+        // requires for any row that is not verified.
+        payment_status: 'claimed',
+        verification_status: 'unverified',
+      })
+      .select('id, transaction_code, amount, currency, verification_status')
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    return {
+      recorded: true,
+      claim: data,
+      note: 'On the list for a person to verify. Do not tell the customer it is confirmed.',
+    };
+  },
+};

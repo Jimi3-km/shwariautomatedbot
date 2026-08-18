@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { serviceClient } from '../supabase.js';
 import { requireAuth, requireAdmin, handler } from '../auth.js';
-import { runAgentTurn, loadAgent, AgentUnavailableError } from '../ai/agent.js';
+import {
+  runAgentTurn, loadAgent, ensureWorkforce, syncCapabilities, AgentUnavailableError,
+} from '../ai/agent.js';
 import { llmConfigured } from '../ai/llm.js';
 import { issuePairingCode } from '../ai/admins.js';
 import { attentionNeeded } from '../ai/tools/insight.js';
-import { AGENT_BLUEPRINTS } from '../ai/roles.js';
+import { AGENT_BLUEPRINTS, ALL_ROLES, DEPARTMENTS } from '../ai/roles.js';
 
 export const shwariRouter = Router();
 
@@ -295,98 +297,74 @@ shwariRouter.get(
 );
 
 // ---------------------------------------------------------------------------
-// Configuring agents by hand
+// The workforce
 // ---------------------------------------------------------------------------
 
 /**
- * The manual alternative to talking to Shwari.
+ * The five agents, as the AI team page shows them.
  *
- * Everything here can also be done by asking Shwari in plain English, and most
- * owners will. But an agent is a row, and a person should be able to see and
- * edit that row directly — to check what an agent was actually told, to fix
- * something without a conversation, or simply because they prefer a form.
+ * There is no create endpoint. A business does not assemble a team: it is
+ * provisioned whole, here, the first time anyone looks. `syncCapabilities`
+ * then brings older rows up to date with their blueprint, so a release that
+ * gives a department a new capability reaches every tenant without a migration.
  *
- * The guards match the ones in the tool layer exactly, because the tool layer
- * is not the only way in. `tools`, `permissions` and the manager's own row are
- * not editable from here either: what an agent is capable of is the platform's
- * decision, not a per-tenant setting, and the reasons are the same whether the
- * request came from a model or from a browser.
+ * Capabilities are returned as the real tool names their agent actually holds,
+ * paired with a human label. Nothing on that page is decorative — if a
+ * capability is listed, the agent can call it.
  */
-
-const EDITABLE_ROLES = ['sales', 'support'] as const;
-const AGENT_STATES = ['draft', 'active', 'disabled'] as const;
-
 shwariRouter.get(
   '/agents',
   requireAuth,
   handler(async (req, res) => {
     const ctx = req.ctx!;
+
+    await ensureWorkforce(ctx.tenantId);
+    await syncCapabilities(ctx.tenantId);
+
     const { data, error } = await serviceClient
       .from('agents')
-      .select('id, role, name, objective, instructions, escalation, status, tools, created_at, updated_at')
-      .eq('tenant_id', ctx.tenantId)
-      .order('role');
+      .select('id, role, name, objective, instructions, escalation, status, tools, updated_at')
+      .eq('tenant_id', ctx.tenantId);
 
     if (error) return res.status(400).json({ error: error.message });
 
+    const byRole = new Map((data ?? []).map((a) => [a.role, a]));
+
     res.json({
-      agents: (data ?? []).map((a) => ({
-        ...a,
-        // What it can do, as a count rather than a list of internal names.
-        capability_count: Array.isArray(a.tools) ? a.tools.length : 0,
-        tools: undefined,
-        editable: (EDITABLE_ROLES as readonly string[]).includes(a.role),
-      })),
-      /** Roles this business could still add, for the "add agent" control. */
-      available: EDITABLE_ROLES.filter((r) => !(data ?? []).some((a) => a.role === r)).map((role) => ({
-        role,
-        name: AGENT_BLUEPRINTS[role].defaultName,
-        summary: AGENT_BLUEPRINTS[role].summary,
-      })),
+      agents: ALL_ROLES.flatMap((role) => {
+        const row = byRole.get(role);
+        if (!row) return [];
+        const blueprint = AGENT_BLUEPRINTS[role];
+
+        return [{
+          id: row.id,
+          role,
+          name: row.name,
+          summary: blueprint.summary,
+          objective: row.objective || blueprint.objective,
+          responsibilities: blueprint.responsibilities,
+          instructions: row.instructions,
+          escalation: row.escalation || blueprint.escalation,
+          status: row.status,
+          // The agent's own tool list, straight from the row the runtime reads.
+          capabilities: Array.isArray(row.tools) ? row.tools : [],
+          /** The manager directs the others, so it is not editable. */
+          editable: role !== 'manager',
+          updated_at: row.updated_at,
+        }];
+      }),
     });
   })
 );
 
-shwariRouter.post(
-  '/agents',
-  requireAuth,
-  requireAdmin,
-  handler(async (req, res) => {
-    const ctx = req.ctx!;
-    const role = String(req.body?.role ?? '');
-
-    if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
-      return res.status(400).json({ error: `role must be one of: ${EDITABLE_ROLES.join(', ')}` });
-    }
-
-    const blueprint = AGENT_BLUEPRINTS[role as 'sales' | 'support'];
-    const { data, error } = await serviceClient
-      .from('agents')
-      .insert({
-        tenant_id: ctx.tenantId,
-        role,
-        name: String(req.body?.name ?? '').trim().slice(0, 60) || blueprint.defaultName,
-        objective: blueprint.objective,
-        instructions: '',
-        // Capability comes from the blueprint, never from the request body.
-        tools: blueprint.tools,
-        permissions: blueprint.permissions,
-        escalation: blueprint.escalation,
-        status: 'draft',
-      })
-      .select('id, role, name, objective, instructions, escalation, status')
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
-        return res.status(409).json({ error: `You already have a ${role} agent.` });
-      }
-      return res.status(400).json({ error: error.message });
-    }
-    res.status(201).json(data);
-  })
-);
-
+/**
+ * Reword a department, or switch it off.
+ *
+ * Name, purpose, standing instructions, escalation and status — nothing else.
+ * `tools` and `permissions` are absent by design and rejected if sent: the
+ * payment, escalation and tenancy guarantees hold precisely because capability
+ * is fixed. The manager is not editable at all.
+ */
 shwariRouter.patch(
   '/agents/:role',
   requireAuth,
@@ -397,11 +375,18 @@ shwariRouter.patch(
 
     if (role === 'manager') {
       return res.status(403).json({
-        error: 'Shwari runs your other agents, so its own capabilities are fixed. You can still tell it how to work in conversation.',
+        error: 'Shwari directs your other agents, so its own setup is fixed. You can still tell it how you like things done in conversation.',
       });
     }
-    if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
-      return res.status(404).json({ error: 'No such agent.' });
+    if (!(DEPARTMENTS as readonly string[]).includes(role)) {
+      return res.status(404).json({ error: 'No such department.' });
+    }
+    for (const forbidden of ['tools', 'permissions', 'capabilities', 'role']) {
+      if (req.body?.[forbidden] !== undefined) {
+        return res.status(400).json({
+          error: "What an agent is able to do is fixed. You can change its name, how it works, and whether it's on.",
+        });
+      }
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -435,7 +420,9 @@ shwariRouter.patch(
       .maybeSingle();
 
     if (error) return res.status(400).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: 'That agent does not exist yet.' });
+    if (!data) return res.status(404).json({ error: 'That department does not exist yet.' });
     res.json(data);
   })
 );
+
+const AGENT_STATES = ['draft', 'active', 'disabled'] as const;

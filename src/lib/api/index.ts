@@ -9,7 +9,7 @@ import type {
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
-  AgentConfig, AvailableAgent, AgentRole, AgentStatus,
+  AgentConfig, AgentRole, AgentStatus,
 } from '../../types';
 
 export * from './client';
@@ -300,15 +300,12 @@ export const getAttention = () => request<AttentionReport>('/shwari/attention');
 // Agents, configured by hand
 // ---------------------------------------------------------------------------
 
-export const getAgents = () =>
-  request<{ agents: AgentConfig[]; available: AvailableAgent[] }>('/agents');
-
-export const createAgent = (body: { role: AgentRole; name?: string }) =>
-  request<AgentConfig>('/agents', { method: 'POST', body });
+/** The five agents. Provisioned on first read; there is nothing to create. */
+export const getAgents = () => request<{ agents: AgentConfig[] }>('/agents');
 
 /**
  * Name, objective, instructions, escalation and status only. Capabilities are
- * not editable by anyone — the server rejects them, and the manager's own row
+ * not editable by anyone — the server rejects them outright — and the manager
  * is not editable at all.
  */
 export const updateAgent = (

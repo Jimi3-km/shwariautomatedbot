@@ -3,6 +3,8 @@ import { forwardToPipeline, type ResolvedChannel } from './inbound.js';
 import { getProvider } from '../channels/providers/index.js';
 import { findAdmin, redeemPairingCode, looksLikePairingCode } from '../ai/admins.js';
 import { runAgentTurn, AgentUnavailableError } from '../ai/agent.js';
+import { chooseDepartment } from '../ai/router.js';
+import { llmConfigured } from '../ai/llm.js';
 import type { NormalizedInboundEvent } from '../channels/meta/types.js';
 
 /**
@@ -13,14 +15,19 @@ import type { NormalizedInboundEvent } from '../channels/meta/types.js';
  *
  *   1. it is a pairing code from someone claiming to be the owner — redeem it
  *   2. the sender is a known administrator — Shwari answers, in this process
- *   3. anyone else — the existing n8n sales pipeline answers, as it always has
+ *   3. a customer — the department the message belongs to answers
+ *   4. nothing above applied — the existing n8n pipeline answers, as it always
+ *      has
  *
- * Case 3 is the default and is unchanged. That is deliberate: this file adds a
- * branch in front of the working system rather than replacing it.
+ * Case 4 is the floor, not the exception: it catches a server with no model
+ * key, a business with every department switched off, and any department that
+ * fails mid-turn. A tenant that has not adopted the workforce keeps exactly the
+ * behaviour it had before.
  */
 
 export type DispatchOutcome =
   | { handledBy: 'shwari'; actions: string[] }
+  | { handledBy: 'department'; role: string; actions: string[] }
   | { handledBy: 'pairing' }
   | { handledBy: 'pipeline'; forwarded: boolean; reason?: string }
   | { handledBy: 'none'; reason: string };
@@ -86,7 +93,37 @@ export async function dispatchInbound(
     }
   }
 
-  // --- 3. the existing pipeline --------------------------------------------
+  // --- 3. a department ------------------------------------------------------
+  // A customer message goes to whichever department it belongs to. If no model
+  // is configured, or no department is live, this falls through to the n8n
+  // pipeline exactly as it did before — so a tenant that has not switched the
+  // workforce on keeps the behaviour it already had.
+  if (llmConfigured().configured) {
+    const routed = await chooseDepartment(event.tenantId, text);
+
+    if (routed) {
+      try {
+        const turn = await runAgentTurn({
+          tenantId: event.tenantId,
+          role: routed.role,
+          userId: null,
+          conversationId,
+          text: text || '(the customer sent an attachment)',
+        });
+        await reply(event, channel, conversationId, turn.reply);
+        return { handledBy: 'department', role: routed.role, actions: turn.actions };
+      } catch (e) {
+        // A department that cannot answer must not swallow the customer's
+        // message: the existing pipeline is still there and still works.
+        console.error(
+          `[dispatch] ${routed.role} could not answer, falling back to the pipeline:`,
+          e instanceof Error ? e.message : e
+        );
+      }
+    }
+  }
+
+  // --- 4. the existing pipeline --------------------------------------------
   const forwarded = await forwardToPipeline(event, channel.secretToken);
   return { handledBy: 'pipeline', ...forwarded };
 }

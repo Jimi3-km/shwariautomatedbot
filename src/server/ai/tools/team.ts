@@ -1,6 +1,6 @@
 import { serviceClient } from '../../supabase.js';
 import { ToolInputError, str, oneOf, type Tool } from './types.js';
-import { AGENT_BLUEPRINTS, type AgentRole } from '../roles.js';
+import { AGENT_BLUEPRINTS, DEPARTMENTS, type AgentRole } from '../roles.js';
 
 /**
  * Tools for shaping the AI team.
@@ -12,12 +12,17 @@ import { AGENT_BLUEPRINTS, type AgentRole } from '../roles.js';
  * rather than in a prompt the model could be talked out of.
  */
 
-const CONFIGURABLE_ROLES: AgentRole[] = ['sales', 'support'];
+/**
+ * Departments the owner may re-word or switch off. The manager is absent on
+ * purpose: it directs the others, and something that could reconfigure itself
+ * would not be a manager.
+ */
+const CONFIGURABLE_ROLES: AgentRole[] = [...DEPARTMENTS];
 
 export const listTeam: Tool = {
   name: 'list_team',
   description:
-    'List the AI agents this business has, what each is for, and whether it is live. Call this before recommending or changing anything.',
+    'List this business\'s five agents, what each is for, and whether it is live. Call this before changing anything or before answering a question about the team.',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   mutates: false,
 
@@ -29,106 +34,13 @@ export const listTeam: Tool = {
       .order('role');
     if (error) throw new Error(error.message);
 
-    const present = new Set((data ?? []).map((a) => a.role));
     return {
-      agents: data ?? [],
-      available_to_add: CONFIGURABLE_ROLES.filter((r) => !present.has(r)).map((r) => ({
-        role: r,
-        what_it_does: AGENT_BLUEPRINTS[r].summary,
+      agents: (data ?? []).map((a) => ({
+        ...a,
+        what_it_does: AGENT_BLUEPRINTS[a.role as AgentRole]?.summary ?? '',
       })),
+      note: 'Every business has these five. You cannot add or remove a department, only rename one, adjust how it works, or switch it off.',
     };
-  },
-};
-
-export const recommendTeam: Tool = {
-  name: 'recommend_team',
-  description:
-    'Work out which agents this business should start with, based on what it does and what is already set up. This only produces a recommendation — nothing is created until the owner agrees and you call add_agent.',
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
-  mutates: false,
-
-  async run(_args, ctx) {
-    const [{ data: tenant }, { count: services }, { data: existing }, { data: channels }] =
-      await Promise.all([
-        serviceClient.from('tenants').select('business_category, business_description').eq('id', ctx.tenantId).single(),
-        serviceClient.from('services').select('id', { count: 'exact', head: true })
-          .eq('tenant_id', ctx.tenantId).eq('active', true),
-        serviceClient.from('agents').select('role, status').eq('tenant_id', ctx.tenantId),
-        serviceClient.from('channels').select('channel_type').eq('tenant_id', ctx.tenantId).eq('status', 'active'),
-      ]);
-
-    const have = new Set((existing ?? []).map((a) => a.role));
-    const category = `${tenant?.business_category ?? ''} ${tenant?.business_description ?? ''}`.toLowerCase();
-
-    // A business that books appointments needs reception before it needs
-    // selling; a business with a catalogue is the other way round. Both end up
-    // with both agents, so this only decides the order of the conversation.
-    const appointmentLed = /clinic|dental|salon|spa|barber|doctor|therap|consult|appointment|booking/.test(category);
-
-    const recommended = (appointmentLed ? ['support', 'sales'] : ['sales', 'support'])
-      .filter((r): r is AgentRole => !have.has(r))
-      .map((role, i) => ({
-        role,
-        name: AGENT_BLUEPRINTS[role].defaultName,
-        what_it_does: AGENT_BLUEPRINTS[role].summary,
-        priority: i === 0 ? 'start here' : 'next',
-      }));
-
-    return {
-      recommended,
-      already_have: [...have],
-      reasoning: appointmentLed
-        ? 'This business books appointments, so reception matters more than selling.'
-        : 'This business sells, so a sales agent earns its keep first.',
-      readiness: {
-        active_services: services ?? 0,
-        connected_channels: (channels ?? []).map((c) => c.channel_type),
-      },
-    };
-  },
-};
-
-export const addAgent: Tool = {
-  name: 'add_agent',
-  description:
-    'Create one of the recommended agents for this business. Only do this after the owner has agreed to it. The agent starts as a draft; the owner activates it with activate_agent once they are happy.',
-  parameters: {
-    type: 'object',
-    properties: {
-      role: { type: 'string', enum: CONFIGURABLE_ROLES },
-      name: { type: 'string', description: 'What customers should call it. Defaults to a sensible name.' },
-    },
-    required: ['role'],
-    additionalProperties: false,
-  },
-  mutates: true,
-
-  async run(args, ctx) {
-    const role = oneOf(args, 'role', CONFIGURABLE_ROLES, null);
-    const blueprint = AGENT_BLUEPRINTS[role];
-
-    const { data: existing } = await serviceClient
-      .from('agents').select('id, status').eq('tenant_id', ctx.tenantId).eq('role', role).maybeSingle();
-    if (existing) throw new ToolInputError(`This business already has a ${role} agent (${existing.status}).`);
-
-    const { data, error } = await serviceClient
-      .from('agents')
-      .insert({
-        tenant_id: ctx.tenantId,
-        role,
-        name: str(args, 'name', { max: 60 }) || blueprint.defaultName,
-        objective: blueprint.objective,
-        instructions: '',
-        tools: blueprint.tools,
-        permissions: blueprint.permissions,
-        escalation: blueprint.escalation,
-        status: 'draft',
-      })
-      .select('role, name, status')
-      .single();
-    if (error) throw new Error(error.message);
-
-    return { created: data, note: 'It is a draft until the owner activates it.' };
   },
 };
 

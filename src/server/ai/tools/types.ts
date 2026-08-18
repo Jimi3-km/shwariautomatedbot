@@ -1,5 +1,6 @@
 import { serviceClient } from '../../supabase.js';
 import type { ToolDefinition } from '../llm.js';
+import type { AgentRole } from '../roles.js';
 
 /**
  * The tool layer.
@@ -23,7 +24,7 @@ export interface AgentContext {
   tenantId: string;
   /** The dashboard user, when the agent is acting for a signed-in person. */
   userId: string | null;
-  agentRole: 'manager' | 'sales' | 'support';
+  agentRole: AgentRole;
   conversationId: string | null;
   /** Tool names this agent is configured to use. */
   allowedTools: string[];
