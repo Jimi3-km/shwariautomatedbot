@@ -233,7 +233,57 @@ const CONVERSATION_RULES = [
   'Carry the conversation forward. Refer back to what they already told you rather than asking again, and end on something that invites a reply.',
 ];
 
-function systemPrompt(agent: AgentRow, orientationBlock: string, firstTurn: boolean): string {
+/**
+ * Who the agent is talking to.
+ *
+ * This is customer memory: the durable name, email and phone on the lead this
+ * conversation belongs to. Handing it to the agent up front is what makes a
+ * returning customer feel remembered — the agent greets them by name and never
+ * asks again for a detail already on file. A customer who has told us nothing
+ * yet gets an instruction to collect what a booking or order will need.
+ *
+ * The manager talks to the owner, not a customer, so it is never given this.
+ */
+async function customerContext(tenantId: string, conversationId: string | null): Promise<string | null> {
+  if (!conversationId) return null;
+
+  const { data: conv } = await serviceClient
+    .from('conversations')
+    .select('lead_id, customer_name, channel_type, customer_id')
+    .eq('tenant_id', tenantId)
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (!conv) return null;
+
+  let lead: { customer_name: string | null; email: string | null; phone: string | null } | null = null;
+  if (conv.lead_id) {
+    const { data } = await serviceClient
+      .from('leads')
+      .select('customer_name, email, phone')
+      .eq('tenant_id', tenantId)
+      .eq('id', conv.lead_id)
+      .maybeSingle();
+    lead = data;
+  }
+
+  const known: string[] = [];
+  const name = lead?.customer_name || conv.customer_name;
+  if (name) known.push(`name: ${name}`);
+  if (lead?.email) known.push(`email: ${lead.email}`);
+  if (lead?.phone) known.push(`phone: ${lead.phone}`);
+
+  if (!known.length) {
+    return "You do not have this customer's contact details yet. When a booking or an order needs them, ask for their name, phone and (for an order) email, and save them with save_customer_details.";
+  }
+  return `You are speaking with a known customer — ${known.join(', ')}. Use these; never ask again for anything listed here. Ask only for what is missing when a booking or order needs it.`;
+}
+
+function systemPrompt(
+  agent: AgentRow,
+  orientationBlock: string,
+  firstTurn: boolean,
+  customerBlock: string | null
+): string {
   const blueprint = AGENT_BLUEPRINTS[agent.role];
 
   const parts = [
@@ -254,6 +304,10 @@ function systemPrompt(agent: AgentRow, orientationBlock: string, firstTurn: bool
     orientationBlock,
     '--- end of reference ---',
   ];
+
+  if (customerBlock) {
+    parts.push('', '--- WHO YOU ARE TALKING TO ---', customerBlock, '--- end ---');
+  }
 
   /**
    * The opening move, spelled out. A greeting is the most likely first message
@@ -338,10 +392,20 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
 
   const priorTurns = input.history ?? (await history(input.tenantId, input.conversationId));
 
+  // Customer memory is for the departments serving a customer, not for the
+  // manager, who is talking to the owner.
+  const customerBlock =
+    agent.role === 'manager' ? null : await customerContext(input.tenantId, input.conversationId);
+
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: systemPrompt(agent, await orientation(input.tenantId), priorTurns.length === 0),
+      content: systemPrompt(
+        agent,
+        await orientation(input.tenantId),
+        priorTurns.length === 0,
+        customerBlock
+      ),
     },
     ...priorTurns,
     { role: 'user', content: input.text },

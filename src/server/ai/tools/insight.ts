@@ -425,3 +425,94 @@ export const removeProduct: Tool = {
     return { removed: data.map((d) => d.name) };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Remembering a customer
+// ---------------------------------------------------------------------------
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const saveCustomerDetails: Tool = {
+  name: 'save_customer_details',
+  description:
+    "Save the customer's name, email or phone number so we remember them and can complete a booking or an order. Send only the pieces they actually gave you. If you were already told who you are speaking with, do not ask for it again.",
+  parameters: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      email: { type: 'string' },
+      phone: { type: 'string' },
+      lead_id: {
+        type: 'number',
+        description: "Only when you are not inside the customer's own conversation.",
+      },
+    },
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    const name = str(args, 'name', { max: 120 });
+    const email = str(args, 'email', { max: 200 }).toLowerCase();
+    const phoneRaw = str(args, 'phone', { max: 40 });
+
+    if (!name && !email && !phoneRaw) {
+      throw new ToolInputError('Give at least one of name, email or phone.');
+    }
+    if (email && !EMAIL_RE.test(email)) {
+      throw new ToolInputError('That does not look like an email address. Ask the customer to repeat it.');
+    }
+    // Keep digits and a leading +, so "0712 345 678" and "+254712345678" both
+    // land in one shape. Length is a sanity check, not a country rule.
+    const phone = phoneRaw ? phoneRaw.replace(/[^\d+]/g, '') : '';
+    if (phoneRaw && phone.replace(/\D/g, '').length < 7) {
+      throw new ToolInputError('That phone number looks too short. Ask the customer to repeat it.');
+    }
+
+    // Resolve which lead this is for: the conversation's own customer, or a
+    // named lead_id. A customer-facing agent can only ever reach the person it
+    // is actually talking to — it has no way to name someone else.
+    const leadId = num(args, 'lead_id');
+    let targetId: number | null = null;
+
+    if (leadId !== null) {
+      const { data } = await serviceClient
+        .from('leads').select('id').eq('tenant_id', ctx.tenantId).eq('id', leadId).maybeSingle();
+      targetId = data?.id ?? null;
+    } else if (ctx.conversationId) {
+      const { data: conv } = await serviceClient
+        .from('conversations')
+        .select('lead_id, channel_type, customer_id')
+        .eq('tenant_id', ctx.tenantId).eq('id', ctx.conversationId).maybeSingle();
+
+      if (conv?.lead_id) {
+        targetId = conv.lead_id;
+      } else if (conv) {
+        // No lead linked yet: find the one this channel identity already owns.
+        const { data } = await serviceClient
+          .from('leads').select('id')
+          .eq('tenant_id', ctx.tenantId)
+          .eq('channel_type', conv.channel_type)
+          .eq('customer_id', conv.customer_id)
+          .maybeSingle();
+        targetId = data?.id ?? null;
+      }
+    }
+
+    if (targetId === null) throw new ToolInputError('Say which customer this is for.');
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (name) patch.customer_name = name;
+    if (email) patch.email = email;
+    if (phone) patch.phone = phone;
+
+    const { error } = await serviceClient
+      .from('leads').update(patch).eq('tenant_id', ctx.tenantId).eq('id', targetId);
+    if (error) throw new Error(error.message);
+
+    return {
+      saved: Object.keys(patch).filter((k) => k !== 'updated_at'),
+      note: 'Kept on file — you will recognise this customer if they come back.',
+    };
+  },
+};

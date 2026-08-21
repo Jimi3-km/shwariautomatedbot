@@ -487,3 +487,68 @@ export const listKnowledgeGaps: Tool = {
     return { gaps: data ?? [] };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Payment instructions
+// ---------------------------------------------------------------------------
+// Stored as ordinary business facts under the 'payment' category, so they are
+// tenant-scoped and secured exactly like every other fact. Two dedicated tools
+// wrap them: one for the owner to set, one for the customer agents to read, so
+// neither has to guess a key.
+
+export const setPaymentInstructions: Tool = {
+  name: 'set_payment_instructions',
+  description:
+    'Record how customers should pay this business — the till, paybill, bank or wallet details and the steps to follow. The sales and orders agents read this out to customers, so write it exactly as a customer should see it.',
+  parameters: {
+    type: 'object',
+    properties: {
+      instructions: { type: 'string', description: 'The full payment steps, in plain language.' },
+    },
+    required: ['instructions'],
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    const value = str(args, 'instructions', { required: true, max: 2000 });
+
+    const { error } = await serviceClient.from('business_facts').upsert(
+      {
+        tenant_id: ctx.tenantId,
+        category: 'payment',
+        fact_key: 'how_to_pay',
+        value,
+        source: 'owner',
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'tenant_id,category,fact_key' }
+    );
+    if (error) throw new Error(error.message);
+    return { saved: true };
+  },
+};
+
+export const getPaymentInstructions: Tool = {
+  name: 'get_payment_instructions',
+  description:
+    'Read how customers pay this business, so you can guide them through it. Use this the moment a customer is ready to pay, and relay it exactly. If it comes back empty you do NOT know how they pay — say a colleague will send the details, and never invent an account number.',
+  parameters: { type: 'object', properties: {}, additionalProperties: false },
+  mutates: false,
+
+  async run(_args, ctx) {
+    const { data, error } = await serviceClient
+      .from('business_facts')
+      .select('value')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('category', 'payment')
+      .order('updated_at', { ascending: false });
+    if (error) throw new Error(error.message);
+
+    const instructions = (data ?? []).map((f) => f.value).filter(Boolean).join('\n\n');
+    return {
+      configured: Boolean(instructions),
+      instructions: instructions || null,
+    };
+  },
+};

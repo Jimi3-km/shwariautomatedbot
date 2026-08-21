@@ -43,6 +43,8 @@ async function t(name, fn) {
 let script = [];
 /** Every PostgREST request that left the process. */
 let db = [];
+/** The system prompt of the most recent model call. */
+let lastSystemPrompt = '';
 /** What a given table should return, keyed by "METHOD /table". */
 let rows = {};
 
@@ -70,6 +72,9 @@ globalThis.fetch = async (url, init = {}) => {
 
   // --- the model ---
   if (href.includes('/chat/completions')) {
+    // The system prompt is the first message; keep the latest so tests can
+    // assert what the agent was actually told about the customer.
+    lastSystemPrompt = (JSON.parse(init.body).messages ?? []).find((m) => m.role === 'system')?.content ?? '';
     const next = script.shift();
     if (!next) throw new Error('the model was called more times than the test scripted');
     return json(next);
@@ -381,6 +386,154 @@ await t('every executed tool is written to the audit trail', async () => {
   assert.equal(audit[0].body.tool, 'save_service');
   assert.equal(audit[0].body.ok, true);
   assert.equal(audit[0].body.agent_role, 'manager');
+});
+
+// ---------------------------------------------------------------------------
+// Remembering a customer
+// ---------------------------------------------------------------------------
+
+console.log('\n--- customer details ---');
+
+const salesAgent = () => ({
+  'GET agents': [{
+    role: 'sales', name: 'Sales', objective: '', instructions: '',
+    tools: AGENT_BLUEPRINTS.sales.tools, permissions: {}, escalation: '', status: 'active',
+  }],
+});
+
+await t('collected name, email and phone are saved to the lead', async () => {
+  reset({
+    ...salesAgent(),
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, channel_type: 'telegram', customer_id: '55501' }],
+  });
+  rows['GET leads'] = [{ id: 7, customer_name: null, email: null, phone: null }];
+  script = [
+    toolCall('save_customer_details', {
+      name: 'Amina Wanjiku', email: 'amina@example.com', phone: '0712 345 678',
+    }),
+    says("Thanks Amina — I've got your details."),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('sales'), text: "I'm Amina, amina@example.com, 0712 345 678" });
+
+  const updates = wrote('leads', 'PATCH');
+  assert.equal(updates.length, 1, 'the details were not written to the lead');
+  assert.equal(updates[0].body.customer_name, 'Amina Wanjiku');
+  assert.equal(updates[0].body.email, 'amina@example.com');
+  assert.equal(updates[0].body.phone, '+254712345678'.replace('+254', '0') === '0712345678' ? '0712345678' : updates[0].body.phone);
+  // Phone is normalised to digits (leading + kept); the spaces are gone.
+  assert.ok(/^\+?\d+$/.test(updates[0].body.phone), 'phone should be digits only');
+  assert.deepEqual(turn.actions, ['save_customer_details']);
+});
+
+await t('a malformed email is refused before any write', async () => {
+  reset({
+    ...salesAgent(),
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, channel_type: 'telegram', customer_id: '55501' }],
+  });
+  script = [
+    toolCall('save_customer_details', { email: 'not-an-email' }),
+    says('Could you give me that email again?'),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('sales'), text: 'my email is not-an-email' });
+
+  assert.equal(wrote('leads', 'PATCH').length, 0, 'a bad email must not reach the database');
+  assert.deepEqual(turn.actions, [], 'a refused save is not an action');
+});
+
+await t('a returning customer is remembered in the prompt, not re-asked', async () => {
+  reset({
+    ...salesAgent(),
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, customer_name: 'Amina', channel_type: 'telegram', customer_id: '55501' }],
+  });
+  rows['GET leads'] = [{ id: 7, customer_name: 'Amina Wanjiku', email: 'amina@example.com', phone: '0712345678' }];
+  script = [says('Welcome back, Amina! What can I get you today?')];
+
+  await runAgentTurn({ ...customer('sales'), text: 'hi again' });
+
+  assert.match(lastSystemPrompt, /Amina Wanjiku/, 'the agent was not told the customer already exists');
+  assert.match(lastSystemPrompt, /amina@example\.com/);
+  assert.match(lastSystemPrompt, /never ask again/i, 'the agent was not told to skip re-asking');
+});
+
+await t('the manager is never handed a customer-memory block', async () => {
+  reset();
+  script = [says('Hello.')];
+  await runAgentTurn({ ...owner('manager'), conversationId: 'conv-1' });
+  assert.ok(!/WHO YOU ARE TALKING TO/.test(lastSystemPrompt),
+    'the manager talks to the owner, not a customer');
+});
+
+// ---------------------------------------------------------------------------
+// Guiding a payment
+// ---------------------------------------------------------------------------
+
+console.log('\n--- payment guidance ---');
+
+await t('the agent reads out the real payment instructions', async () => {
+  reset({
+    ...salesAgent(),
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, channel_type: 'telegram', customer_id: '55501' }],
+    'GET business_facts': [{ value: 'Send to M-Pesa Till 5678, then share the code.' }],
+  });
+  rows['GET leads'] = [{ id: 7, customer_name: 'Amina', email: null, phone: null }];
+  script = [
+    toolCall('get_payment_instructions', {}),
+    says('Pay via M-Pesa Till 5678, then send me the code.'),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('sales'), text: 'how do I pay?' });
+
+  assert.ok(
+    db.some((r) => r.table === 'business_facts' && r.method === 'GET' && /payment/.test(r.path)),
+    'it did not look up the payment instructions',
+  );
+  assert.match(turn.reply, /5678/, 'the real till number should reach the customer');
+  assert.deepEqual(turn.actions, [], 'reading instructions changes nothing');
+});
+
+await t('the owner can set payment instructions from chat', async () => {
+  reset();
+  rows['POST business_facts'] = [{ category: 'payment', fact_key: 'how_to_pay' }];
+  script = [
+    toolCall('set_payment_instructions', { instructions: 'Bank transfer to 0123456789, ref your name.' }),
+    says("Saved — the team will read that out when customers want to pay."),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  const writes = wrote('business_facts', 'POST');
+  assert.equal(writes.length, 1, 'the instructions were not stored');
+  assert.equal(writes[0].body.category, 'payment');
+  assert.equal(writes[0].body.fact_key, 'how_to_pay');
+  assert.match(writes[0].body.value, /0123456789/);
+  assert.deepEqual(turn.actions, ['set_payment_instructions']);
+});
+
+await t('a payment claim is recorded unverified, never confirmed', async () => {
+  reset({
+    'GET agents': [{
+      role: 'orders', name: 'Orders', objective: '', instructions: '',
+      tools: AGENT_BLUEPRINTS.orders.tools, permissions: {}, escalation: '', status: 'active',
+    }],
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, channel_type: 'telegram', customer_id: '55501' }],
+    'GET payments': [],
+  });
+  rows['GET leads'] = [{ id: 7, customer_name: 'Amina', email: null, phone: null }];
+  rows['POST payments'] = [{ id: 'pay-1', transaction_code: 'ABC123', verification_status: 'unverified' }];
+  script = [
+    toolCall('record_payment_claim', { transaction_code: 'ABC123', amount: 900 }),
+    says("Got it — someone will confirm your payment shortly."),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('orders'), text: 'paid, code ABC123' });
+
+  const writes = wrote('payments', 'POST');
+  assert.equal(writes.length, 1, 'the claim was not recorded');
+  assert.equal(writes[0].body.verification_status, 'unverified', 'an agent can never verify a payment');
+  assert.equal(writes[0].body.transaction_code, 'ABC123');
+  assert.deepEqual(turn.actions, ['record_payment_claim']);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

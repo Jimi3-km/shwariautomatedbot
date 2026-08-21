@@ -147,6 +147,8 @@ Current tools:
 | Readiness | `setup_status` | manager |
 | Metrics | `business_metrics`, `attention_needed` | manager |
 | CRM | `find_customers`, `update_customer` | manager (update: all) |
+| Customer details | `save_customer_details` — name, email, phone onto the lead | sales, support, booking, orders, manager |
+| Payment | `set_payment_instructions` (manager), `get_payment_instructions` (sales, booking, orders) | — |
 | Appointments | `list_appointments`, `book_appointment`, `reschedule_appointment`, `cancel_appointment` | manager, support; sales books |
 | Orders | `record_order` | sales |
 | Tickets | `open_ticket`, `list_tickets`, `update_ticket` | manager, support opens |

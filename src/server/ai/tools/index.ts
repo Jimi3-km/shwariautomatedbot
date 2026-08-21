@@ -5,6 +5,7 @@ import {
   getOpeningHours, setOpeningHours,
   searchBusinessKnowledge, saveBusinessFact,
   recordKnowledgeGap, listKnowledgeGaps,
+  setPaymentInstructions, getPaymentInstructions,
 } from './business.js';
 import { listTeam, configureAgent, activateAgent, setupStatus } from './team.js';
 import { delegateToAgent } from './delegate.js';
@@ -16,7 +17,7 @@ import {
 } from './operations.js';
 import {
   listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
-  businessMetrics, attentionNeeded,
+  saveCustomerDetails, businessMetrics, attentionNeeded,
 } from './insight.js';
 
 /**
@@ -33,13 +34,14 @@ const ALL: Tool[] = [
   getOpeningHours, setOpeningHours,
   searchBusinessKnowledge, saveBusinessFact,
   recordKnowledgeGap, listKnowledgeGaps,
+  setPaymentInstructions, getPaymentInstructions,
   listTeam, configureAgent, activateAgent, setupStatus, delegateToAgent,
   listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
   recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
   openTicket, listTickets, updateTicket, escalateToHuman,
   scheduleFollowUp, listFollowUps, cancelFollowUp,
   listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
-  businessMetrics, attentionNeeded,
+  saveCustomerDetails, businessMetrics, attentionNeeded,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));
