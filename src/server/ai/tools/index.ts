@@ -10,6 +10,9 @@ import {
 import { listTeam, configureAgent, activateAgent, setupStatus } from './team.js';
 import { delegateToAgent } from './delegate.js';
 import {
+  updateBusinessSettings, messageCustomer, setConversationHandling,
+} from './admin.js';
+import {
   listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
   recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
   openTicket, listTickets, updateTicket, escalateToHuman,
@@ -36,6 +39,7 @@ const ALL: Tool[] = [
   recordKnowledgeGap, listKnowledgeGaps,
   setPaymentInstructions, getPaymentInstructions,
   listTeam, configureAgent, activateAgent, setupStatus, delegateToAgent,
+  updateBusinessSettings, messageCustomer, setConversationHandling,
   listAppointments, bookAppointment, rescheduleAppointment, cancelAppointment,
   recordOrder, listOrders, updateOrderStatus, recordPaymentClaim,
   openTicket, listTickets, updateTicket, escalateToHuman,

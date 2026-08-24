@@ -72,7 +72,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
     ],
     tools: [
       // Knowing the business
-      'get_business_profile', 'update_business_profile',
+      'get_business_profile', 'update_business_profile', 'update_business_settings',
       'list_services', 'save_service', 'remove_service',
       'list_products', 'save_product', 'remove_product',
       'get_opening_hours', 'set_opening_hours',
@@ -85,6 +85,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'list_appointments', 'book_appointment', 'reschedule_appointment', 'cancel_appointment',
       'list_orders', 'record_order', 'update_order_status',
       'list_tickets', 'open_ticket', 'update_ticket',
+      'message_customer', 'set_conversation_handling',
       'schedule_follow_up', 'list_follow_ups', 'cancel_follow_up',
       // Directing the team
       'list_team', 'configure_agent', 'activate_agent', 'delegate_to_agent',

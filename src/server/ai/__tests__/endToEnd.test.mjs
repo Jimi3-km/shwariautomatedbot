@@ -85,7 +85,16 @@ globalThis.fetch = async (url, init = {}) => {
   const table = path.split('?')[0];
   db.push({ method, table, path, body: init.body ? JSON.parse(init.body) : null });
 
-  return json(rows[`${method} ${table}`] ?? []);
+  let out = rows[`${method} ${table}`] ?? [];
+  // .single()/.maybeSingle() ask PostgREST for a single object via the Accept
+  // header; the real server returns the object, not a one-element array, so the
+  // double must too — otherwise a tool reading a field off a .single() result
+  // sees an array and finds nothing.
+  const accept = init.headers && (init.headers.get ? init.headers.get('accept') : init.headers.Accept);
+  if (String(accept ?? '').includes('vnd.pgrst.object') && Array.isArray(out)) {
+    out = out[0] ?? null;
+  }
+  return json(out);
 };
 
 const json = (body) =>
@@ -119,6 +128,7 @@ function reset(seed = {}) {
 }
 
 const { AGENT_BLUEPRINTS } = await import('../roles.ts');
+const { TOOLS } = await import('../tools/index.ts');
 const MANAGER_TOOLS = AGENT_BLUEPRINTS.manager.tools;
 
 const { runAgentTurn } = await import('../agent.ts');
@@ -534,6 +544,104 @@ await t('a payment claim is recorded unverified, never confirmed', async () => {
   assert.equal(writes[0].body.verification_status, 'unverified', 'an agent can never verify a payment');
   assert.equal(writes[0].body.transaction_code, 'ABC123');
   assert.deepEqual(turn.actions, ['record_payment_claim']);
+});
+
+// ---------------------------------------------------------------------------
+// Running the rest of the dashboard from chat
+// ---------------------------------------------------------------------------
+
+console.log('\n--- settings and the inbox ---');
+
+await t('the owner changes settings by chat', async () => {
+  reset();
+  rows['GET tenants'] = [{ business_name: 'Test Co', currency: 'KES', timezone: 'Africa/Nairobi', contact_info: { email: 'old@test.co' } }];
+  script = [
+    toolCall('update_business_settings', {
+      assistant_name: 'Zuri', order_prefix: 'shop-01', contact_phone: '0712000000',
+    }),
+    says("Done — I'm Zuri now, orders start SHOP01, and I've added your phone."),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  const updates = wrote('tenants', 'PATCH');
+  assert.equal(updates.length, 1, 'settings were not written');
+  assert.equal(updates[0].body.agent_name, 'Zuri');
+  assert.equal(updates[0].body.order_prefix, 'SHOP01', 'prefix is normalised');
+  // contact_info is merged, not clobbered — the old email survives.
+  assert.equal(updates[0].body.contact_info.email, 'old@test.co');
+  assert.equal(updates[0].body.contact_info.phone, '0712000000');
+  assert.deepEqual(turn.actions, ['update_business_settings']);
+});
+
+await t('Shwari messages a customer in the inbox', async () => {
+  reset({
+    'GET leads': [{ id: 7, customer_name: 'Amina', channel_type: 'webchat', customer_id: 'v1' }],
+    'GET conversations': [{ id: 'conv-9', ai_enabled: true }],
+  });
+  script = [
+    toolCall('message_customer', { lead_id: 7, text: 'Your order is ready for pickup.' }),
+    says("I've let Amina know."),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  const msgs = wrote('conversation_messages', 'POST');
+  assert.equal(msgs.length, 1, 'nothing was written to the transcript');
+  assert.equal(msgs[0].body.sender, 'agent');
+  assert.equal(msgs[0].body.conversation_id, 'conv-9');
+  assert.match(msgs[0].body.body, /ready for pickup/);
+  assert.deepEqual(turn.actions, ['message_customer']);
+});
+
+await t('Shwari takes a conversation over from the AI', async () => {
+  reset({
+    'GET leads': [{ id: 7, customer_name: 'Amina', channel_type: 'telegram', customer_id: '55501' }],
+    'GET conversations': [{ id: 'conv-9', ai_enabled: true }],
+  });
+  script = [
+    toolCall('set_conversation_handling', { lead_id: 7, handled_by: 'person' }),
+    says("You've got this one — the AI will hold off."),
+  ];
+
+  await runAgentTurn(owner());
+
+  const updates = wrote('conversations', 'PATCH');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].body.ai_enabled, false, 'taking over must switch the AI off');
+});
+
+await t('an order can be moved and re-routed in one call', async () => {
+  reset();
+  rows['PATCH orders'] = [{ order_ref: 'ORD-X', status: 'confirmed', payment_status: 'unpaid', delivery_location: 'Westlands' }];
+  script = [
+    toolCall('update_order_status', { order_ref: 'ORD-X', status: 'confirmed', delivery_location: 'Westlands' }),
+    says('Confirmed, delivering to Westlands.'),
+  ];
+
+  await runAgentTurn(owner());
+
+  const updates = wrote('orders', 'PATCH');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].body.status, 'confirmed');
+  assert.equal(updates[0].body.delivery_location, 'Westlands');
+  assert.equal(updates[0].body.payment_status, undefined, 'fulfilment must not touch payment');
+});
+
+console.log('\n--- the lines Shwari must not cross ---');
+
+await t('no tool can verify or reject a payment', () => {
+  for (const name of TOOLS.keys()) {
+    assert.ok(!/verify|reject|approve/.test(name) || name === 'setup_status',
+      `${name} would let an agent decide a payment; only a person may`);
+  }
+});
+
+await t('the manager holds no channel, role or delete power', () => {
+  const forbidden = /connect|oauth|token|grant_role|set_role|invite|delete_(customer|order|tenant)|hard_delete/;
+  for (const name of AGENT_BLUEPRINTS.manager.tools) {
+    assert.ok(!forbidden.test(name), `the manager must not hold ${name}`);
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
