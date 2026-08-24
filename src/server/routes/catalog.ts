@@ -238,3 +238,161 @@ catalogRouter.put(
     res.json(data);
   })
 );
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+// What the business *does*, as opposed to what it sells. Agents read this table
+// constantly — it is how they answer "do you do braces?" and how the booking
+// agent knows a service needs a consultation before it can be booked outright.
+//
+// It has existed since the agent layer landed but only agents could reach it.
+// These routes give the owner the same view, so a service can be added by hand
+// or by asking Shwari, and both end up in the same row.
+
+const BOOKING_MODES = ['direct', 'consultation', 'enquiry'] as const;
+
+function servicePayload(body: any, tenantId: string) {
+  const name = String(body.name || '').trim();
+  if (!name) throw Object.assign(new Error('A service name is required'), { status: 400 });
+
+  const price =
+    body.price_amount === '' || body.price_amount == null ? null : Number(body.price_amount);
+  if (price != null && (!Number.isFinite(price) || price < 0)) {
+    throw Object.assign(new Error('Price must be a non-negative number'), { status: 400 });
+  }
+
+  const duration =
+    body.duration_minutes === '' || body.duration_minutes == null
+      ? null
+      : Number(body.duration_minutes);
+  if (duration != null && (!Number.isFinite(duration) || duration <= 0 || duration > 480)) {
+    throw Object.assign(new Error('Length must be between 1 and 480 minutes'), { status: 400 });
+  }
+
+  const mode = String(body.booking_mode || 'enquiry');
+  if (!(BOOKING_MODES as readonly string[]).includes(mode)) {
+    throw Object.assign(
+      new Error(`booking_mode must be one of: ${BOOKING_MODES.join(', ')}`),
+      { status: 400 }
+    );
+  }
+
+  return {
+    tenant_id: tenantId,
+    name: name.slice(0, 120),
+    description: String(body.description || '').slice(0, 2000),
+    // Null is meaningful: it means the price genuinely is not fixed, and agents
+    // are required to say so rather than estimate.
+    price_amount: price,
+    price_note: body.price_note ? String(body.price_note).slice(0, 200) : null,
+    duration_minutes: duration == null ? null : Math.round(duration),
+    booking_mode: mode,
+    active: body.active === undefined ? true : Boolean(body.active),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+catalogRouter.get(
+  '/services',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    let q = ctx.db
+      .from('services')
+      .select('*')
+      .eq('tenant_id', ctx.tenantId)
+      .order('name');
+
+    if (req.query.active === 'true') q = q.eq('active', true);
+
+    const { data, error } = await q;
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ services: data ?? [] });
+  })
+);
+
+catalogRouter.post(
+  '/services',
+  requireAuth,
+  requireWrite,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data, error } = await ctx.db
+      .from('services')
+      .insert(servicePayload(req.body, ctx.tenantId))
+      .select('*')
+      .single();
+
+    if (error) {
+      // The unique index is on lower(name), so a near-duplicate is caught by
+      // the database rather than by a case-sensitive check up here.
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'You already offer a service with that name.' });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(201).json(data);
+  })
+);
+
+catalogRouter.put(
+  '/services/:id',
+  requireAuth,
+  requireWrite,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data, error } = await ctx.db
+      .from('services')
+      .update(servicePayload(req.body, ctx.tenantId))
+      .eq('id', req.params.id)
+      .eq('tenant_id', ctx.tenantId)
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'You already offer a service with that name.' });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+    if (!data) return res.status(404).json({ error: 'Service not found' });
+    res.json(data);
+  })
+);
+
+/**
+ * Switch a service off rather than delete it, so past appointments still make
+ * sense. ?hard=true removes it for good, admin only — and only when nothing
+ * references it.
+ */
+catalogRouter.delete(
+  '/services/:id',
+  requireAuth,
+  requireWrite,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+
+    if (req.query.hard === 'true') {
+      if (!['owner', 'admin'].includes(ctx.role)) {
+        return res.status(403).json({ error: 'Permanent delete requires admin' });
+      }
+      const { error } = await ctx.db
+        .from('services').delete().eq('id', req.params.id).eq('tenant_id', ctx.tenantId);
+      if (error) return res.status(400).json({ error: error.message });
+      return res.json({ deleted: true });
+    }
+
+    const { data, error } = await ctx.db
+      .from('services')
+      .update({ active: false, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .eq('tenant_id', ctx.tenantId)
+      .select('id')
+      .maybeSingle();
+
+    if (error) return res.status(400).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Service not found' });
+    res.json({ archived: true });
+  })
+);

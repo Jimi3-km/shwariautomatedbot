@@ -3,8 +3,9 @@ import type { Request, Response } from 'express';
 import { verifyMetaSignature, verifyChallenge } from '../../channels/meta/signature.js';
 import { parseMetaWebhook } from '../../channels/meta/parsers.js';
 import {
-  resolveChannel, claimEvent, persistInbound, forwardToPipeline, normalize,
+  resolveChannel, claimEvent, persistInbound, normalize,
 } from '../../services/inbound.js';
+import { dispatchInbound } from '../../services/dispatch.js';
 
 export const metaWebhookRouter = Router();
 
@@ -118,7 +119,7 @@ async function handleEvents(body: unknown): Promise<void> {
         continue;
       }
 
-      await forwardToPipeline(event, channel.secretToken);
+      await dispatchInbound(event, channel, stored.conversationId);
     }
   }
 }

@@ -380,8 +380,78 @@ export interface SetupStatus {
     instagram_signin_redirect_uri: string;
     subscribe_to_fields: string[];
   };
+  shwari: {
+    ready: boolean;
+    missing_environment_variables: string[];
+    model: string | null;
+    telegram_webhook_url: string;
+  };
   public_api_url: string;
   all_ready: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Shwari
+// ---------------------------------------------------------------------------
+
+export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders';
+export type AgentStatus = 'draft' | 'active' | 'disabled';
+
+export interface TeamMember {
+  role: AgentRole;
+  name: string;
+  status: AgentStatus;
+}
+
+export interface KnowledgeGap {
+  question: string;
+  times_seen: number;
+}
+
+export interface ShwariStatus {
+  /** False when the server has no model key, or the agent could not be loaded. */
+  available: boolean;
+  team: TeamMember[];
+  open_questions: KnowledgeGap[];
+}
+
+export interface ShwariMessage {
+  from: 'you' | 'shwari';
+  text: string;
+  at: string;
+  /** Present on replies that did something. */
+  actions?: string[];
+}
+
+export interface ShwariReply {
+  reply: string;
+  /** True when the turn changed something, so the page knows to reload. */
+  changed: boolean;
+  /** Which actions the turn actually carried out, for the UI to name. */
+  actions: string[];
+}
+
+export interface PairingCode {
+  code: string;
+  expires_at: string;
+  where: Array<{ channel: string; name: string | null }>;
+  instructions: string;
+}
+
+export interface LinkedAdmin {
+  id: string;
+  channel_type: string;
+  created_at: string;
+}
+
+/** One tool call, as the activity log shows it. */
+export interface AgentActivity {
+  agent_role: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  error: string | null;
+  created_at: string;
 }
 
 export interface TimelineEntry { at: string; kind: string; label: string }
@@ -399,4 +469,136 @@ export interface ConversationDetail {
   messages: ConversationMessage[];
   lead: Lead | null;
   payments: Payment[];
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+export type AppointmentStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+
+export interface Appointment {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  channel_type: ChannelType | null;
+  service_id: string | null;
+  service_name: string;
+  starts_at: string;
+  duration_minutes: number;
+  status: AppointmentStatus;
+  notes: string | null;
+  /** The agent role that booked it, or null when a person did. */
+  booked_by_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TicketStatus = 'open' | 'in_progress' | 'waiting' | 'resolved' | 'closed';
+export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface SupportTicket {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  conversation_id: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  subject: string;
+  body: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  assigned_to: string | null;
+  opened_by_agent: string | null;
+  resolution: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FollowUpStatus = 'pending' | 'sent' | 'cancelled' | 'failed';
+
+export interface FollowUp {
+  id: string;
+  tenant_id: string;
+  lead_id: number | null;
+  conversation_id: string | null;
+  customer_id: string;
+  channel_type: ChannelType;
+  due_at: string;
+  message: string;
+  reason: string | null;
+  status: FollowUpStatus;
+  sent_at: string | null;
+  failure_reason: string | null;
+  created_by_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What needs a person's attention, computed without the model. */
+export interface AttentionReport {
+  silent_customers: Array<{ id: number; customer_name: string | null; stage: string | null; last_contact: string | null }>;
+  unverified_payment_claims: number;
+  open_tickets: Array<{ id: string; subject: string; priority: string; created_at: string }>;
+  appointments_today: Array<{ id: string; customer_name: string | null; service_name: string; starts_at: string }>;
+  unanswered_questions: Array<{ question: string; times_seen: number }>;
+  waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
+}
+
+/** One of the five agents every business has. */
+export interface AgentConfig {
+  id: string;
+  role: AgentRole;
+  name: string;
+  /** One line on what this agent is for. */
+  summary: string;
+  objective: string;
+  /** What it handles, in the owner's words. */
+  responsibilities: string[];
+  instructions: string;
+  escalation: string;
+  status: AgentStatus;
+  /** The real tool names this agent holds. Not decorative. */
+  capabilities: string[];
+  /** False for the manager: it directs the others, so its setup is fixed. */
+  editable: boolean;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+/**
+ * How a service can be taken. This is the field the booking agent reads before
+ * offering a slot, so it is a real behavioural setting rather than a label.
+ */
+export type BookingMode = 'direct' | 'consultation' | 'enquiry';
+
+export interface Service {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  /** Null means the price genuinely is not fixed; agents must say so. */
+  price_amount: number | null;
+  price_note: string | null;
+  duration_minutes: number | null;
+  booking_mode: BookingMode;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceInput {
+  name: string;
+  description?: string;
+  price_amount?: number | null;
+  price_note?: string | null;
+  duration_minutes?: number | null;
+  booking_mode?: BookingMode;
+  active?: boolean;
 }

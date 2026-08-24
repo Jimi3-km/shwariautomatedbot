@@ -19,6 +19,9 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [instagramAvailable, setInstagramAvailable] = useState(false);
+  // Set when a confirmation email is the missing step, so we can offer to send
+  // it again — the first one is easily lost to spam filters or rate limits.
+  const [canResend, setCanResend] = useState(false);
 
   // Only offer the button when the server can actually honour it, so a user
   // never gets bounced to a 503.
@@ -60,7 +63,26 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   }, [onSignedIn]);
 
   function switchMode(next: Mode) {
-    setMode(next); setError(null); setNotice(null);
+    setMode(next); setError(null); setNotice(null); setCanResend(false);
+  }
+
+  // Send the confirmation email again. Supabase rate-limits this, so a failure
+  // here is usually "too many requests" rather than a real error.
+  async function resendConfirmation() {
+    setBusy(true); setError(null);
+    try {
+      const { error } = await getSupabase().auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/` },
+      });
+      if (error) throw error;
+      setNotice('Sent again. Check your inbox and your spam folder.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not resend just now. Try again in a minute.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -71,7 +93,15 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
     try {
       if (mode === 'login') {
         const { error } = await sb.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        if (error) {
+          // Supabase blocks sign-in until the address is confirmed. Rather than
+          // show its raw "Email not confirmed", point the user at the fix.
+          if (/not confirmed/i.test(error.message)) {
+            setCanResend(true);
+            throw new Error('Please confirm your email first — check your inbox for the link.');
+          }
+          throw error;
+        }
         onSignedIn();
       } else if (mode === 'signup') {
         if (password.length < 8) throw new Error('Please use at least 8 characters.');
@@ -86,8 +116,12 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
           options: { emailRedirectTo: `${window.location.origin}/` },
         });
         if (error) throw error;
-        if (data.session) onSignedIn();
-        else setNotice('Check your email to confirm your account, then sign in.');
+        if (data.session) {
+          onSignedIn();
+        } else {
+          setNotice('Check your email to confirm your account, then sign in.');
+          setCanResend(true);
+        }
       } else {
         const { error } = await sb.auth.resetPasswordForEmail(email, {
           redirectTo: `${window.location.origin}/`,
@@ -164,6 +198,20 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
           <Button type="submit" variant="solid" size="lg" loading={busy} style={{ width: '100%' }}>
             {copy.cta}
           </Button>
+
+          {canResend && (
+            <button
+              type="button"
+              onClick={resendConfirmation}
+              disabled={busy || !email}
+              style={{
+                fontSize: 12.5, color: 'var(--accent)', background: 'none',
+                border: 0, cursor: 'pointer', padding: 4,
+              }}
+            >
+              Resend confirmation email
+            </button>
+          )}
         </form>
 
         {instagramAvailable && mode !== 'reset' && (
@@ -195,6 +243,99 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
           ) : (
             <button onClick={() => switchMode('login')}>Back to sign in</button>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The other half of "reset password".
+ *
+ * The reset email lands the user back on the app with a one-time recovery
+ * token, which supabase-js turns into a session. That session is only good for
+ * one thing — setting a new password — so this screen exists to do exactly
+ * that, and nothing routes the user into the dashboard until it is done.
+ * Without it the reset email was a dead end: a session with the *old* password
+ * still in force and no way to change it.
+ */
+export function SetNewPassword({ onDone, onCancel }: {
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (password.length < 8) { setError('Please use at least 8 characters.'); return; }
+    if (password !== confirm) { setError('Those two passwords do not match.'); return; }
+
+    setBusy(true); setError(null);
+    try {
+      const { error } = await getSupabase().auth.updateUser({ password });
+      if (error) throw error;
+      // Drop the recovery token from the URL so a refresh does not reprocess it.
+      window.history.replaceState({}, '', window.location.pathname);
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set your password. Request a new link.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{
+      height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'var(--bg)', padding: 20,
+    }}>
+      <div style={{ width: '100%', maxWidth: 380 }}>
+        <div style={{ textAlign: 'center', marginBottom: 26 }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 12, background: 'var(--accent)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+          }}>
+            <Sparkles size={20} color="#fff" />
+          </div>
+          <h1 style={{ fontSize: 21, fontWeight: 600, letterSpacing: '-0.02em' }}>Choose a new password</h1>
+          <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginTop: 4 }}>
+            Enter it twice and you're back in.
+          </p>
+        </div>
+
+        <form onSubmit={submit} style={{ display: 'grid', gap: 12 }}>
+          <Field label="New password" hint="At least 8 characters.">
+            <Input
+              type="password" required autoComplete="new-password" value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </Field>
+          <Field label="Confirm password">
+            <Input
+              type="password" required autoComplete="new-password" value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </Field>
+
+          {error && (
+            <div style={{
+              fontSize: 12.5, color: 'var(--danger)', background: 'var(--danger-bg)',
+              padding: '8px 11px', borderRadius: 'var(--radius)',
+            }}>
+              {error}
+            </div>
+          )}
+
+          <Button type="submit" variant="solid" size="lg" loading={busy} style={{ width: '100%' }}>
+            Set password and continue
+          </Button>
+        </form>
+
+        <div style={{ textAlign: 'center', marginTop: 18, fontSize: 12.5, color: 'var(--text-2)' }}>
+          <button onClick={onCancel}>Back to sign in</button>
         </div>
       </div>
     </div>

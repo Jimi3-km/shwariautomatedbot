@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
+  Sparkles, CalendarDays, LifeBuoy, Wrench,
 } from 'lucide-react';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
@@ -10,13 +11,17 @@ import { useSession } from '../app/SessionContext';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/shwari', label: 'Shwari', icon: Sparkles },
   { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'unread' as const },
   { to: '/leads', label: 'Leads', icon: Users },
   { to: '/products', label: 'Products', icon: Package },
+  { to: '/services', label: 'Services', icon: Wrench },
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
+  { to: '/appointments', label: 'Appointments', icon: CalendarDays },
+  { to: '/support', label: 'Support', icon: LifeBuoy },
   { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'claims' as const },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/agent', label: 'AI Agent', icon: Bot },
+  { to: '/agents', label: 'AI team', icon: Bot },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];

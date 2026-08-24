@@ -223,7 +223,9 @@ INSTAGRAM_REDIRECT_URI=https://shwariautomatedbot.vercel.app/api/auth/instagram/
 
 INTERNAL_API_SECRET=
 N8N_AGENT_WEBHOOK_URL=https://<you>.app.n8n.cloud/webhook/meta-in
-N8N_TELEGRAM_WEBHOOK_URL=https://<you>.app.n8n.cloud/webhook/telegram-in
+
+# Not a Meta credential. Powers the Shwari agent — see SHWARI_AGENT.md.
+SHWARI_API_KEY=
 ```
 
 ---

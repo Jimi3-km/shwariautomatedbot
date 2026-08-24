@@ -91,3 +91,120 @@ internalRouter.post(
     }
   })
 );
+
+/**
+ * Send the follow-ups that have come due.
+ *
+ * An agent never sends a message to a customer. It writes a row in follow_ups,
+ * which a person can read and cancel, and this endpoint is what turns the ones
+ * still standing into real messages. Calling it is n8n's job — a schedule is
+ * exactly the kind of deterministic work the pipeline is good at, and keeping
+ * it there means this application needs no timer of its own.
+ *
+ * Safe to call as often as you like: a row is claimed before it is sent, so two
+ * overlapping runs cannot message the same customer twice.
+ */
+internalRouter.post(
+  '/internal/follow-ups/dispatch',
+  requireInternalSecret,
+  handler(async (_req, res) => {
+    const { data: due, error } = await serviceClient
+      .from('follow_ups')
+      .select('id, tenant_id, conversation_id, customer_id, channel_type, message')
+      .eq('status', 'pending')
+      .lte('due_at', new Date().toISOString())
+      .order('due_at')
+      .limit(50);
+
+    if (error) {
+      console.error('[internal] could not read due follow-ups:', error.message);
+      return res.status(500).json({ error: 'Could not read the queue' });
+    }
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const row of due ?? []) {
+      // Claim first. The status filter makes this the point at which one runner
+      // wins the row, so a second run finds nothing to do rather than sending
+      // the same message again.
+      const { data: claimed } = await serviceClient
+        .from('follow_ups')
+        .update({ status: 'sent', sent_at: new Date().toISOString() })
+        .eq('id', row.id)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle();
+
+      if (!claimed) continue;
+
+      const { data: channel } = await serviceClient
+        .from('channels')
+        .select('id, status')
+        .eq('tenant_id', row.tenant_id)
+        .eq('channel_type', row.channel_type)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      const provider = getProvider(row.channel_type);
+
+      if (!channel || !provider) {
+        await markFailed(row.id, 'That channel is no longer connected.');
+        failed++;
+        continue;
+      }
+
+      /**
+       * Write it into the transcript first, for two reasons. The Inbox should
+       * show what was said to a customer whichever way it was sent. And web
+       * chat has no outbound API at all — its widget polls this transcript, so
+       * for that channel the row *is* the delivery, and provider.sendMessage is
+       * correctly a no-op.
+       */
+      if (row.conversation_id) {
+        await serviceClient.from('conversation_messages').insert({
+          tenant_id: row.tenant_id,
+          conversation_id: row.conversation_id,
+          sender: 'agent',
+          body: row.message,
+          extracted: { follow_up: true },
+        });
+        await serviceClient
+          .from('conversations')
+          .update({
+            last_message_at: new Date().toISOString(),
+            last_message_preview: row.message.slice(0, 160),
+          })
+          .eq('id', row.conversation_id)
+          .eq('tenant_id', row.tenant_id);
+      } else if (row.channel_type === 'webchat') {
+        // Nothing to write to and nothing to send through.
+        await markFailed(row.id, 'That chat session has ended.');
+        failed++;
+        continue;
+      }
+
+      try {
+        await provider.sendMessage(channel.id, row.customer_id, row.message, {
+          tenantId: row.tenant_id,
+          userId: '',
+        });
+        sent++;
+      } catch (e) {
+        const reason = e instanceof ProviderError ? e.userMessage : 'The message could not be delivered.';
+        console.error('[internal] follow-up delivery failed:', e instanceof Error ? e.message : e);
+        await markFailed(row.id, reason);
+        failed++;
+      }
+    }
+
+    res.json({ due: (due ?? []).length, sent, failed });
+  })
+);
+
+async function markFailed(id: string, reason: string): Promise<void> {
+  await serviceClient
+    .from('follow_ups')
+    .update({ status: 'failed', failure_reason: reason, updated_at: new Date().toISOString() })
+    .eq('id', id);
+}

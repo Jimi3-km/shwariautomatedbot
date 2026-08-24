@@ -6,6 +6,10 @@ import type {
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
   ChannelProviderInfo, ProviderId, ConnectStart, ConnectedChannel, ChannelHealth,
   OnboardingState, LaunchResult, AgentTone, SetupStatus,
+  ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
+  Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
+  FollowUp, FollowUpStatus, AttentionReport,
+  AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
 } from '../../types';
 
 export * from './client';
@@ -219,3 +223,114 @@ export const sendOnboardingTestMessage = (channelId: string, recipient: string) 
   request<{ sent: boolean }>('/onboarding/test-message', {
     method: 'POST', body: { channel_id: channelId, recipient },
   });
+
+// ---------------------------------------------------------------------------
+// Shwari
+// ---------------------------------------------------------------------------
+
+/** Whether Shwari can run at all, plus the team and what it still needs to know. */
+export const getShwariStatus = () => request<ShwariStatus>('/shwari/status');
+
+export const getShwariHistory = () =>
+  request<{ messages: ShwariMessage[] }>('/shwari/history');
+
+/**
+ * One turn. This is slow by nature — the agent reasons and calls tools — so
+ * callers should show the message as sent rather than waiting in silence.
+ */
+export const sendToShwari = (message: string) =>
+  request<ShwariReply>('/shwari/chat', { method: 'POST', body: { message } });
+
+/** Returned once and never readable again. Admin-only. */
+export const createPairingCode = () =>
+  request<PairingCode>('/shwari/pairing-code', { method: 'POST', body: {} });
+
+export const getLinkedAdmins = () => request<{ linked: LinkedAdmin[] }>('/shwari/linked');
+
+export const unlinkAdmin = (id: string) =>
+  request<{ removed: boolean }>(`/shwari/linked/${id}`, { method: 'DELETE' });
+
+/** The audit trail: every tool an agent called, newest first. */
+export const getAgentActivity = () =>
+  request<{ activity: AgentActivity[] }>('/shwari/activity');
+
+// ---------------------------------------------------------------------------
+// Operations: appointments, tickets, follow-ups
+// ---------------------------------------------------------------------------
+
+export const getAppointments = (params: { status?: string; from?: string; to?: string } = {}) =>
+  request<{ appointments: Appointment[] }>(`/appointments${qs(params)}`);
+
+export const createAppointment = (body: {
+  service_name: string;
+  starts_at: string;
+  duration_minutes?: number;
+  customer_name?: string;
+  notes?: string;
+}) => request<Appointment>('/appointments', { method: 'POST', body });
+
+export const updateAppointment = (
+  id: string,
+  body: { status?: AppointmentStatus; starts_at?: string; notes?: string }
+) => request<Appointment>(`/appointments/${id}`, { method: 'PATCH', body });
+
+export const getTickets = (status?: TicketStatus | '') =>
+  request<{ tickets: SupportTicket[] }>(`/tickets${qs({ status })}`);
+
+export const createTicket = (body: {
+  subject: string; body?: string; priority?: TicketPriority; customer_name?: string;
+}) => request<SupportTicket>('/tickets', { method: 'POST', body });
+
+export const updateTicket = (
+  id: string,
+  body: { status?: TicketStatus; priority?: TicketPriority; resolution?: string; claim?: boolean }
+) => request<SupportTicket>(`/tickets/${id}`, { method: 'PATCH', body });
+
+/** Pending by default: what the AI is about to send, before it sends it. */
+export const getFollowUps = (status?: FollowUpStatus | '') =>
+  request<{ follow_ups: FollowUp[] }>(`/follow-ups${qs({ status })}`);
+
+export const cancelFollowUp = (id: string) =>
+  request<{ cancelled: boolean }>(`/follow-ups/${id}`, { method: 'DELETE' });
+
+/** Proactive insight, available whether or not a model key is configured. */
+export const getAttention = () => request<AttentionReport>('/shwari/attention');
+
+// ---------------------------------------------------------------------------
+// Agents, configured by hand
+// ---------------------------------------------------------------------------
+
+/** The five agents. Provisioned on first read; there is nothing to create. */
+export const getAgents = () => request<{ agents: AgentConfig[] }>('/agents');
+
+/**
+ * Name, objective, instructions, escalation and status only. Capabilities are
+ * not editable by anyone — the server rejects them outright — and the manager
+ * is not editable at all.
+ */
+export const updateAgent = (
+  role: AgentRole,
+  body: { name?: string; objective?: string; instructions?: string; escalation?: string; status?: AgentStatus }
+) => request<AgentConfig>(`/agents/${role}`, { method: 'PATCH', body });
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+// The same rows the agents read. A service added here is one the sales and
+// booking agents can talk about immediately — there is no separate copy.
+
+export const getServices = (activeOnly = false) =>
+  request<{ services: Service[] }>(`/services${qs({ active: activeOnly ? 'true' : undefined })}`);
+
+export const createService = (body: ServiceInput) =>
+  request<Service>('/services', { method: 'POST', body });
+
+export const updateService = (id: string, body: ServiceInput) =>
+  request<Service>(`/services/${id}`, { method: 'PUT', body });
+
+/** Switches it off; past appointments keep making sense. */
+export const archiveService = (id: string) =>
+  request<{ archived: boolean }>(`/services/${id}`, { method: 'DELETE' });
+
+export const deleteService = (id: string) =>
+  request<{ deleted: boolean }>(`/services/${id}?hard=true`, { method: 'DELETE' });

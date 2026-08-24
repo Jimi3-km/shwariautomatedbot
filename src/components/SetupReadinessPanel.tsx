@@ -31,7 +31,9 @@ export function SetupReadinessPanel() {
     ...s.delivery.internal_send_missing,
   ];
 
-  if (s.all_ready && !deliveryGaps.length) return null;
+  const shwariGaps = s.shwari?.missing_environment_variables ?? [];
+
+  if (s.all_ready && !deliveryGaps.length && !shwariGaps.length) return null;
 
   async function copy(text: string, key: string) {
     try {
@@ -70,7 +72,9 @@ export function SetupReadinessPanel() {
             <Pill tone="warning" dot>Admin only</Pill>
           </div>
           <p style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>
-            {blocked.length > 0
+            {shwariGaps.length > 0
+              ? 'Shwari cannot answer until the server has a model key.'
+              : blocked.length > 0
               ? `${blocked.map((c) => c.label).join(' and ')} ${blocked.length === 1 ? 'is' : 'are'} not available yet.`
               : 'Messages arrive, but the assistant cannot reply yet.'}
           </p>
@@ -81,6 +85,29 @@ export function SetupReadinessPanel() {
 
       {open && (
         <div style={{ marginTop: 14, display: 'grid', gap: 14 }}>
+          {shwariGaps.length > 0 && (
+            <section>
+              <div className="section-label" style={{ marginBottom: 7 }}>Shwari</div>
+              <div style={{
+                padding: '11px 13px', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+              }}>
+                <p style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                  Get a key from <strong>build.nvidia.com</strong> — pick any model,
+                  click <strong>Get API Key</strong>, and set it on the server as{' '}
+                  {shwariGaps.map((v) => (
+                    <code key={v} style={{
+                      fontSize: 11.5, padding: '2px 6px', borderRadius: 5,
+                      background: 'var(--surface-2)', fontWeight: 600,
+                    }}>
+                      {v}
+                    </code>
+                  ))}. Restart, and Shwari appears in the sidebar.
+                </p>
+              </div>
+            </section>
+          )}
+
           {blocked.length > 0 && (
             <section>
               <div className="section-label" style={{ marginBottom: 7 }}>Channels not yet available</div>

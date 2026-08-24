@@ -944,3 +944,105 @@ select.field { appearance: none; cursor: pointer; padding-right: 30px; }
 @media (max-width: 1024px) { .hide-lg { display: none !important; } }
 @media (max-width: 768px)  { .hide-md { display: none !important; } }
 @media (min-width: 769px)  { .only-md { display: none !important; } }
+
+/* ── Shwari ────────────────────────────── */
+/* A conversation beside the state it changes: what the owner says on the left,
+   what it produced on the right. On a phone the panels stack under the thread,
+   because the thread is the page. */
+.shwari-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  padding: 16px 20px 20px;
+  align-items: start;
+  /* Fill the shell below the page header so only the thread scrolls. */
+  height: calc(100% - 62px);
+  min-height: 0;
+}
+
+.shwari-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.shwari-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 18px 6px;
+}
+
+.shwari-composer {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.shwari-side {
+  display: grid;
+  gap: 12px;
+  /* Panels scroll with the page, not with the conversation. */
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.shwari-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-3);
+  animation: shwariPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes shwariPulse {
+  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+  30%           { opacity: 1;  transform: translateY(-3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shwari-dot { animation: none; opacity: .55; }
+}
+
+@media (max-width: 1024px) {
+  .shwari-layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  /* Without a viewport-derived height the thread would grow without bound and
+     the composer would leave the screen. */
+  .shwari-thread { height: 68vh; }
+  .shwari-side { max-height: none; overflow: visible; }
+}
+
+/* ── Appointments & tickets ────────────── */
+/* Rows that stay readable when a service name or a subject is long: the text
+   column is the one allowed to shrink, and the actions never wrap under it on
+   a desktop. */
+.appointment-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 13px 15px;
+}
+.appointment-time {
+  flex-shrink: 0; width: 62px; text-align: right;
+  padding-top: 1px;
+}
+.appointment-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.ticket-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 13px 15px;
+  background: none; border: 0; text-align: left; cursor: pointer;
+  color: inherit; font: inherit;
+}
+.ticket-row:hover { background: var(--surface-2); }
+
+@media (max-width: 640px) {
+  .appointment-row { flex-wrap: wrap; }
+  .appointment-time { width: auto; text-align: left; }
+  /* Buttons drop to their own line rather than squeezing the customer name. */
+  .appointment-actions { width: 100%; justify-content: flex-end; }
+}

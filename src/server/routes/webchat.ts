@@ -7,7 +7,8 @@ import {
   issueVisitorToken, verifyVisitorToken, newVisitorId,
 } from '../channels/webchat/session.js';
 import { rateLimit } from '../channels/webchat/rateLimit.js';
-import { claimEvent, persistInbound, forwardToPipeline } from '../services/inbound.js';
+import { claimEvent, persistInbound } from '../services/inbound.js';
+import { dispatchInbound } from '../services/dispatch.js';
 import { WIDGET_SOURCE } from '../channels/webchat/widget.js';
 import type { NormalizedInboundEvent } from '../channels/meta/types.js';
 
@@ -175,8 +176,19 @@ webchatRouter.post(
     const stored = await persistInbound(event);
     if (!stored) return res.status(500).json({ error: "We couldn't deliver that message." });
 
+    // Answer the widget now and let the AI turn run behind it. Shwari reasons
+    // and calls tools, which takes seconds rather than milliseconds, and the
+    // widget is already polling for the reply — holding the POST open would
+    // only make the visitor watch a spinner for the same wait.
     if (stored.aiEnabled) {
-      await forwardToPipeline(event, channel.secretToken);
+      const conversationId = stored.conversationId;
+      void dispatchInbound(
+        event,
+        { id: channel.id, tenantId: channel.tenantId, channelType: 'webchat', secretToken: channel.secretToken, status: 'active' },
+        conversationId
+      ).catch((e) => {
+        console.error('[webchat] dispatch failed:', e instanceof Error ? e.message : e);
+      });
     } else {
       console.log(`[webchat] conversation ${stored.conversationId} is staff-handled; no AI reply`);
     }
