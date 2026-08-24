@@ -45,6 +45,7 @@ const STATUS_LABEL: Record<AgentStatus, string> = {
 const CAPABILITY_LABELS: Record<string, string> = {
   get_business_profile: 'Read your business details',
   update_business_profile: 'Update your business details',
+  update_business_settings: 'Change your settings',
   list_services: 'Look up your services',
   save_service: 'Add or change a service',
   remove_service: 'Stop offering a service',
@@ -61,6 +62,8 @@ const CAPABILITY_LABELS: Record<string, string> = {
   attention_needed: 'Spot what needs you today',
   find_customers: 'Search your customers',
   update_customer: 'Update a customer or their stage',
+  message_customer: 'Message a customer in the inbox',
+  set_conversation_handling: 'Take over a chat or hand it back',
   save_customer_details: 'Save a customer’s name, email and phone',
   set_payment_instructions: 'Set how customers should pay you',
   get_payment_instructions: 'Read out how to pay',

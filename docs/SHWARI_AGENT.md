@@ -158,6 +158,30 @@ Current tools:
 Adding a tool to the catalogue does not hand it to anyone: what an agent may
 call is its `tools` column, enforced on every invocation.
 
+## What Shwari can do — and the four lines it will not cross
+
+Shwari (the manager) can run essentially the whole dashboard by chat: the
+business profile and **settings**, services, products, opening hours, the
+knowledge base and payment instructions, the CRM, appointments, orders,
+tickets, follow-ups, the AI team, and the **inbox** — it can message a customer
+and take a conversation over from the AI or hand it back.
+
+Four things stay off-limits on purpose. They are the platform's safety model,
+and the tools for them simply do not exist:
+
+1. **Verifying a payment.** An agent records a claim; a person confirms it,
+   behind a database trigger. No `verify`/`reject` tool exists for any agent.
+2. **Access and roles.** Inviting a user or changing someone's role is a human
+   admin action — an AI granting admin is exactly what must not happen.
+3. **Connecting a channel.** That needs a bot token or an OAuth secret the owner
+   pastes; there is nothing for an agent to do there but report readiness.
+4. **Permanent deletion.** Removing a product or service deactivates it so past
+   orders still make sense; a hard delete is admin-only, in the dashboard.
+
+Two automated tests hold this line: no tool name can verify or reject a payment,
+and the manager's tool list contains nothing that connects a channel, grants a
+role, or hard-deletes.
+
 ### Four lines the tools hold
 
 **No agent can mark a payment received.** `record_order` has no field for

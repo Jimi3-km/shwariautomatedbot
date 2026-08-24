@@ -734,31 +734,41 @@ export const listOrders: Tool = {
 export const updateOrderStatus: Tool = {
   name: 'update_order_status',
   description:
-    'Move an order along: confirmed, delivered or cancelled. This is the fulfilment status only — it says nothing about whether the order has been paid for, which only a person can decide.',
+    'Move an order along: confirmed, delivered or cancelled, and update where it is going. This is the fulfilment status only — it says nothing about whether the order has been paid for, which only a person can decide.',
   parameters: {
     type: 'object',
     properties: {
       order_ref: { type: 'string' },
       status: { type: 'string', enum: [...ORDER_STATES] },
+      delivery_location: { type: 'string', description: 'Where the order is going, if that changed.' },
     },
-    required: ['order_ref', 'status'],
+    required: ['order_ref'],
     additionalProperties: false,
   },
   mutates: true,
 
   async run(args, ctx) {
     const ref = str(args, 'order_ref', { required: true, max: 40 }).toUpperCase();
-    const status = oneOf(args, 'status', ORDER_STATES, null);
+    const statusRaw = str(args, 'status', { lower: true });
+    const delivery = str(args, 'delivery_location', { max: 300 });
+
+    if (!statusRaw && !delivery) {
+      throw new ToolInputError('Give a new status or a delivery location.');
+    }
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    // payment_status is deliberately absent. It changes only through the
+    // verification route, which requires a real staff user and is enforced by a
+    // database trigger independently of this code.
+    if (statusRaw) patch.status = oneOf(args, 'status', ORDER_STATES, null);
+    if (delivery) patch.delivery_location = delivery;
 
     const { data, error } = await serviceClient
       .from('orders')
-      // payment_status is deliberately absent. It changes only through the
-      // verification route, which requires a real staff user and is enforced
-      // by a database trigger independently of this code.
-      .update({ status, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('tenant_id', ctx.tenantId)
       .eq('order_ref', ref)
-      .select('order_ref, status, payment_status')
+      .select('order_ref, status, payment_status, delivery_location')
       .maybeSingle();
 
     if (error) throw new Error(error.message);
