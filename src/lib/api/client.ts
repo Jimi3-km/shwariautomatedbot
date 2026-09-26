@@ -22,7 +22,6 @@ export function initSupabase(): Promise<SupabaseClient> {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    const r = await fetch('/api/public-config');
     const r = await fetch('/api/public-config', { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not load application configuration');
     const cfg = (await r.json()) as { supabase_url?: string; supabase_anon_key?: string };
