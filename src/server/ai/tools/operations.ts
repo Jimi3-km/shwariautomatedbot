@@ -51,15 +51,6 @@ async function resolveCustomer(args: Record<string, unknown>, ctx: AgentContext)
   }
 
   if (!ctx.conversationId) {
-    const name = str(args, 'customer_name');
-    if (name) {
-      return {
-        leadId: null,
-        customerId: null,
-        customerName: name,
-        channelType: 'chat',
-      };
-    }
     throw new ToolInputError('Say which customer this is for by passing lead_id.');
   }
 
@@ -147,9 +138,6 @@ export const bookAppointment: Tool = {
       starts_at: { type: 'string', description: 'ISO date-time, e.g. 2026-09-04T14:30:00Z.' },
       duration_minutes: { type: 'number' },
       lead_id: { type: 'number', description: 'Required when you are not in the customer\'s own conversation.' },
-      customer_name: { type: 'string', description: 'The customer\'s name.' },
-      customer_phone: { type: 'string', description: 'The customer\'s phone number.' },
-      customer_email: { type: 'string', description: 'The customer\'s email address to send confirmation.' },
       notes: { type: 'string' },
     },
     required: ['service_name', 'starts_at'],
@@ -668,11 +656,11 @@ export const scheduleFollowUp: Tool = {
   mutates: true,
 
   async run(args, ctx) {
+    const message = str(args, 'message', { required: true, max: 1000 });
     const dueAt = when(args, 'due_at', { required: true })!;
     if (new Date(dueAt).getTime() < Date.now() - 60_000) {
       throw new ToolInputError('due_at is in the past. Pick a future time.');
     }
-    const message = str(args, 'message', { required: true, max: 1000 });
     const customer = await resolveCustomer(args, ctx);
 
     if (!customer.customerId || !customer.channelType) {
