@@ -20,7 +20,9 @@ type Status = 'booting' | 'signed-out' | 'recovery' | 'onboarding' | 'ready' | '
  */
 function arrivedForPasswordReset(): boolean {
   const hash = window.location.hash.replace(/^#/, '');
-  return new URLSearchParams(hash).get('type') === 'recovery';
+  const hashParams = new URLSearchParams(hash);
+  const searchParams = new URLSearchParams(window.location.search);
+  return hashParams.get('type') === 'recovery' || searchParams.get('type') === 'recovery';
 }
 
 export default function App() {

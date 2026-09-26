@@ -48,7 +48,13 @@ function toAccount(row: {
  * snippet works in development and production without a second setting.
  */
 export function widgetOrigin(): string {
-  return (process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, '');
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  const fallback = isProd ? 'https://shwariautomatedbot.vercel.app' : `http://localhost:${process.env.PORT || 3000}`;
+  const base = process.env.PUBLIC_API_URL || 
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null) ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+    fallback;
+  return base.replace(/\/+$/, '');
 }
 
 export function buildEmbed(siteKey: string): EmbedSnippet {
