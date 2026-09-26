@@ -361,5 +361,45 @@ await t('every tool an agent holds has a label to show', async () => {
   }
 });
 
+console.log('\n--- reading the dashboard ---');
+
+const DASHBOARD_READS = [
+  'get_business_settings', 'list_channels', 'list_conversations',
+  'read_conversation', 'list_payment_claims', 'get_agent_settings',
+];
+
+await t('the manager can read every dashboard section', () => {
+  for (const name of DASHBOARD_READS) {
+    assert.ok(TOOLS.has(name), `${name} is not in the catalogue`);
+    assert.ok(AGENT_BLUEPRINTS.manager.tools.includes(name),
+      `Shwari cannot read the ${name} section`);
+  }
+  assert.ok(AGENT_BLUEPRINTS.manager.tools.includes('update_agent_settings'),
+    'Shwari cannot change the AI Agent settings from chat');
+});
+
+await t('customer-facing agents cannot read the owner dashboard', () => {
+  for (const role of DEPARTMENTS) {
+    for (const name of DASHBOARD_READS.concat('update_agent_settings')) {
+      assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name),
+        `${role} must not be able to read or change ${name}`);
+    }
+  }
+});
+
+await t('reading payment claims is not verifying them', () => {
+  // The read tool exists; the decision tool still does not.
+  assert.ok(AGENT_BLUEPRINTS.manager.tools.includes('list_payment_claims'));
+  assert.ok(!TOOLS.has('verify_payment'), 'only a person verifies a payment');
+  assert.ok(!TOOLS.has('reject_payment'), 'only a person rejects a payment claim');
+});
+
+await t('Shwari holds no tool that connects or disconnects a channel', () => {
+  for (const name of AGENT_BLUEPRINTS.manager.tools) {
+    assert.ok(!/^(connect|disconnect)_/.test(name),
+      `${name} needs a secret the owner pastes, not a chat command`);
+  }
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

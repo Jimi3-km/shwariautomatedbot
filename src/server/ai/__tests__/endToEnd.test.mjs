@@ -702,6 +702,151 @@ await t('an order can be moved and re-routed in one call', async () => {
   assert.equal(updates[0].body.payment_status, undefined, 'fulfilment must not touch payment');
 });
 
+// ---------------------------------------------------------------------------
+// Reading the rest of the dashboard
+// ---------------------------------------------------------------------------
+
+console.log('\n--- reading the dashboard ---');
+
+await t('Shwari reads the payment claims waiting to be checked', async () => {
+  reset({
+    'GET payments': [
+      { id: 'pay-1', transaction_code: 'ABC123', amount: 900, currency: 'KES', verification_status: 'unverified' },
+      { id: 'pay-2', transaction_code: 'ZZZ999', amount: 500, currency: 'KES', verification_status: 'verified' },
+    ],
+  });
+  script = [
+    toolCall('list_payment_claims', { status: 'unverified' }),
+    says('One claim is waiting on you: 900 shillings under ABC123.'),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'payments' && r.method === 'GET'),
+    'it did not read the claims at all');
+  assert.match(turn.reply, /ABC123/);
+  assert.deepEqual(turn.actions, [], 'reading claims changes nothing');
+});
+
+await t('reading a claim never moves one to verified', async () => {
+  reset({
+    'GET payments': [{ id: 'pay-1', transaction_code: 'ABC123', amount: 900, verification_status: 'unverified' }],
+  });
+  script = [toolCall('list_payment_claims', {}), says('Still unverified.')];
+
+  await runAgentTurn(owner());
+
+  assert.equal(wrote('payments', 'PATCH').length, 0, 'a read must not touch a payment');
+  assert.equal(wrote('payments', 'POST').length, 0, 'a read must not write a payment');
+});
+
+await t('Shwari reads the inbox', async () => {
+  reset({
+    'GET conversations': [{
+      id: 'conv-1', customer_name: 'Amina', customer_id: 'v1', channel_type: 'telegram',
+      ai_enabled: false, unread_count: 2, lead_id: 7, last_message_preview: 'anyone there?',
+    }],
+  });
+  script = [toolCall('list_conversations', { unread_only: true }), says('Amina has two unread messages.')];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'conversations' && r.method === 'GET'),
+    'it did not read the inbox');
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('Shwari reads one customer conversation', async () => {
+  reset({
+    'GET conversations': [{ id: 'conv-9', customer_name: 'Amina', channel_type: 'telegram', ai_enabled: true }],
+    'GET conversation_messages': [
+      { sender: 'agent', body: 'Hello Amina', created_at: '2026-09-01T10:00:00Z' },
+      { sender: 'customer', body: 'Is my order ready?', created_at: '2026-09-01T10:01:00Z' },
+    ],
+  });
+  script = [
+    toolCall('read_conversation', { conversation_id: 'conv-9' }),
+    says('Amina was asking whether her order is ready.'),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'conversation_messages' && r.method === 'GET'),
+    'it did not read the thread');
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('Shwari checks which channels are connected', async () => {
+  reset({
+    'GET channels_safe': [{ channel_type: 'telegram', display_name: '@shopbot', status: 'active' }],
+  });
+  script = [toolCall('list_channels', {}), says('Telegram is connected.')];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'channels_safe' && r.method === 'GET'),
+    'it did not read the channels');
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('Shwari reads the business settings', async () => {
+  reset({
+    'GET tenants': [{
+      business_name: 'Test Co', agent_name: 'Shwari', order_prefix: 'ORD',
+      contact_info: { email: 'hello@test.co' }, languages: ['English'],
+    }],
+  });
+  script = [toolCall('get_business_settings', {}), says('Your assistant is called Shwari.')];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'tenants' && r.method === 'GET'));
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('Shwari reads the AI Agent settings', async () => {
+  reset({ 'GET agent_settings': [{ persona: 'Warm and brief', memory_window: 40 }] });
+  script = [toolCall('get_agent_settings', {}), says('Your agent is set to be warm and brief.')];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.ok(db.some((r) => r.table === 'agent_settings' && r.method === 'GET'));
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('the owner changes the AI Agent settings by chat', async () => {
+  reset();
+  script = [
+    toolCall('update_agent_settings', {
+      persona: 'Warm and brief', followup_delay_hours: 48, sales_script: ['Greet', 'Qualify'],
+    }),
+    says('Updated — 48 hours before a follow-up.'),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  const writes = wrote('agent_settings', 'POST');
+  assert.equal(writes.length, 1, 'the agent settings were not written');
+  assert.equal(writes[0].body.tenant_id, 'tenant-a', 'the write must be scoped to the tenant');
+  assert.equal(writes[0].body.persona, 'Warm and brief');
+  assert.equal(writes[0].body.followup_delay_hours, 48);
+  assert.deepEqual(writes[0].body.sales_script, ['Greet', 'Qualify']);
+  assert.deepEqual(turn.actions, ['update_agent_settings']);
+});
+
+await t('an out-of-range memory window is refused before any write', async () => {
+  reset();
+  script = [
+    toolCall('update_agent_settings', { memory_window: 5000 }),
+    says('That is more than I can keep in mind — the most is 200.'),
+  ];
+
+  const turn = await runAgentTurn(owner());
+
+  assert.equal(wrote('agent_settings', 'POST').length, 0, 'a bad setting must not reach the database');
+  assert.deepEqual(turn.actions, []);
+});
+
 console.log('\n--- the lines Shwari must not cross ---');
 
 await t('no tool can verify or reject a payment', () => {

@@ -22,6 +22,10 @@ import {
   listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
   saveCustomerDetails, businessMetrics, attentionNeeded,
 } from './insight.js';
+import {
+  getBusinessSettings, listChannels, listConversations, readConversation,
+  listPaymentClaims, getAgentSettings, updateAgentSettings,
+} from './dashboard.js';
 
 /**
  * The tool catalogue.
@@ -46,6 +50,8 @@ const ALL: Tool[] = [
   scheduleFollowUp, listFollowUps, cancelFollowUp,
   listProducts, saveProduct, removeProduct, findCustomers, updateCustomer,
   saveCustomerDetails, businessMetrics, attentionNeeded,
+  getBusinessSettings, listChannels, listConversations, readConversation,
+  listPaymentClaims, getAgentSettings, updateAgentSettings,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));
