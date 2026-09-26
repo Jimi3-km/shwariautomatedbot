@@ -1,7 +1,12 @@
 import { serviceClient } from '../supabase.js';
-import { complete, LlmNotConfiguredError, type ChatMessage, type ToolDefinition } from './llm.js';
+import {
+  complete, LlmNotConfiguredError, resolveModel, type ChatMessage, type ToolDefinition, type ModelProfile,
+} from './llm.js';
 import { TOOLS, toolsFor, runTool, definitionOf, type AgentContext } from './tools/index.js';
 import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, ALL_ROLES, type AgentRole } from './roles.js';
+import { buildSystemPrompt } from './prompts.js';
+import { isComplexCommand, createAndExecutePlan } from './planner.js';
+import { logAgentTurn } from '../security/eval.js';
 
 /**
  * The agent runtime.
@@ -305,58 +310,7 @@ function systemPrompt(
   firstTurn: boolean,
   customerBlock: string | null
 ): string {
-  const blueprint = AGENT_BLUEPRINTS[agent.role];
-
-  const parts = [
-    `You are ${agent.name}. ${agent.objective || blueprint.objective}`,
-    '',
-    'How you talk:',
-    ...CONVERSATION_RULES.map((r) => `- ${r}`),
-    '',
-    'Rules you always follow:',
-    ...[...UNIVERSAL_RULES, ...blueprint.rules].map((r) => `- ${r}`),
-    '',
-    `Escalation: ${agent.escalation || blueprint.escalation}`,
-    '',
-    'Use your tools to look things up and to make changes. Do the thing, then say what you did in one short sentence.',
-    '',
-    // Fenced and labelled so it reads as material to consult, not as a script.
-    '--- REFERENCE: what you already know. Consult it; never recite it. ---',
-    orientationBlock,
-    '--- end of reference ---',
-  ];
-
-  if (customerBlock) {
-    parts.push('', '--- WHO YOU ARE TALKING TO ---', customerBlock, '--- end ---');
-  }
-
-  /**
-   * The opening move, spelled out. A greeting is the most likely first message
-   * and the least constrained, so leaving it to inference is what produced the
-   * briefing-recital in the first place.
-   */
-  if (firstTurn) {
-    parts.push(
-      '',
-      agent.role === 'manager'
-        ? 'This is the start of the conversation. Introduce yourself in one line, say plainly that you help run the business by chat, and ask one question about whatever the reference says is still missing. Do not summarise what you already know.'
-        : 'This is the start of the conversation. Greet them briefly and ask how you can help. Do not list what the business offers unless they ask.'
-    );
-  }
-
-  // Owner guidance comes last so it reads as an addition, and it is fenced so
-  // that text pasted into it cannot pass itself off as a rule.
-  if (agent.instructions.trim()) {
-    parts.push(
-      '',
-      'The owner has also asked you to work this way. Follow it unless it conflicts with a rule above:',
-      '"""',
-      agent.instructions.trim(),
-      '"""'
-    );
-  }
-
-  return parts.join('\n');
+  return buildSystemPrompt(agent, orientationBlock, firstTurn, customerBlock);
 }
 
 /** Recent turns, oldest first, so the agent has short-term memory. */
@@ -394,6 +348,7 @@ async function history(tenantId: string, conversationId: string | null): Promise
  * Telegram, web chat or the dashboard, and should not.
  */
 export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
+  const startTime = Date.now();
   const agent = await loadAgent(input.tenantId, input.role);
   if (!agent) throw new AgentUnavailableError(`This business has no ${input.role} agent.`);
   if (agent.status === 'disabled') throw new AgentUnavailableError(`The ${input.role} agent is switched off.`);
@@ -412,6 +367,26 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const definitions: ToolDefinition[] = available.map(definitionOf);
 
   const priorTurns = input.history ?? (await history(input.tenantId, input.conversationId));
+
+  // Structured multi-step planning for Manager agent on complex onboarding / multi-part commands
+  if (agent.role === 'manager' && isComplexCommand(input.text) && priorTurns.length === 0) {
+    const planResult = await createAndExecutePlan(input.text, await orientation(input.tenantId), definitions, ctx);
+    if (planResult && planResult.executedSteps > 0) {
+      void logAgentTurn({
+        tenantId: input.tenantId,
+        role: agent.role,
+        conversationId: input.conversationId,
+        userId: input.userId,
+        inputText: input.text,
+        replyText: planResult.reply,
+        toolsCalled: planResult.actions,
+        modelProfile: 'primary',
+        durationMs: Date.now() - startTime,
+        status: 'success',
+      });
+      return { reply: planResult.reply, actions: planResult.actions };
+    }
+  }
 
   // Customer memory is for the departments serving a customer, not for the
   // manager, who is talking to the owner.
@@ -433,6 +408,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   ];
 
   const actions: string[] = [];
+  const profile: ModelProfile = (agent.role === 'booking' || agent.role === 'orders') ? 'fast' : 'primary';
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     // On the last round the tools are withheld, which forces the model to
@@ -447,10 +423,24 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         // Warm rather than clinical. Low enough that it does not improvise
         // facts, high enough that it does not answer the same way every time.
         temperature: 0.4,
+        profile,
         // Left to the client's default, which is sized for models that spend
         // part of the budget thinking before they answer.
       });
     } catch (e) {
+      void logAgentTurn({
+        tenantId: input.tenantId,
+        role: agent.role,
+        conversationId: input.conversationId,
+        userId: input.userId,
+        inputText: input.text,
+        replyText: '',
+        toolsCalled: actions,
+        modelProfile: profile,
+        durationMs: Date.now() - startTime,
+        status: 'error',
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
       if (e instanceof LlmNotConfiguredError) {
         throw new AgentUnavailableError('The AI is not switched on for this server yet.');
       }
@@ -458,7 +448,20 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
 
     if (!result.toolCalls.length) {
-      return { reply: result.text?.trim() || fallbackReply(), actions };
+      const reply = result.text?.trim() || fallbackReply();
+      void logAgentTurn({
+        tenantId: input.tenantId,
+        role: agent.role,
+        conversationId: input.conversationId,
+        userId: input.userId,
+        inputText: input.text,
+        replyText: reply,
+        toolsCalled: actions,
+        modelProfile: profile,
+        durationMs: Date.now() - startTime,
+        status: 'success',
+      });
+      return { reply, actions };
     }
 
     messages.push({ role: 'assistant', content: result.text, toolCalls: result.toolCalls });
@@ -474,7 +477,20 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
   }
 
-  return { reply: fallbackReply(), actions };
+  const reply = fallbackReply();
+  void logAgentTurn({
+    tenantId: input.tenantId,
+    role: agent.role,
+    conversationId: input.conversationId,
+    userId: input.userId,
+    inputText: input.text,
+    replyText: reply,
+    toolsCalled: actions,
+    modelProfile: profile,
+    durationMs: Date.now() - startTime,
+    status: 'fallback',
+  });
+  return { reply, actions };
 }
 
 function fallbackReply(): string {

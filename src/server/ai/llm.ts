@@ -82,8 +82,20 @@ export function llmConfigured(): { configured: boolean; missing: string[] } {
   return { configured: missing.length === 0, missing };
 }
 
-export function llmModel(): string {
-  return process.env.SHWARI_MODEL || DEFAULT_MODEL;
+export type ModelProfile = 'primary' | 'fast' | 'fallback';
+
+export function resolveModel(profile: ModelProfile = 'primary'): string {
+  if (profile === 'fast') {
+    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
+  }
+  if (profile === 'fallback') {
+    return process.env.SHWARI_FALLBACK_MODEL || 'meta/llama-3.3-70b-instruct';
+  }
+  return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
+}
+
+export function llmModel(profile: ModelProfile = 'primary'): string {
+  return resolveModel(profile);
 }
 
 function baseUrl(): string {
@@ -121,6 +133,8 @@ export interface CompleteOptions {
   maxTokens?: number;
   /** Abandon the call rather than hang a webhook. */
   timeoutMs?: number;
+  /** Targeted model profile. Defaults to 'primary'. */
+  profile?: ModelProfile;
 }
 
 /**
@@ -131,6 +145,19 @@ export interface CompleteOptions {
  * never executes anything.
  */
 export async function complete(opts: CompleteOptions): Promise<Completion> {
+  const profile = opts.profile ?? 'primary';
+  try {
+    return await executeCompletion(opts, profile);
+  } catch (err) {
+    if (profile !== 'fallback' && err instanceof LlmError && (err.status >= 500 || err.status === 429)) {
+      console.warn(`[llm] ${profile} model failed with HTTP ${err.status}; retrying with fallback model...`);
+      return await executeCompletion(opts, 'fallback');
+    }
+    throw err;
+  }
+}
+
+async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): Promise<Completion> {
   const apiKey = process.env.SHWARI_API_KEY;
   if (!apiKey) throw new LlmNotConfiguredError();
 
@@ -147,7 +174,7 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: llmModel(),
+        model: resolveModel(profile),
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
         max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
