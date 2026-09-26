@@ -1,4 +1,5 @@
 import { serviceClient } from '../../supabase.js';
+import { logAuditEvent } from '../../security/audit.js';
 import type { ToolDefinition } from '../llm.js';
 import type { AgentRole } from '../roles.js';
 
@@ -139,6 +140,17 @@ async function record(
   // A failed audit write must not swallow the tool's own result, but it is
   // worth shouting about: the log is the only record of what an agent did.
   if (logErr) console.error('[tools] audit write failed:', logErr.message);
+
+  void logAuditEvent({
+    tenantId: ctx.tenantId,
+    actorId: ctx.userId || ctx.conversationId || 'agent',
+    actorType: ctx.userId ? 'user' : (ctx.conversationId ? 'customer' : 'agent'),
+    agentRole: ctx.agentRole,
+    action: `tool.${tool}`,
+    resourceType: 'agent_tool',
+    resourceId: tool,
+    details: { ok, arguments: args, error: error || null },
+  });
 }
 
 function truncate(value: unknown): unknown {

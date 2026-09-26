@@ -23,7 +23,24 @@ export const brevoWebhookRouter = Router();
  *  4. Route to the appropriate AI department (support, sales, booking).
  *  5. Run the agent turn and dispatch the reply directly back to the customer via Brevo.
  */
+import crypto from 'node:crypto';
+
 brevoWebhookRouter.post('/webhooks/brevo-email', (req: Request, res: Response) => {
+  // If a webhook secret is configured, require it in header x-brevo-webhook-secret or query param ?secret=
+  const expectedSecret = process.env.BREVO_WEBHOOK_SECRET;
+  if (expectedSecret) {
+    const presented = (req.headers['x-brevo-webhook-secret'] || req.query.secret) as string | undefined;
+    if (!presented || typeof presented !== 'string' || presented.length !== expectedSecret.length) {
+      console.warn('[webhooks/brevo-email] rejected: missing or invalid webhook secret');
+      return res.sendStatus(401);
+    }
+    const valid = crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(expectedSecret));
+    if (!valid) {
+      console.warn('[webhooks/brevo-email] rejected: incorrect webhook secret');
+      return res.sendStatus(401);
+    }
+  }
+
   // Acknowledge Brevo immediately so it does not retry while the LLM generates a reply.
   res.sendStatus(200);
 
@@ -166,12 +183,14 @@ async function resolveTenantForEmail(recipients?: Array<{ Address?: string }>): 
   // Check recipient addresses for a match against a tenant slug or contact_info
   if (recipients && recipients.length) {
     for (const r of recipients) {
-      const addr = (r.Address || '').toLowerCase();
+      const addr = (r.Address || '').toLowerCase().trim();
+      if (!addr) continue;
       const localPart = addr.split('@')[0];
       const { data: tenant } = await serviceClient
         .from('tenants')
         .select('id, name, business_name, slug')
-        .or(`slug.eq.${localPart}`)
+        .or(`slug.eq.${localPart},notification_target.eq.${addr}`)
+        .eq('status', 'active')
         .limit(1)
         .maybeSingle();
 
@@ -179,14 +198,6 @@ async function resolveTenantForEmail(recipients?: Array<{ Address?: string }>): 
     }
   }
 
-  // Fallback: Use the first active tenant in the system
-  const { data: defaultTenant } = await serviceClient
-    .from('tenants')
-    .select('id, name, business_name, slug')
-    .eq('status', 'active')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  return defaultTenant ?? null;
+  // Strictly return null if unassigned. Never fallback to another tenant!
+  return null;
 }

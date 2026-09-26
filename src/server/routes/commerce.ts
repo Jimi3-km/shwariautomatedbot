@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
+import { logAuditEvent } from '../security/audit.js';
 
 export const commerceRouter = Router();
 
@@ -52,9 +53,18 @@ commerceRouter.post(
     const { data, error } = await ctx.db
       .from('payments').update(updates)
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId)
-      .select('*').maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Payment not found' });
+
+    void logAuditEvent({
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      actorType: 'user',
+      action: `payment.${decision}`,
+      resourceType: 'payments',
+      resourceId: req.params.id,
+      details: { decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency },
+    });
 
     // Keep the lead stage in step with the verification decision.
     if (data.lead_id) {
