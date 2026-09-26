@@ -4,6 +4,8 @@ export interface AgentTurnEvaluation {
   tenantId: string;
   role: string;
   conversationId?: string | null;
+  channelType?: string | null;
+  channel?: string | null;
   userId?: string | null;
   modelProfile?: string;
   modelName?: string;
@@ -29,6 +31,7 @@ export async function logAgentTurn(turn: AgentTurnEvaluation): Promise<void> {
     const reply = turn.replyText ?? turn.reply ?? null;
     const tools = turn.toolsCalled ?? turn.toolsInvoked ?? [];
     const err = turn.errorMessage ?? turn.error ?? null;
+    const channel = turn.channelType ?? turn.channel ?? null;
 
     const { error } = await serviceClient.from('audit_events').insert({
       tenant_id: turn.tenantId,
@@ -41,6 +44,7 @@ export async function logAgentTurn(turn: AgentTurnEvaluation): Promise<void> {
         model_profile: turn.modelProfile ?? 'primary',
         model_name: turn.modelName ?? null,
         conversation_id: turn.conversationId ?? null,
+        channel_type: channel,
         input_preview: input ? input.slice(0, 300) : '',
         tools_invoked: tools,
         duration_ms: turn.durationMs,

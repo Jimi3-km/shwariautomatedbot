@@ -132,8 +132,26 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+/**
+ * Checks if the caller is a global super-admin.
+ * Super-admins can view cross-tenant agent turns and audit metrics.
+ */
+export function isSuperAdmin(req: Request): boolean {
+  const email = req.ctx?.email || req.authUser?.email;
+  if (!email) return false;
+  const superAdminList = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return superAdminList.includes(email.toLowerCase());
+}
+
 /** Rejects any request that tries to steer tenancy from the client. */
 export function rejectClientTenantId(req: Request, res: Response, next: NextFunction) {
+  // Admin endpoints under /api/admin manage their own authorization and tenant scoping
+  if (req.path.startsWith('/admin')) {
+    return next();
+  }
   const inBody = req.body && typeof req.body === 'object' && 'tenant_id' in req.body;
   const inQuery = req.query && 'tenant_id' in req.query;
   if (inBody || inQuery) {

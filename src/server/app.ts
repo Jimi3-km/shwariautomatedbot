@@ -19,6 +19,7 @@ import { operationsRouter } from './routes/operations.js';
 import { internalRouter } from './routes/internal.js';
 import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
+import { adminRouter } from './routes/admin.js';
 
 export function createApp() {
   const app = express();
@@ -112,6 +113,7 @@ export function createApp() {
   app.use('/api', setupRouter);
   app.use('/api', shwariRouter);
   app.use('/api', operationsRouter);
+  app.use('/api', adminRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

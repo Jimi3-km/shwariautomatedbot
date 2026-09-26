@@ -17,6 +17,7 @@ import { Analytics } from '../pages/Analytics';
 import { AgentSettings } from '../pages/AgentSettings';
 import { Integrations } from '../pages/Integrations';
 import { Settings } from '../pages/Settings';
+import { AgentQA } from '../pages/AgentQA';
 import { NotFound } from '../pages/NotFound';
 
 export const router = createBrowserRouter([
@@ -41,6 +42,7 @@ export const router = createBrowserRouter([
       { path: 'agent', element: <AgentSettings /> },
       { path: 'integrations', element: <Integrations /> },
       { path: 'settings', element: <Settings /> },
+      { path: 'admin/agent-qa', element: <AgentQA /> },
       // Legacy hash-era links.
       { path: 'conversations', element: <Navigate to="/inbox" replace /> },
       { path: 'channels', element: <Navigate to="/integrations" replace /> },

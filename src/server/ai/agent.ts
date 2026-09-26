@@ -32,6 +32,7 @@ export interface AgentTurnInput {
   /** The signed-in user, when there is one. Null for a chat identity. */
   userId: string | null;
   conversationId: string | null;
+  channelType?: string | null;
   text: string;
   /**
    * Short-term memory, when the caller keeps the transcript somewhere other
@@ -368,6 +369,17 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
 
   const priorTurns = input.history ?? (await history(input.tenantId, input.conversationId));
 
+  let channelType = input.channelType ?? (agent.role === 'manager' && input.userId ? 'dashboard' : null);
+  if (!channelType && input.conversationId) {
+    const { data: conv } = await serviceClient
+      .from('conversations')
+      .select('channel_type')
+      .eq('tenant_id', input.tenantId)
+      .eq('id', input.conversationId)
+      .maybeSingle();
+    channelType = conv?.channel_type ?? null;
+  }
+
   // Structured multi-step planning for Manager agent on complex onboarding / multi-part commands
   if (agent.role === 'manager' && isComplexCommand(input.text) && priorTurns.length === 0) {
     const planResult = await createAndExecutePlan(input.text, await orientation(input.tenantId), definitions, ctx);
@@ -376,6 +388,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         tenantId: input.tenantId,
         role: agent.role,
         conversationId: input.conversationId,
+        channelType,
         userId: input.userId,
         inputText: input.text,
         replyText: planResult.reply,
@@ -432,6 +445,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         tenantId: input.tenantId,
         role: agent.role,
         conversationId: input.conversationId,
+        channelType,
         userId: input.userId,
         inputText: input.text,
         replyText: '',
@@ -453,6 +467,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         tenantId: input.tenantId,
         role: agent.role,
         conversationId: input.conversationId,
+        channelType,
         userId: input.userId,
         inputText: input.text,
         replyText: reply,
@@ -482,6 +497,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     tenantId: input.tenantId,
     role: agent.role,
     conversationId: input.conversationId,
+    channelType,
     userId: input.userId,
     inputText: input.text,
     replyText: reply,

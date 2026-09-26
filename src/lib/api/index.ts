@@ -334,3 +334,68 @@ export const archiveService = (id: string) =>
 
 export const deleteService = (id: string) =>
   request<{ deleted: boolean }>(`/services/${id}?hard=true`, { method: 'DELETE' });
+
+// ---------------------------------------------------------------------------
+// Agent QA & Evaluation
+// ---------------------------------------------------------------------------
+
+export interface AgentTurnLabel {
+  id: string;
+  turn_event_id: number | string;
+  tenant_id: string;
+  labeled_by: string | null;
+  label: 'ok' | 'needs_improvement' | 'bug';
+  tags: string[];
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentTurnItem {
+  id: number | string;
+  tenant_id: string;
+  agent_role: string;
+  created_at: string;
+  details: {
+    model_profile?: string;
+    model_name?: string | null;
+    conversation_id?: string | null;
+    channel_type?: string | null;
+    input_preview?: string;
+    tools_invoked?: string[];
+    duration_ms?: number;
+    status?: string;
+    error?: string | null;
+    reply_preview?: string | null;
+  };
+  label: AgentTurnLabel | null;
+}
+
+export interface AgentTurnFilters {
+  tenant_id?: string;
+  role?: string;
+  channel_type?: string;
+  model_profile?: string;
+  status?: string;
+  tool?: string;
+  label?: string;
+  start_date?: string;
+  end_date?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const getAgentTurns = (filters: AgentTurnFilters = {}) =>
+  request<{ turns: AgentTurnItem[]; total: number; limit: number; offset: number }>(
+    `/admin/agent-turns${qs(filters)}`
+  );
+
+export const labelAgentTurn = (
+  turnId: number | string,
+  body: { label: 'ok' | 'needs_improvement' | 'bug'; tags?: string[]; notes?: string }
+) =>
+  request<{ ok: boolean; label: AgentTurnLabel }>(`/admin/agent-turns/${turnId}/label`, {
+    method: 'POST',
+    body,
+  });
+

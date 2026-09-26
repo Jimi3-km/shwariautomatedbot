@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy, Wrench,
+  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck,
 } from 'lucide-react';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
@@ -58,7 +58,7 @@ export function AppShell() {
 }
 
 function SidebarContent() {
-  const { tenant, counts } = useSession();
+  const { tenant, counts, isAdmin } = useSession();
 
   return (
     <>
@@ -89,6 +89,16 @@ function SidebarContent() {
             </NavLink>
           );
         })}
+        {isAdmin && (
+          <NavLink
+            to="/admin/agent-qa"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 4 }}
+          >
+            <ShieldCheck size={16} style={{ flexShrink: 0, color: 'var(--accent)' }} />
+            <span style={{ flex: 1, textAlign: 'left' }}>Agent QA</span>
+          </NavLink>
+        )}
       </nav>
 
       <div style={{ padding: 8, borderTop: '1px solid var(--border)' }}>
