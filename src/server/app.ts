@@ -13,6 +13,7 @@ import { onboardingRouter } from './routes/onboarding.js';
 import { setupRouter } from './routes/setup.js';
 import { metaWebhookRouter } from './routes/webhooks/meta.js';
 import { telegramWebhookRouter } from './routes/webhooks/telegram.js';
+import { brevoWebhookRouter } from './routes/webhooks/brevo.js';
 import { shwariRouter } from './routes/shwari.js';
 import { operationsRouter } from './routes/operations.js';
 import { internalRouter } from './routes/internal.js';
@@ -86,6 +87,7 @@ export function createApp() {
    */
   app.use('/api', metaWebhookRouter);
   app.use('/api', telegramWebhookRouter);
+  app.use('/api', brevoWebhookRouter);
   app.use('/api', internalRouter);
 
   /**

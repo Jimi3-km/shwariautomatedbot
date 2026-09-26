@@ -1,5 +1,6 @@
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, oneOf, type Tool, type AgentContext } from './types.js';
+import { ToolInputError, str, num, oneOf, when, type Tool, type AgentContext } from './types.js';
+import { sendAppointmentConfirmation, sendOrderReceipt } from '../../services/brevo.js';
 
 /**
  * Tools that do work rather than describe it: appointments, orders, tickets,
@@ -148,6 +149,7 @@ export const bookAppointment: Tool = {
       lead_id: { type: 'number', description: 'Required when you are not in the customer\'s own conversation.' },
       customer_name: { type: 'string', description: 'The customer\'s name.' },
       customer_phone: { type: 'string', description: 'The customer\'s phone number.' },
+      customer_email: { type: 'string', description: 'The customer\'s email address to send confirmation.' },
       notes: { type: 'string' },
     },
     required: ['service_name', 'starts_at'],
@@ -240,6 +242,37 @@ export const bookAppointment: Tool = {
       .single();
 
     if (error) throw new Error(error.message);
+
+    // Look up customer email if available to send confirmation
+    let customerEmail = str(args, 'customer_email', { max: 200 });
+    if (!customerEmail && customer.leadId) {
+      const { data: leadRow } = await serviceClient
+        .from('leads')
+        .select('email')
+        .eq('id', customer.leadId)
+        .eq('tenant_id', ctx.tenantId)
+        .maybeSingle();
+      if (leadRow?.email) customerEmail = leadRow.email;
+    }
+
+    if (customerEmail) {
+      const { data: tenantRow } = await serviceClient
+        .from('tenants')
+        .select('business_name, name')
+        .eq('id', ctx.tenantId)
+        .maybeSingle();
+
+      void sendAppointmentConfirmation({
+        customerEmail,
+        customerName: finalCustomerName,
+        serviceName: service?.name ?? serviceName,
+        startsAt,
+        durationMinutes: minutes,
+        businessName: tenantRow?.business_name || tenantRow?.name || 'Shwari Services',
+        notes: str(args, 'notes', { max: 1000 }) || undefined,
+      }).catch((e) => console.error('[brevo] booking email error:', e));
+    }
+
     return { booked: true, appointment: data };
   },
 };
@@ -339,6 +372,7 @@ export const recordOrder: Tool = {
       },
       total: { type: 'number', description: 'Order total. Omit if it is not settled yet.' },
       delivery_location: { type: 'string' },
+      customer_email: { type: 'string', description: 'The customer\'s email address to send receipt.' },
       lead_id: { type: 'number', description: 'Required when you are not in the customer\'s own conversation.' },
     },
     required: ['items'],
@@ -371,7 +405,7 @@ export const recordOrder: Tool = {
     const customer = await resolveCustomer(args, ctx);
 
     const { data: tenant } = await serviceClient
-      .from('tenants').select('order_prefix, currency').eq('id', ctx.tenantId).single();
+      .from('tenants').select('business_name, order_prefix, currency').eq('id', ctx.tenantId).single();
 
     const { data, error } = await serviceClient
       .from('orders')
@@ -395,6 +429,31 @@ export const recordOrder: Tool = {
       .single();
 
     if (error) throw new Error(error.message);
+
+    // Look up customer email if available to send receipt
+    let orderCustomerEmail = str(args, 'customer_email', { max: 200 });
+    if (!orderCustomerEmail && customer.leadId) {
+      const { data: leadRow } = await serviceClient
+        .from('leads')
+        .select('email, customer_name')
+        .eq('id', customer.leadId)
+        .eq('tenant_id', ctx.tenantId)
+        .maybeSingle();
+      if (leadRow?.email) orderCustomerEmail = leadRow.email;
+    }
+
+    if (orderCustomerEmail) {
+      void sendOrderReceipt({
+        customerEmail: orderCustomerEmail,
+        customerName: customer.customerName || 'Valued Customer',
+        orderId: data.order_ref || data.id,
+        items: items.map((i) => ({ name: i.name, quantity: i.qty, unitPrice: i.price })),
+        totalAmount: total ?? 0,
+        currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
+        businessName: tenant?.business_name || 'Shwari Commerce',
+      }).catch((e) => console.error('[brevo] order receipt email error:', e));
+    }
+
     return { order: data, note: 'Recorded as unpaid. A person verifies every payment.' };
   },
 };
