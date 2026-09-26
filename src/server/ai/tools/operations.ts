@@ -1,5 +1,5 @@
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, oneOf, when, type Tool, type AgentContext } from './types.js';
+import { ToolInputError, str, num, oneOf, type Tool, type AgentContext } from './types.js';
 import { sendAppointmentConfirmation, sendOrderReceipt } from '../../services/brevo.js';
 
 /**

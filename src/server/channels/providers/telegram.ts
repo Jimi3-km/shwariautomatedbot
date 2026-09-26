@@ -36,14 +36,7 @@ import {
  * ("delivering messages somewhere else") and the fix is to reconnect.
  */
 const webhookUrl = () => {
-  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-  const fallback = isProd ? 'https://shwariautomatedbot.vercel.app' : '';
-  const base = (
-    process.env.PUBLIC_API_URL ||
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null) ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-    fallback
-  ).replace(/\/+$/, '');
+  const base = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
   return base ? `${base}/api/webhooks/telegram` : '';
 };
 

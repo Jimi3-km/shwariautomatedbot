@@ -50,11 +50,11 @@ interface BrevoInboundItem {
 }
 
 async function handleInboundEmail(body: unknown): Promise<void> {
-  const payload = body as { items?: BrevoInboundItem[] } | BrevoInboundItem;
-  const items: BrevoInboundItem[] = Array.isArray(payload.items)
-    ? payload.items
-    : payload && typeof payload === 'object' && 'Sender' in payload
-    ? [payload as BrevoInboundItem]
+  const raw = body as Record<string, unknown>;
+  const items: BrevoInboundItem[] = Array.isArray(raw?.items)
+    ? (raw.items as BrevoInboundItem[])
+    : raw && typeof raw === 'object' && 'Sender' in raw
+    ? [raw as unknown as BrevoInboundItem]
     : [];
 
   if (!items.length) {
@@ -86,7 +86,7 @@ async function handleInboundEmail(body: unknown): Promise<void> {
     }
 
     // Prevent duplicate processing
-    const claimed = await claimEvent('email', messageId, tenant.id, 'brevo_inbound');
+    const claimed = await claimEvent('webchat', messageId, tenant.id, 'brevo_inbound');
     if (!claimed) {
       console.log(`[webhooks/brevo-email] duplicate message ${messageId}; skipped`);
       continue;
@@ -95,13 +95,13 @@ async function handleInboundEmail(body: unknown): Promise<void> {
     const event: NormalizedInboundEvent = {
       tenantId: tenant.id,
       channelId: 'brevo_inbound',
-      channelType: 'chat',
+      channelType: 'webchat',
       customerId: senderEmail,
       customerName: senderName,
       messageId,
       text: `[Email: ${subject}]\n\n${textContent}`,
+      media: null,
       timestamp: new Date().toISOString(),
-      raw: item,
     };
 
     const stored = await persistInbound(event);
@@ -115,7 +115,7 @@ async function handleInboundEmail(body: unknown): Promise<void> {
     // Execute AI agent response
     if (llmConfigured().configured) {
       const routed = await chooseDepartment(tenant.id, textContent);
-      const role = routed?.role || 'customer_support';
+      const role = routed?.role || 'support';
 
       try {
         const turn = await runAgentTurn({
