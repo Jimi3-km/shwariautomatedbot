@@ -335,6 +335,80 @@ await t('the sales agent records an order, always unpaid', async () => {
   assert.deepEqual(turn.actions, ['record_order']);
 });
 
+await t('the support agent reads payment instructions', async () => {
+  reset({
+    'GET agents': [{
+      role: 'support', name: 'Support', objective: '', instructions: '',
+      tools: AGENT_BLUEPRINTS.support.tools, permissions: {}, escalation: '', status: 'active',
+    }],
+    'GET conversation_messages': [],
+    'GET business_facts': [{ value: 'Pay via M-Pesa Till 123456.' }],
+  });
+  script = [
+    toolCall('get_payment_instructions', {}),
+    says('You can pay via M-Pesa Till 123456.'),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('support'), text: 'how can I pay for my service?' });
+
+  assert.ok(db.some((r) => r.table === 'business_facts' && r.method === 'GET'));
+  assert.match(turn.reply, /123456/);
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('the orders agent checks calendar availability', async () => {
+  reset({
+    'GET agents': [{
+      role: 'orders', name: 'Orders & Payments', objective: '', instructions: '',
+      tools: AGENT_BLUEPRINTS.orders.tools, permissions: {}, escalation: '', status: 'active',
+    }],
+    'GET conversation_messages': [],
+    'GET appointments': [{ id: 'a1', starts_at: '2026-09-04T10:00:00Z', service_name: 'Delivery' }],
+  });
+  script = [
+    toolCall('list_appointments', { from: '2026-09-04T00:00:00Z', to: '2026-09-04T23:59:59Z' }),
+    says('There is an appointment at 10 AM on September 4th.'),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('orders'), text: 'what appointments are scheduled for Friday?' });
+
+  assert.ok(db.some((r) => r.table === 'appointments' && r.method === 'GET'));
+  assert.match(turn.reply, /10 AM/);
+  assert.deepEqual(turn.actions, []);
+});
+
+await t('the booking agent checks diary and books with customer name', async () => {
+  reset({
+    'GET agents': [{
+      role: 'booking', name: 'Bookings', objective: '', instructions: '',
+      tools: AGENT_BLUEPRINTS.booking.tools, permissions: {}, escalation: '', status: 'active',
+    }],
+    'GET conversation_messages': [],
+    'GET conversations': [{
+      id: 'conv-1', lead_id: 12, customer_id: 'cust-12',
+      customer_name: 'David Kim', channel_type: 'webchat',
+    }],
+    'GET appointments': [],
+    'GET services': [{ id: 'svc-1', name: 'Consultation', duration_minutes: 45, active: true }],
+  });
+  rows['POST appointments'] = [{ id: 'apt-2', service_name: 'Consultation', customer_name: 'David Kim' }];
+  script = [
+    toolCall('list_appointments', { from: '2026-09-10T14:00:00Z', to: '2026-09-10T15:00:00Z' }),
+    toolCall('book_appointment', {
+      service_name: 'Consultation', starts_at: '2026-09-10T14:00:00Z', customer_name: 'David Kim',
+    }),
+    says("You are booked for Consultation on Sep 10 at 2pm."),
+  ];
+
+  const turn = await runAgentTurn({ ...customer('booking'), text: 'I want to book Consultation on Sep 10 at 2pm, my name is David Kim' });
+
+  const inserts = wrote('appointments', 'POST');
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].body.service_name, 'Consultation');
+  assert.equal(inserts[0].body.customer_name, 'David Kim');
+  assert.deepEqual(turn.actions, ['book_appointment']);
+});
+
 // ---------------------------------------------------------------------------
 // The loop itself
 // ---------------------------------------------------------------------------

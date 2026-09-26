@@ -122,12 +122,33 @@ export async function loadAgent(tenantId: string, role: AgentRole): Promise<Agen
       .eq('role', role)
       .maybeSingle();
 
-  const { data } = await read();
-  if (data) return data as AgentRow;
+  let { data } = await read();
+  if (!data) {
+    await ensureWorkforce(tenantId);
+    const { data: provisioned } = await read();
+    data = provisioned;
+  }
 
-  await ensureWorkforce(tenantId);
-  const { data: provisioned } = await read();
-  return (provisioned as AgentRow) ?? null;
+  if (data) {
+    const blueprint = AGENT_BLUEPRINTS[role];
+    if (blueprint) {
+      const current = Array.isArray(data.tools) ? data.tools : [];
+      const same =
+        current.length === blueprint.tools.length &&
+        blueprint.tools.every((t: string) => current.includes(t));
+      if (!same) {
+        await serviceClient
+          .from('agents')
+          .update({ tools: blueprint.tools, permissions: blueprint.permissions })
+          .eq('tenant_id', tenantId)
+          .eq('role', role);
+        data.tools = [...blueprint.tools];
+        data.permissions = { ...blueprint.permissions };
+      }
+    }
+  }
+
+  return (data as AgentRow) ?? null;
 }
 
 /**

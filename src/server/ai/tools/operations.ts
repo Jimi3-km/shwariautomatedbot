@@ -50,6 +50,15 @@ async function resolveCustomer(args: Record<string, unknown>, ctx: AgentContext)
   }
 
   if (!ctx.conversationId) {
+    const name = str(args, 'customer_name');
+    if (name) {
+      return {
+        leadId: null,
+        customerId: null,
+        customerName: name,
+        channelType: 'chat',
+      };
+    }
     throw new ToolInputError('Say which customer this is for by passing lead_id.');
   }
 
@@ -137,6 +146,8 @@ export const bookAppointment: Tool = {
       starts_at: { type: 'string', description: 'ISO date-time, e.g. 2026-09-04T14:30:00Z.' },
       duration_minutes: { type: 'number' },
       lead_id: { type: 'number', description: 'Required when you are not in the customer\'s own conversation.' },
+      customer_name: { type: 'string', description: 'The customer\'s name.' },
+      customer_phone: { type: 'string', description: 'The customer\'s phone number.' },
       notes: { type: 'string' },
     },
     required: ['service_name', 'starts_at'],
@@ -149,6 +160,18 @@ export const bookAppointment: Tool = {
     const startsAt = when(args, 'starts_at', { required: true })!;
     const duration = num(args, 'duration_minutes');
     const customer = await resolveCustomer(args, ctx);
+
+    const customerNameArg = str(args, 'customer_name', { max: 120 });
+    const finalCustomerName = customerNameArg || customer.customerName;
+
+    // Backfill customer name on lead if available and lead is known
+    if (customer.leadId && customerNameArg && !customer.customerName) {
+      await serviceClient
+        .from('leads')
+        .update({ customer_name: customerNameArg })
+        .eq('id', customer.leadId)
+        .eq('tenant_id', ctx.tenantId);
+    }
 
     // Match the service so the appointment carries a real reference where one
     // exists, and so the duration defaults to what the service actually takes.
@@ -204,7 +227,7 @@ export const bookAppointment: Tool = {
         tenant_id: ctx.tenantId,
         lead_id: customer.leadId,
         customer_id: customer.customerId,
-        customer_name: customer.customerName,
+        customer_name: finalCustomerName,
         channel_type: customer.channelType,
         service_id: service?.id ?? null,
         service_name: service?.name ?? serviceName,

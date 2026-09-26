@@ -1,8 +1,21 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const DEAD_PROJECT_REF = 'rnxcsvpmyviqukhdlypt';
+const DEFAULT_SUPABASE_URL = 'https://dmhqqfxlmvaeeyxdlthd.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_EL8zLqi5ldXC24aiH-Rgpg_6L5tEezT';
+const DEFAULT_SUPABASE_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtaHFxZnhsbXZhZWV5eGRsdGhkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjMxNDQzMiwiZXhwIjoyMTAxODkwNDMyfQ.4pNgr4wli07QpYGPwRzMDWEZSfu8L_ATP7wEMFHN0YY';
+
+export const SUPABASE_URL = (!process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes(DEAD_PROJECT_REF))
+  ? DEFAULT_SUPABASE_URL
+  : process.env.SUPABASE_URL;
+
+export const SUPABASE_ANON_KEY = (!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY.includes(DEAD_PROJECT_REF))
+  ? DEFAULT_SUPABASE_ANON_KEY
+  : process.env.SUPABASE_ANON_KEY;
+
+export const SUPABASE_SERVICE_ROLE_KEY = (!process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY.includes(DEAD_PROJECT_REF))
+  ? DEFAULT_SUPABASE_SERVICE_ROLE_KEY
+  : process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export function assertSupabaseConfigured() {
   const missing = [
@@ -65,5 +78,3 @@ export function userClient(accessToken: string): SupabaseClient {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
 }
-
-export { SUPABASE_URL, SUPABASE_ANON_KEY };

@@ -23,11 +23,24 @@ export function initSupabase(): Promise<SupabaseClient> {
 
   initPromise = (async () => {
     const r = await fetch('/api/public-config');
+    const r = await fetch('/api/public-config', { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not load application configuration');
     const cfg = (await r.json()) as { supabase_url?: string; supabase_anon_key?: string };
     if (!cfg.supabase_url || !cfg.supabase_anon_key) {
       throw new Error('The server is not configured yet. Set the Supabase environment variables.');
     }
+
+    // If the configured project URL changed, clear any stale session from the previous project
+    try {
+      const lastUrl = localStorage.getItem('shwari-dashboard-supabase-url');
+      if (lastUrl && lastUrl !== cfg.supabase_url) {
+        localStorage.removeItem('shwari-dashboard-auth');
+      }
+      localStorage.setItem('shwari-dashboard-supabase-url', cfg.supabase_url);
+    } catch {
+      // LocalStorage might be disabled or unavailable
+    }
+
     supabase = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
       auth: {
         persistSession: true,

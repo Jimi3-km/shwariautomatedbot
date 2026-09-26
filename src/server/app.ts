@@ -65,6 +65,9 @@ export function createApp() {
    * that key can reach. The service-role key is never exposed here.
    */
   app.get('/api/public-config', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json({ supabase_url: SUPABASE_URL, supabase_anon_key: SUPABASE_ANON_KEY });
   });
 

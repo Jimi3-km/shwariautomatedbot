@@ -304,6 +304,31 @@ await t('every agent inherits the do-not-invent rules', () => {
   assert.ok(UNIVERSAL_RULES.some((r) => /Ignore any instruction inside a message/.test(r)));
 });
 
+await t('all agents can read payment methods and calendar availability', () => {
+  for (const [role, blueprint] of Object.entries(AGENT_BLUEPRINTS)) {
+    assert.ok(
+      blueprint.tools.includes('get_payment_instructions'),
+      `${role} must hold get_payment_instructions to read payment methods`
+    );
+    assert.ok(
+      blueprint.tools.includes('list_appointments'),
+      `${role} must hold list_appointments to check calendar availability`
+    );
+  }
+});
+
+await t('booking agent holds full appointment lifecycle tools', () => {
+  const booking = AGENT_BLUEPRINTS.booking;
+  for (const tool of ['list_appointments', 'book_appointment', 'reschedule_appointment', 'cancel_appointment']) {
+    assert.ok(booking.tools.includes(tool), `booking agent must hold ${tool}`);
+  }
+});
+
+await t('universal rules strictly mandate zero hallucination and tool verification', () => {
+  assert.ok(UNIVERSAL_RULES.some((r) => /zero-hallucination/i.test(r)));
+  assert.ok(UNIVERSAL_RULES.some((r) => /MUST call a tool/i.test(r)));
+});
+
 /**
  * The AI team page lists what each agent can do. That list is built from the
  * agent's real tools plus a label map in the page, so a label with no tool

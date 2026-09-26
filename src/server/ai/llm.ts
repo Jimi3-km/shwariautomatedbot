@@ -30,7 +30,7 @@ const DEFAULT_MODEL = 'meta/llama-3.3-70b-instruct';
  * themselves; extended reasoning makes them slower and no more correct. Set
  * SHWARI_THINKING=on for a model that genuinely needs it.
  */
-const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_MAX_TOKENS = parseInt(process.env.SHWARI_MAX_TOKENS || '8192', 10);
 
 function thinkingEnabled(): boolean {
   return /^(1|on|true|yes)$/i.test(process.env.SHWARI_THINKING ?? '');
@@ -135,7 +135,7 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
   if (!apiKey) throw new LlmNotConfiguredError();
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000);
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '90000', 10));
 
   let res: Response;
   try {

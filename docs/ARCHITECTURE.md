@@ -1,16 +1,14 @@
-# Multi-tenant AI sales platform
+# Multi-Tenant AI Workforce Platform Architecture
 
-The dashboard is the product. n8n is the automation engine. Supabase is the
-system of record. Telegram and WhatsApp are channels, not the product.
+The dashboard is the management portal. The native Express server and NVIDIA Moonshot AI Workforce engine handle inbound conversations and operational workflows. Supabase is the system of record with PostgreSQL Row-Level Security (RLS). WhatsApp, Instagram, Telegram, and WebChat are integrated channels.
 
 ```
 Business owner ──> Dashboard (React) ──> Dashboard API (Express) ──> Supabase
                                                                        ▲
-Customer ──> Telegram/WhatsApp ──> channel webhook ──> n8n ────────────┘
+Customer ──> WhatsApp / IG / Telegram / WebChat ──> Native Webhooks (Express) ──> AI Workforce Engine ──> Supabase
 ```
 
-One n8n workflow (`5jnXTH4jhXo3pJAs`) serves every tenant. There is never a
-workflow per business.
+Native Express webhooks (`/api/webhooks/meta`, `/api/webhooks/telegram`, `/api/webchat/messages`) serve all tenants with zero external workflow tools.
 
 ## Tenancy
 
@@ -19,7 +17,9 @@ workflow per business.
 | Surface | How the tenant is resolved |
 |---|---|
 | Dashboard API | verified Supabase JWT → `tenant_users.user_id` → `tenant_id` |
-| n8n inbound | `X-Telegram-Bot-Api-Secret-Token` header → `channels.secret_token` → `tenant_id` |
+| Telegram inbound | `X-Telegram-Bot-Api-Secret-Token` header → `channels.secret_token` → `tenant_id` |
+| Meta inbound (WhatsApp/IG) | HMAC-SHA256 signature verification + Phone/Page ID lookup → `tenant_id` |
+| WebChat inbound | Cryptographic visitor token & session lookup → `tenant_id` |
 
 The API rejects any request carrying `tenant_id` in the body or query with a
 400. A user in several tenants may pass `x-tenant-id`, but only a value that
