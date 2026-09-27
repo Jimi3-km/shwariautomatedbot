@@ -51,10 +51,10 @@ export function Integrations() {
   useEffect(() => {
 
     // Initialize Facebook SDK for Meta Embedded Signup
-    if (!window.fbAsyncInit) {
-      window.fbAsyncInit = function() {
+    if (!(window as any).fbAsyncInit) {
+      (window as any).fbAsyncInit = function() {
         (window as any).FB.init({
-          appId      : import.meta.env.VITE_META_APP_ID,
+          appId      : (import.meta as any).env.VITE_META_APP_ID,
           cookie     : true,
           xfbml      : true,
           version    : 'v20.0'
@@ -99,7 +99,7 @@ export function Integrations() {
           reject(new Error('WhatsApp connection was cancelled.'));
         }
       }, {
-        config_id: import.meta.env.VITE_META_WHATSAPP_CONFIG_ID,
+        config_id: (import.meta as any).env.VITE_META_WHATSAPP_CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true
       });
