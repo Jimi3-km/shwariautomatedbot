@@ -1,3 +1,11 @@
+import crypto from 'crypto';
+
+function getAppSecretProof(accessToken: string): string {
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appSecret) throw new Error('META_APP_SECRET is not configured.');
+  return crypto.createHmac('sha256', appSecret).update(accessToken).digest('hex');
+}
+
 export async function exchangeWhatsAppCode(code: string, tenantId: string) {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
@@ -15,9 +23,10 @@ export async function exchangeWhatsAppCode(code: string, tenantId: string) {
   }
   const tokenData = await tokenRes.json();
   const accessToken = tokenData.access_token;
+  const proof = getAppSecretProof(accessToken);
 
   // 2. Fetch WABA
-  const wabaRes = await fetch(`https://graph.facebook.com/v20.0/me/client_whatsapp_business_accounts`, {
+  const wabaRes = await fetch(`https://graph.facebook.com/v20.0/me/client_whatsapp_business_accounts?appsecret_proof=${proof}`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   
@@ -34,7 +43,7 @@ export async function exchangeWhatsAppCode(code: string, tenantId: string) {
   const wabaId = wabaData.data[0].id;
 
   // 3. Get the phone numbers for this WABA
-  const phonesRes = await fetch(`https://graph.facebook.com/v20.0/${wabaId}/phone_numbers`, {
+  const phonesRes = await fetch(`https://graph.facebook.com/v20.0/${wabaId}/phone_numbers?appsecret_proof=${proof}`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   if (!phonesRes.ok) throw new Error('Failed to fetch phone numbers.');
@@ -57,8 +66,10 @@ export async function exchangeWhatsAppCode(code: string, tenantId: string) {
 }
 
 export async function linkInstagramAccount(userAccessToken: string, tenantId: string) {
+  const userProof = getAppSecretProof(userAccessToken);
+
   // 1. Get user's Facebook Pages
-  const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts`, {
+  const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts?appsecret_proof=${userProof}`, {
     headers: { Authorization: `Bearer ${userAccessToken}` }
   });
   if (!pagesRes.ok) {
@@ -76,7 +87,8 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
   let igAccountId = null;
   
   for (const page of pagesData.data) {
-    const igRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}?fields=instagram_business_account`, {
+    const pageProof = getAppSecretProof(page.access_token);
+    const igRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}?fields=instagram_business_account&appsecret_proof=${pageProof}`, {
       headers: { Authorization: `Bearer ${page.access_token}` }
     });
     if (!igRes.ok) {
@@ -95,8 +107,10 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
     throw new Error('None of your Facebook Pages have an Instagram Professional account linked.');
   }
 
+  const targetPageProof = getAppSecretProof(targetPage.access_token);
+
   // Subscribe the Facebook Page to our Webhook so we receive messages
-  const subRes = await fetch(`https://graph.facebook.com/v20.0/${targetPage.id}/subscribed_apps`, {
+  const subRes = await fetch(`https://graph.facebook.com/v20.0/${targetPage.id}/subscribed_apps?appsecret_proof=${targetPageProof}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${targetPage.access_token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks'] })
@@ -107,7 +121,7 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
   }
 
   // Retrieve Instagram account details
-  const igDetailsRes = await fetch(`https://graph.facebook.com/v20.0/${igAccountId}?fields=username,name`, {
+  const igDetailsRes = await fetch(`https://graph.facebook.com/v20.0/${igAccountId}?fields=username,name&appsecret_proof=${targetPageProof}`, {
     headers: { Authorization: `Bearer ${targetPage.access_token}` }
   });
   const igDetails = await igDetailsRes.json();
