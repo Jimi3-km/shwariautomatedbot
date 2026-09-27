@@ -281,8 +281,8 @@ channelsRouter.post(
     try {
       const result = await exchangeWhatsAppCode(code, req.ctx!.tenantId);
       
-      // Upsert channel
-      const { data, error } = await req.ctx!.db
+      // Upsert channel (use serviceClient to bypass column-level privileges on secret_token)
+      const { data, error } = await serviceClient
         .from('channels')
         .upsert({
           tenant_id: req.ctx!.tenantId,
@@ -317,8 +317,8 @@ channelsRouter.post(
     try {
       const result = await linkInstagramAccount(accessToken, req.ctx!.tenantId);
       
-      // Upsert channel
-      const { data, error } = await req.ctx!.db
+      // Upsert channel (use serviceClient to bypass column-level privileges on bot_token)
+      const { data, error } = await serviceClient
         .from('channels')
         .upsert({
           tenant_id: req.ctx!.tenantId,
