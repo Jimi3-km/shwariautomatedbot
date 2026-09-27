@@ -14,7 +14,7 @@
  */
 
 const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-const DEFAULT_MODEL = 'meta/llama-3.2-11b-vision-instruct';
+const DEFAULT_MODEL = 'moonshotai/kimi-k3';
 
 /**
  * Reasoning models spend the token budget twice.
@@ -86,10 +86,10 @@ export type ModelProfile = 'primary' | 'fast' | 'fallback';
 
 export function resolveModel(profile: ModelProfile = 'primary'): string {
   if (profile === 'fast') {
-    return process.env.SHWARI_FAST_MODEL || 'meta/llama-3.2-11b-vision-instruct';
+    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
   }
   if (profile === 'fallback') {
-    return process.env.SHWARI_FALLBACK_MODEL || 'meta/llama-3.2-11b-vision-instruct';
+    return process.env.SHWARI_FALLBACK_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
   }
   return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
 }
@@ -188,31 +188,22 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   }
   text = dedupedSentences.join(' ');
 
-  // 3. Collapse repetitive identical lines AND cyclic alternating lines
+  // 3. Collapse repetitive identical lines
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const dedupedLines: string[] = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lower = line.toLowerCase();
-    
-    // Check if same as immediate previous
-    if (dedupedLines.length > 0 && dedupedLines[dedupedLines.length - 1].toLowerCase() === lower) {
+  for (const line of lines) {
+    if (
+      dedupedLines.length > 0 &&
+      dedupedLines[dedupedLines.length - 1].toLowerCase() === line.toLowerCase()
+    ) {
       continue;
     }
-    // Check if same as 2 lines ago (A B A B cycle)
-    if (dedupedLines.length > 1 && dedupedLines[dedupedLines.length - 2].toLowerCase() === lower) {
-      // We detect an alternating loop. Break completely rather than continuing.
-      break;
-    }
-    
     dedupedLines.push(line);
   }
-  
   text = dedupedLines.join('\n');
 
   // 4. Strip dangling incomplete word / exclamation loops at the very end
-  text = text.replace(/(?:^|\s)The[!?]*$/i, '').trim();
+  text = text.replace(/(?:^|\s)The[!?]+$/i, '').trim();
 
   return text.trim() || null;
 }
@@ -224,27 +215,6 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '90000', 10));
 
-  const payload: Record<string, unknown> = {
-    model: resolveModel(profile),
-    messages: opts.messages.map(toWire),
-    temperature: opts.temperature ?? 0.3,
-    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
-    stream: false,
-    chat_template_kwargs: { enable_thinking: thinkingEnabled() },
-  };
-
-  if (opts.tools?.length) {
-    payload.tools = opts.tools.map((t) => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      },
-    }));
-    payload.tool_choice = 'auto';
-  }
-
   let res: Response;
   try {
     res = await fetch(`${baseUrl()}/chat/completions`, {
@@ -254,7 +224,33 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        model: resolveModel(profile),
+        messages: opts.messages.map(toWire),
+        temperature: opts.temperature ?? 0.3,
+        stop: ['\nOwner:', '\nUser:', '\nCustomer:', '<|eot_id|>', '<|im_end|>'],
+        max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+        stream: false,
+        /**
+         * Ignored by models that do not reason, honoured by the ones that do.
+         * Sending it 
+         * keeps one code path for both.
+         */
+        chat_template_kwargs: { enable_thinking: thinkingEnabled() },
+        ...(opts.tools?.length
+          ? {
+              tools: opts.tools.map((t) => ({
+                type: 'function',
+                function: {
+                  name: t.name,
+                  description: t.description,
+                  parameters: t.parameters,
+                },
+              })),
+              tool_choice: 'auto',
+            }
+          : {}),
+      }),
     });
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') {
