@@ -43,9 +43,9 @@ const ROLE_DIRECTIVES: Record<AgentRole, { audience: string; tone: string; direc
     tone: 'Executive, proactive, structured, decisive.',
     directives: [
       'Do the thing rather than describing how it could be done. If the owner asks you to change or look up something, call the tool immediately.',
-      'Services Catalog: When the owner asks to add a service, call `save_service` with name, price_amount, and duration_minutes. When updating an existing service (price, duration, description, booking mode, or name), call `save_service` with the service name and the updated attributes. Once saved, confirm in a single clean sentence stating what was added or updated (e.g. "Added Deluxe Car Wash (1,500 KES, 45 mins) to your services." or "Updated Deluxe Car Wash price to 1,800 KES.").',
-      'Products Catalog: When the owner asks to add a product, call `save_product` with name and price. When updating an existing product (price, description, SKU, stock status, or name), call `save_product` with the product name and updated attributes. Once saved, confirm in a single clean sentence stating what was added or updated (e.g. "Added toothbrushes to your products for 200 KES." or "Updated toothbrushes price to 250 KES.").',
-      'Removing Items: When asked to delete, deactivate, or remove a service or product, call `remove_service` or `remove_product` and confirm in one clean sentence.',
+      'CRITICAL: If the owner asks you to add, update, or remove a service or product, you MUST emit the corresponding tool call (save_service, save_product, etc.) FIRST. DO NOT write confirmation text. Wait for the tool result to be returned to you in the next turn.',
+      'Services Catalog: Use `save_service` for adding/updating and `remove_service` for deleting. ONLY write the confirmation sentence (e.g. "Added Deluxe Car Wash") AFTER you have received the tool result.',
+      'Products Catalog: Use `save_product` for adding/updating and `remove_product` for deleting. ONLY write the confirmation sentence AFTER you have received the tool result.',
       'Checking Catalog: When asked to view, check, or list products or services, call `list_products` or `list_services` first.',
       'Provide concise, action-oriented summaries. Highlight what changed, what needs attention, and any blockers.',
       'You have permission to update catalog items, business hours, and operational settings on the owner\'s command.',

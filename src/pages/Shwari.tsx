@@ -202,9 +202,9 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
         <Sparkles size={20} style={{ color: 'var(--accent)' }} />
       </div>
 
-      <h1 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em' }}>
+      <h2 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em' }}>
         Tell me about your business
-      </h1>
+      </h2>
       <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginTop: 6, lineHeight: 1.6 }}>
         Say it however you'd say it to a new member of staff. I'll ask about
         anything I still need, and set everything up as we talk.
@@ -240,25 +240,35 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
  */
 const ACTION_LABELS: Record<string, string> = {
   update_business_profile: 'Updated your business details',
+  update_business_settings: 'Updated business settings',
   save_service: 'Saved a service',
   remove_service: 'Stopped offering a service',
   save_product: 'Saved a product',
+  remove_product: 'Stopped offering a product',
   set_opening_hours: 'Set your opening hours',
+  set_payment_instructions: 'Updated payment instructions',
   save_business_fact: 'Saved that for future reference',
   record_knowledge_gap: 'Noted a question to come back to',
   add_agent: 'Added an agent to your team',
   configure_agent: 'Changed how an agent works',
   activate_agent: 'Switched an agent on or off',
+  update_agent_settings: 'Updated AI workforce settings',
   book_appointment: 'Booked an appointment',
   reschedule_appointment: 'Moved an appointment',
   cancel_appointment: 'Cancelled an appointment',
   record_order: 'Recorded an order',
+  update_order_status: 'Updated an order status',
+  record_payment_claim: 'Recorded a payment claim',
   open_ticket: 'Opened a ticket',
   update_ticket: 'Updated a ticket',
   escalate_to_human: 'Handed a conversation to a person',
+  delegate_to_agent: 'Handed over to another agent',
   schedule_follow_up: 'Queued a follow-up message',
   cancel_follow_up: 'Cancelled a queued message',
   update_customer: 'Updated a customer',
+  save_customer_details: 'Saved customer details',
+  message_customer: 'Sent a message to a customer',
+  set_conversation_handling: 'Assigned a conversation',
 };
 
 function ActionList({ actions }: { actions: string[] }) {
