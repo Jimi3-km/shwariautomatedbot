@@ -45,8 +45,6 @@ export function SetupReadinessPanel() {
 
   const rows: Array<{ label: string; value: string }> = [
     { label: 'Webhook callback URL', value: s.register_with_meta.webhook_callback_url },
-    { label: 'WhatsApp redirect URI', value: s.register_with_meta.whatsapp_redirect_uri },
-    { label: 'Instagram redirect URI', value: s.register_with_meta.instagram_connect_redirect_uri },
   ];
 
   return (

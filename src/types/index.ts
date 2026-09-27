@@ -375,8 +375,6 @@ export interface SetupStatus {
   register_with_meta: {
     webhook_callback_url: string;
     verify_token_is_set: boolean;
-    whatsapp_redirect_uri: string;
-    instagram_connect_redirect_uri: string;
     instagram_signin_redirect_uri: string;
     subscribe_to_fields: string[];
   };
