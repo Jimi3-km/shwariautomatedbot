@@ -14,7 +14,7 @@
  */
 
 const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-const DEFAULT_MODEL = 'meta/llama-3.2-11b-vision-instruct';
+const DEFAULT_MODEL = 'nvidia/llama-3.1-nemotron-70b-instruct';
 
 /**
  * Reasoning models spend the token budget twice.
@@ -86,10 +86,10 @@ export type ModelProfile = 'primary' | 'fast' | 'fallback';
 
 export function resolveModel(profile: ModelProfile = 'primary'): string {
   if (profile === 'fast') {
-    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'meta/llama-3.2-11b-vision-instruct';
+    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
   }
   if (profile === 'fallback') {
-    return process.env.SHWARI_FALLBACK_MODEL || process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || 'meta/llama-3.2-11b-vision-instruct';
+    return process.env.SHWARI_FALLBACK_MODEL || process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
   }
   return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
 }
