@@ -74,7 +74,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
       const { error } = await getSupabase().auth.resend({
         type: 'signup',
         email,
-        options: { emailRedirectTo: `${window.location.origin}/` },
+        options: { emailRedirectTo: 'https://shwariautomatedbot.vercel.app/' },
       });
       if (error) throw error;
       setNotice('Sent again. Check your inbox and your spam folder.');
@@ -113,7 +113,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         const { data, error } = await sb.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: `${window.location.origin}/` },
+          options: { emailRedirectTo: 'https://shwariautomatedbot.vercel.app/' },
         });
         if (error) throw error;
         if (data.session) {
@@ -124,7 +124,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         }
       } else {
         const { error } = await sb.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/`,
+          redirectTo: 'https://shwariautomatedbot.vercel.app/',
         });
         if (error) throw error;
         // Deliberately not confirming whether the address exists.

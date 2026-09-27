@@ -334,7 +334,7 @@ function AccountSection() {
   const resetPassword = useMutation(async () => {
     if (!user.email) throw new Error('No email address on this account.');
     const { error } = await getSupabase().auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${window.location.origin}/`,
+      redirectTo: 'https://shwariautomatedbot.vercel.app/',
     });
     if (error) throw new Error(error.message);
     toast.push('success', 'Password reset link sent to your email.');
