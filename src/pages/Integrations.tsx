@@ -5,6 +5,7 @@ import {
 import {
   getChannels, connectTelegram, disconnectChannel, getChannelStatus,
   getChannelProviders, startChannelConnect,
+  completeMetaEmbeddedSignup, completeInstagramLogin
 } from '../lib/api';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
@@ -45,8 +46,27 @@ export function Integrations() {
     else if (status === 'cancelled') toast.push('info', 'That connection was cancelled.');
     else if (status === 'expired') toast.push('error', 'That took too long, so we stopped for safety. Please try again.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
-    // Runs once on mount; the query string is cleared immediately.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+
+    // Initialize Facebook SDK for Meta Embedded Signup
+    if (!window.fbAsyncInit) {
+      window.fbAsyncInit = function() {
+        (window as any).FB.init({
+          appId      : import.meta.env.VITE_META_APP_ID,
+          cookie     : true,
+          xfbml      : true,
+          version    : 'v20.0'
+        });
+      };
+      
+      const script = document.createElement('script');
+      script.src = 'https://connect.facebook.net/en_US/sdk.js';
+      script.async = true;
+      script.defer = true;
+      document.body.appendChild(script);
+    }
   }, []);
 
   /**
@@ -66,6 +86,41 @@ export function Integrations() {
   const beginOAuth = useMutation(async (provider: ProviderId) => {
     const result = await startChannelConnect(provider);
     if (result.mode === 'oauth') window.location.href = result.authorize_url;
+  });
+
+  const connectWhatsApp = useMutation(async () => {
+    return new Promise<void>((resolve, reject) => {
+      (window as any).FB.login((response: any) => {
+        if (response.authResponse && response.authResponse.code) {
+          completeMetaEmbeddedSignup(response.authResponse.code)
+            .then(() => { toast.push('success', 'WhatsApp connected successfully.'); state.reload(); resolve(); })
+            .catch(err => { toast.push('error', err.message); reject(err); });
+        } else {
+          reject(new Error('WhatsApp connection was cancelled.'));
+        }
+      }, {
+        config_id: import.meta.env.VITE_META_WHATSAPP_CONFIG_ID,
+        response_type: 'code',
+        override_default_response_type: true
+      });
+    });
+  });
+
+  const connectInstagram = useMutation(async () => {
+    return new Promise<void>((resolve, reject) => {
+      (window as any).FB.login((response: any) => {
+        if (response.authResponse && response.authResponse.accessToken) {
+          completeInstagramLogin(response.authResponse.accessToken)
+            .then(() => { toast.push('success', 'Instagram connected successfully.'); state.reload(); resolve(); })
+            .catch(err => { toast.push('error', err.message); reject(err); });
+        } else {
+          reject(new Error('Instagram connection was cancelled.'));
+        }
+      }, {
+        scope: 'instagram_basic,instagram_manage_messages,pages_manage_metadata',
+        return_scopes: true
+      });
+    });
   });
 
   const providerInfo = (id: ProviderId): ChannelProviderInfo | undefined =>
@@ -112,7 +167,7 @@ export function Integrations() {
         subtitle="Connect the places your customers already message you."
       />
 
-      <InlineError message={disconnect.error ?? beginOAuth.error ?? connectWebchat.error} />
+      <InlineError message={disconnect.error ?? beginOAuth.error ?? connectWebchat.error ?? connectWhatsApp.error ?? connectInstagram.error} />
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
@@ -141,7 +196,7 @@ export function Integrations() {
               connected={whatsapp.length > 0}
               channels={whatsapp}
               isAdmin={isAdmin}
-              onConnect={() => setConfirming('whatsapp')}
+              onConnect={() => connectWhatsApp.run()}
               onDisconnect={setDisconnecting}
             />
           ) : (
@@ -157,7 +212,7 @@ export function Integrations() {
               connected={instagram.length > 0}
               channels={instagram}
               isAdmin={isAdmin}
-              onConnect={() => setConfirming('instagram')}
+              onConnect={() => connectInstagram.run()}
               onDisconnect={setDisconnecting}
             />
           ) : (
