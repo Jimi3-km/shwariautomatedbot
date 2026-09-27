@@ -188,22 +188,31 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   }
   text = dedupedSentences.join(' ');
 
-  // 3. Collapse repetitive identical lines
+  // 3. Collapse repetitive identical lines AND cyclic alternating lines
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const dedupedLines: string[] = [];
-  for (const line of lines) {
-    if (
-      dedupedLines.length > 0 &&
-      dedupedLines[dedupedLines.length - 1].toLowerCase() === line.toLowerCase()
-    ) {
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lower = line.toLowerCase();
+    
+    // Check if same as immediate previous
+    if (dedupedLines.length > 0 && dedupedLines[dedupedLines.length - 1].toLowerCase() === lower) {
       continue;
     }
+    // Check if same as 2 lines ago (A B A B cycle)
+    if (dedupedLines.length > 1 && dedupedLines[dedupedLines.length - 2].toLowerCase() === lower) {
+      // We detect an alternating loop. Break completely rather than continuing.
+      break;
+    }
+    
     dedupedLines.push(line);
   }
+  
   text = dedupedLines.join('\n');
 
   // 4. Strip dangling incomplete word / exclamation loops at the very end
-  text = text.replace(/(?:^|\s)The[!?]+$/i, '').trim();
+  text = text.replace(/(?:^|\s)The[!?]*$/i, '').trim();
 
   return text.trim() || null;
 }
