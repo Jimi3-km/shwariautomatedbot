@@ -167,6 +167,12 @@ export const getChannelStatus = (id: string) =>
     `/channels/${id}/status`
   );
 
+export const completeMetaEmbeddedSignup = (code: string) =>
+  request<{ channel: Channel }>('/channels/meta/whatsapp', { method: 'POST', body: { code } });
+
+export const completeInstagramLogin = (accessToken: string) =>
+  request<{ channel: Channel }>('/channels/meta/instagram', { method: 'POST', body: { accessToken } });
+
 export const disconnectChannel = (id: string) =>
   request<{ disconnected: boolean }>(`/channels/${id}`, { method: 'DELETE' });
 
