@@ -120,8 +120,9 @@ export function Agents() {
         subtitle="Five agents, ready to work. You run them by talking to Shwari."
       />
 
-      <div className="p-5" style={{ display: 'grid', gap: 16, maxWidth: 860 }}>
-        <Card>
+      <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
+        <div style={{ display: 'grid', gap: 16, maxWidth: 860, margin: '0 auto', width: '100%' }}>
+          <Card>
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <MessageSquare size={15} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 2 }} />
             <p style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.6 }}>
@@ -147,6 +148,7 @@ export function Agents() {
             ))}
           </div>
         </section>
+        </div>
       </div>
 
       {editing && (
