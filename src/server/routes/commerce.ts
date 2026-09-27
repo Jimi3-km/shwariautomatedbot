@@ -53,6 +53,8 @@ commerceRouter.post(
     const { data, error } = await ctx.db
       .from('payments').update(updates)
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId)
+      .select('amount, currency, lead_id, order_id')
+      .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Payment not found' });
 

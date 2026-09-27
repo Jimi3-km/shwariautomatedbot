@@ -57,9 +57,11 @@ export const saveProduct: Tool = {
   parameters: {
     type: 'object',
     properties: {
-      name: { type: 'string' },
+      name: { type: 'string', description: 'The product name.' },
+      current_name: { type: 'string', description: 'The existing name of the product if you are renaming it.' },
       description: { type: 'string' },
-      price: { type: 'number' },
+      price: { type: 'number', description: 'Price in the business currency.' },
+      price_amount: { type: 'number', description: 'Alias for price.' },
       sku: { type: 'string' },
       in_stock: { type: 'boolean' },
     },
@@ -70,38 +72,64 @@ export const saveProduct: Tool = {
 
   async run(args, ctx) {
     const name = str(args, 'name', { required: true, max: 200 });
-    const price = num(args, 'price');
+    const currentName = str(args, 'current_name', { max: 200 });
+    const price = num(args, 'price') ?? num(args, 'price_amount');
     if (price !== null && price < 0) throw new ToolInputError('price cannot be negative.');
 
     const { data: tenant } = await serviceClient
       .from('tenants').select('currency').eq('id', ctx.tenantId).single();
 
-    const row = {
-      tenant_id: ctx.tenantId,
-      name,
-      description: str(args, 'description', { max: 2000 }) || null,
-      price,
-      sku: str(args, 'sku', { max: 80 }) || null,
-      currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
-      in_stock: bool(args, 'in_stock', true),
-    };
-
+    const lookupName = currentName || name;
     const { data: existing } = await serviceClient
       .from('products')
-      .select('id')
+      .select('id, name, description, price, sku, currency, in_stock')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', name)
+      .ilike('name', lookupName)
       .maybeSingle();
 
-    const { data, error } = existing
-      ? await serviceClient.from('products').update(row)
-          .eq('id', existing.id).eq('tenant_id', ctx.tenantId)
-          .select('id, name, price, currency, in_stock').single()
-      : await serviceClient.from('products').insert(row)
-          .select('id, name, price, currency, in_stock').single();
+    let data;
+    let error;
+
+    if (existing) {
+      // Partial update: preserve existing fields that were not specified in args
+      const patch: Record<string, unknown> = {
+        name,
+      };
+      if ('description' in args) patch.description = str(args, 'description', { max: 2000 }) || null;
+      if (price !== null) patch.price = price;
+      if ('sku' in args) patch.sku = str(args, 'sku', { max: 80 }) || null;
+      if ('in_stock' in args) patch.in_stock = bool(args, 'in_stock', true);
+
+      const res = await serviceClient
+        .from('products')
+        .update(patch)
+        .eq('id', existing.id)
+        .eq('tenant_id', ctx.tenantId)
+        .select('id, name, price, currency, in_stock')
+        .single();
+      data = res.data;
+      error = res.error;
+    } else {
+      const row = {
+        tenant_id: ctx.tenantId,
+        name,
+        description: str(args, 'description', { max: 2000 }) || null,
+        price,
+        sku: str(args, 'sku', { max: 80 }) || null,
+        currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
+        in_stock: bool(args, 'in_stock', true),
+      };
+      const res = await serviceClient
+        .from('products')
+        .insert(row)
+        .select('id, name, price, currency, in_stock')
+        .single();
+      data = res.data;
+      error = res.error;
+    }
 
     if (error) throw new Error(error.message);
-    return { saved: data, created: !existing };
+    return { saved: data, created: !existing, updated: Boolean(existing) };
   },
 };
 

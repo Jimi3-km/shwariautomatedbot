@@ -22,6 +22,8 @@ globalThis.fetch = async (url) => {
 
 const { updateBusinessProfile, saveService, setOpeningHours, saveBusinessFact } =
   await import('../tools/business.ts');
+const { saveProduct } = await import('../tools/insight.ts');
+const { sanitizeCompletionText } = await import('../llm.ts');
 const { ToolInputError, str, num, oneOf } = await import('../tools/types.ts');
 
 let pass = 0;
@@ -92,11 +94,70 @@ console.log('\n--- services ---');
 await t('a service needs a name', () =>
   rejects(() => saveService.run({ description: 'teeth cleaning' }, ctx), /name is required/));
 
-await t('a negative price is refused', () =>
-  rejects(() => saveService.run({ name: 'Cleaning', price_amount: -100 }, ctx), /cannot be negative/));
+await t('a negative price is refused (via price_amount or price alias)', async () => {
+  await rejects(() => saveService.run({ name: 'Cleaning', price_amount: -100 }, ctx), /cannot be negative/);
+  await rejects(() => saveService.run({ name: 'Cleaning', price: -50 }, ctx), /cannot be negative/);
+});
+
+await t('a negative duration is refused (via duration_minutes or duration alias)', async () => {
+  await rejects(() => saveService.run({ name: 'Cleaning', duration_minutes: -10 }, ctx), /cannot be negative/);
+  await rejects(() => saveService.run({ name: 'Cleaning', duration: -15 }, ctx), /cannot be negative/);
+});
+
+await t('saveService accepts price and duration aliases and proceeds to write', async () => {
+  // Reaching network proves argument validation succeeded
+  await assert.rejects(
+    () => saveService.run({ name: 'Deluxe Car Wash', price: 1500, duration: 45 }, ctx),
+    (e) => !(e instanceof ToolInputError)
+  );
+});
 
 await t('an unknown booking mode is refused', () =>
   rejects(() => saveService.run({ name: 'Braces', booking_mode: 'maybe' }, ctx), /booking_mode must be one of/));
+
+console.log('\n--- products ---');
+
+await t('a product needs a name', () =>
+  rejects(() => saveProduct.run({ description: 'dental floss' }, ctx), /name is required/));
+
+await t('a negative product price is refused (via price or price_amount alias)', async () => {
+  await rejects(() => saveProduct.run({ name: 'Floss', price: -20 }, ctx), /cannot be negative/);
+  await rejects(() => saveProduct.run({ name: 'Floss', price_amount: -30 }, ctx), /cannot be negative/);
+});
+
+await t('saveProduct accepts price_amount alias and proceeds to write', async () => {
+  await assert.rejects(
+    () => saveProduct.run({ name: 'Toothbrush', price_amount: 250 }, ctx),
+    (e) => !(e instanceof ToolInputError)
+  );
+});
+
+console.log('\n--- anti-repetition & sanitization ---');
+
+await t('collapses runaway exclamation marks and question marks', () => {
+  const dirty = 'The service has been added!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!';
+  const clean = sanitizeCompletionText(dirty);
+  assert.equal(clean, 'The service has been added!');
+});
+
+await t('collapses duplicate consecutive sentences', () => {
+  const dirty = 'Added Deluxe Car Wash. Added Deluxe Car Wash. Your service is now live.';
+  const clean = sanitizeCompletionText(dirty);
+  assert.equal(clean, 'Added Deluxe Car Wash. Your service is now live.');
+});
+
+await t('sanitizes degenerate transcript loop reported in incident', () => {
+  const dirty = [
+    'The Deluxe Car Wash service has been added to your services.',
+    'Add a Deluxe Car Wash service for 1500 KES, duration 45 mins',
+    'Add a Deluxe Car Wash service for 1500 KES, duration 45 mins',
+    '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!',
+    'The!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!',
+  ].join('\n');
+  const clean = sanitizeCompletionText(dirty);
+  assert.ok(!clean.includes('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'), 'runaway exclamation marks removed');
+  assert.ok(!clean.includes('The!'), 'dangling loop stripped');
+});
 
 console.log('\n--- opening hours ---');
 

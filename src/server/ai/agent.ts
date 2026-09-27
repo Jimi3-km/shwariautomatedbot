@@ -462,7 +462,15 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
 
     if (!result.toolCalls.length) {
-      const reply = result.text?.trim() || fallbackReply();
+      let reply = result.text?.trim() || fallbackReply();
+
+      // If the model echoed the user's input at the start of its reply, strip it
+      const trimmedInput = input.text.trim();
+      if (trimmedInput && reply.toLowerCase().startsWith(trimmedInput.toLowerCase())) {
+        const stripped = reply.slice(trimmedInput.length).replace(/^[:\s\-—\n]+/, '').trim();
+        if (stripped) reply = stripped;
+      }
+
       void logAgentTurn({
         tenantId: input.tenantId,
         role: agent.role,
@@ -479,7 +487,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       return { reply, actions };
     }
 
-    messages.push({ role: 'assistant', content: result.text, toolCalls: result.toolCalls });
+    // When tools are called, prevent echoing the user's input in the assistant turn
+    const assistantContent =
+      result.text && !result.text.toLowerCase().includes(input.text.trim().toLowerCase())
+        ? result.text
+        : null;
+    messages.push({ role: 'assistant', content: assistantContent, toolCalls: result.toolCalls });
 
     for (const call of result.toolCalls) {
       const outcome = await runTool(TOOLS, call.name, call.argumentsJson, ctx);

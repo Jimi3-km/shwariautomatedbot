@@ -125,7 +125,11 @@ Formulate the execution plan:`,
         if (TOOLS.get(step.tool)?.mutates) actions.push(step.tool);
         stepOutcomes.push(`✓ ${step.description || step.tool}`);
       } else {
-        stepOutcomes.push(`✗ ${step.description || step.tool} (${outcome.payload?.error || 'failed'})`);
+        const errMessage =
+          outcome.payload && typeof outcome.payload === 'object' && 'error' in outcome.payload
+            ? String((outcome.payload as { error: unknown }).error)
+            : 'failed';
+        stepOutcomes.push(`✗ ${step.description || step.tool} (${errMessage})`);
       }
     }
 

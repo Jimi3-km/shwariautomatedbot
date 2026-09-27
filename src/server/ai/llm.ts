@@ -157,6 +157,57 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
   }
 }
 
+/**
+ * Clean model output to prevent degenerate repetition loops, runaway punctuation,
+ * and conversational echo artifacts.
+ */
+export function sanitizeCompletionText(raw: string | null): string | null {
+  if (!raw) return null;
+  let text = raw.trim();
+  if (!text) return null;
+
+  // 1. Collapse degenerate runaway punctuation (e.g. !!!!!!!!! -> !, ????? -> ?, ..... -> ...)
+  text = text.replace(/!{2,}/g, '!');
+  text = text.replace(/\?{2,}/g, '?');
+  text = text.replace(/\.{4,}/g, '...');
+
+  // 2. Collapse repetitive identical sentences / phrases (autoregressive loops)
+  const sentences = text.split(/(?<=[.?!])\s+/);
+  const dedupedSentences: string[] = [];
+  for (const s of sentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    // Skip if identical to the sentence right before it
+    if (
+      dedupedSentences.length > 0 &&
+      dedupedSentences[dedupedSentences.length - 1].toLowerCase() === trimmed.toLowerCase()
+    ) {
+      continue;
+    }
+    dedupedSentences.push(trimmed);
+  }
+  text = dedupedSentences.join(' ');
+
+  // 3. Collapse repetitive identical lines
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const dedupedLines: string[] = [];
+  for (const line of lines) {
+    if (
+      dedupedLines.length > 0 &&
+      dedupedLines[dedupedLines.length - 1].toLowerCase() === line.toLowerCase()
+    ) {
+      continue;
+    }
+    dedupedLines.push(line);
+  }
+  text = dedupedLines.join('\n');
+
+  // 4. Strip dangling incomplete word / exclamation loops at the very end
+  text = text.replace(/(?:^|\s)The[!?]+$/i, '').trim();
+
+  return text.trim() || null;
+}
+
 async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): Promise<Completion> {
   const apiKey = process.env.SHWARI_API_KEY;
   if (!apiKey) throw new LlmNotConfiguredError();
@@ -177,6 +228,9 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
         model: resolveModel(profile),
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
+        frequency_penalty: 0.2,
+        presence_penalty: 0.1,
+        stop: ['\nOwner:', '\nUser:', '\nCustomer:', '<|eot_id|>', '<|im_end|>'],
         max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
         stream: false,
         /**
@@ -238,9 +292,10 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
    * owner should ever read, so it is dropped here rather than downstream —
    * there is no path by which it can reach a reply.
    */
-  const text = typeof message.content === 'string' && message.content.trim()
+  const rawText = typeof message.content === 'string' && message.content.trim()
     ? message.content.trim()
     : null;
+  const text = sanitizeCompletionText(rawText);
 
   /**
    * Ran out of budget mid-thought. Whatever is in `content` at that point is a

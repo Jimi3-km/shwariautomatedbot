@@ -4,7 +4,7 @@ import { requireAuth, requireAdmin, handler } from '../auth.js';
 import {
   runAgentTurn, loadAgent, ensureWorkforce, syncCapabilities, AgentUnavailableError,
 } from '../ai/agent.js';
-import { llmConfigured } from '../ai/llm.js';
+import { llmConfigured, sanitizeCompletionText } from '../ai/llm.js';
 import { issuePairingCode } from '../ai/admins.js';
 import { attentionNeeded } from '../ai/tools/insight.js';
 import { AGENT_BLUEPRINTS, ALL_ROLES, DEPARTMENTS } from '../ai/roles.js';
@@ -70,6 +70,21 @@ shwariRouter.post(
     // handed the message it is about to answer twice.
     const previous = await thread(ctx.tenantId, ctx.userId, CONTEXT_TURNS);
 
+    // Sanitize and deduplicate previous messages to prevent context poisoning from
+    // runaway loops or duplicated user submissions
+    const cleanHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const m of previous) {
+      const role = m.role === 'owner' ? ('user' as const) : ('assistant' as const);
+      const content = sanitizeCompletionText(m.body);
+      if (!content) continue;
+      // Skip consecutive duplicates
+      const last = cleanHistory[cleanHistory.length - 1];
+      if (last && last.role === role && last.content.toLowerCase() === content.toLowerCase()) {
+        continue;
+      }
+      cleanHistory.push({ role, content });
+    }
+
     await serviceClient.from('shwari_messages').insert({
       tenant_id: ctx.tenantId, user_id: ctx.userId, role: 'owner', body: text,
     });
@@ -83,13 +98,9 @@ shwariRouter.post(
         userId: ctx.userId,
         conversationId: null,
         text,
-        history: previous.map((m) =>
-          m.role === 'owner'
-            ? { role: 'user' as const, content: m.body }
-            : { role: 'assistant' as const, content: m.body }
-        ),
+        history: cleanHistory,
       });
-      reply = turn.reply;
+      reply = sanitizeCompletionText(turn.reply) || turn.reply;
       actions = turn.actions;
     } catch (e) {
       if (e instanceof AgentUnavailableError) {

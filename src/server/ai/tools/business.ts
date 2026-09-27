@@ -135,10 +135,13 @@ export const saveService: Tool = {
     type: 'object',
     properties: {
       name: { type: 'string', description: 'The service name as a customer would say it.' },
+      current_name: { type: 'string', description: 'The existing name of the service if you are renaming it.' },
       description: { type: 'string' },
       price_amount: { type: 'number', description: 'Numeric price in the business currency. Omit if not fixed.' },
+      price: { type: 'number', description: 'Alias for price_amount.' },
       price_note: { type: 'string', description: 'Free text such as "from 5,000" or "depends on the case".' },
       duration_minutes: { type: 'number' },
+      duration: { type: 'number', description: 'Alias for duration_minutes.' },
       booking_mode: { type: 'string', enum: ['direct', 'consultation', 'enquiry'] },
       active: { type: 'boolean' },
     },
@@ -149,38 +152,71 @@ export const saveService: Tool = {
 
   async run(args, ctx) {
     const name = str(args, 'name', { required: true, max: 120 });
-    const price = num(args, 'price_amount');
+    const currentName = str(args, 'current_name', { max: 120 });
+    const price = num(args, 'price_amount') ?? num(args, 'price');
     if (price !== null && price < 0) throw new ToolInputError('price_amount cannot be negative.');
-    const duration = num(args, 'duration_minutes');
+    const duration = num(args, 'duration_minutes') ?? num(args, 'duration');
+    if (duration !== null && duration < 0) throw new ToolInputError('duration cannot be negative.');
 
-    const row = {
-      tenant_id: ctx.tenantId,
-      name,
-      description: str(args, 'description', { max: 2000 }),
-      price_amount: price,
-      price_note: str(args, 'price_note', { max: 200 }) || null,
-      duration_minutes: duration === null ? null : Math.round(duration),
-      booking_mode: oneOf(args, 'booking_mode', ['direct', 'consultation', 'enquiry'] as const, 'enquiry'),
-      active: bool(args, 'active', true),
-      updated_at: new Date().toISOString(),
-    };
-
-    // The unique index is on lower(name), so matching is done the same way
-    // rather than relying on the owner retyping the exact capitalisation.
+    // Look up by current_name if renaming, otherwise by name
+    const lookupName = currentName || name;
     const { data: existing } = await serviceClient
       .from('services')
-      .select('id')
+      .select('id, name, description, price_amount, price_note, duration_minutes, booking_mode, active')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', name)
+      .ilike('name', lookupName)
       .maybeSingle();
 
-    const { data, error } = existing
-      ? await serviceClient.from('services').update(row).eq('id', existing.id)
-          .eq('tenant_id', ctx.tenantId).select('id, name, booking_mode').single()
-      : await serviceClient.from('services').insert(row).select('id, name, booking_mode').single();
+    let data;
+    let error;
+
+    if (existing) {
+      // Partial update: preserve existing fields that were not specified in args
+      const patch: Record<string, unknown> = {
+        name,
+        updated_at: new Date().toISOString(),
+      };
+      if ('description' in args) patch.description = str(args, 'description', { max: 2000 }) || null;
+      if (price !== null) patch.price_amount = price;
+      if ('price_note' in args) patch.price_note = str(args, 'price_note', { max: 200 }) || null;
+      if (duration !== null) patch.duration_minutes = Math.round(duration);
+      if ('booking_mode' in args) {
+        patch.booking_mode = oneOf(args, 'booking_mode', ['direct', 'consultation', 'enquiry'] as const, 'enquiry');
+      }
+      if ('active' in args) patch.active = bool(args, 'active', true);
+
+      const res = await serviceClient
+        .from('services')
+        .update(patch)
+        .eq('id', existing.id)
+        .eq('tenant_id', ctx.tenantId)
+        .select('id, name, booking_mode, price_amount, duration_minutes')
+        .single();
+      data = res.data;
+      error = res.error;
+    } else {
+      const row = {
+        tenant_id: ctx.tenantId,
+        name,
+        description: str(args, 'description', { max: 2000 }) || null,
+        price_amount: price,
+        price_note: str(args, 'price_note', { max: 200 }) || null,
+        duration_minutes: duration === null ? null : Math.round(duration),
+        booking_mode: oneOf(args, 'booking_mode', ['direct', 'consultation', 'enquiry'] as const, 'enquiry'),
+        active: bool(args, 'active', true),
+        updated_at: new Date().toISOString(),
+      };
+      const res = await serviceClient
+        .from('services')
+        .insert(row)
+        .select('id, name, booking_mode, price_amount, duration_minutes')
+        .single();
+      data = res.data;
+      error = res.error;
+    }
 
     if (error) throw new Error(error.message);
-    return { saved: data, created: !existing };
+    return { saved: data, created: !existing, updated: Boolean(existing) };
   },
 };
 
