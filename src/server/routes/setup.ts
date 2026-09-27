@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, handler } from '../auth.js';
 import { allProviders } from '../channels/providers/index.js';
-import { pipelineUrl } from '../services/inbound.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
 import { llmConfigured, llmModel } from '../ai/llm.js';
@@ -38,16 +37,16 @@ setupRouter.get(
 
     // A channel can be connectable yet unable to deliver, which is the failure
     // mode worth surfacing: it looks fine until no message ever arrives.
-    const pipeline = pipelineUrl();
-    const deliveryReady = Boolean(pipeline);
+    // The internal agent replaces n8n entirely. Delivery is ready as long as the AI is configured.
+    const deliveryReady = llmConfigured().configured;
     const shwariGate = llmConfigured();
 
     res.json({
       channels,
       delivery: {
-        // Inbound reaches the agent only when this is set.
+        // Inbound reaches the agent natively now.
         pipeline_configured: deliveryReady,
-        missing_environment_variables: deliveryReady ? [] : ['N8N_AGENT_WEBHOOK_URL'],
+        missing_environment_variables: [],
         // Outbound replies come back through this, which needs the shared secret.
         internal_send_configured: Boolean(process.env.INTERNAL_API_SECRET),
         internal_send_missing: process.env.INTERNAL_API_SECRET ? [] : ['INTERNAL_API_SECRET'],
@@ -56,8 +55,7 @@ setupRouter.get(
       register_with_meta: {
         webhook_callback_url: `${origin}/api/webhooks/meta`,
         verify_token_is_set: Boolean(metaConfig.verifyToken),
-        whatsapp_redirect_uri: `${origin}/api/channels/oauth/whatsapp/callback`,
-        instagram_connect_redirect_uri: `${origin}/api/channels/oauth/instagram/callback`,
+
         instagram_signin_redirect_uri: `${origin}/api/auth/instagram/callback`,
         subscribe_to_fields: ['messages'],
       },

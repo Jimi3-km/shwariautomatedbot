@@ -1,5 +1,5 @@
 import { serviceClient } from '../supabase.js';
-import { forwardToPipeline, type ResolvedChannel } from './inbound.js';
+import { type ResolvedChannel } from './inbound.js';
 import { getProvider } from '../channels/providers/index.js';
 import { findAdmin, redeemPairingCode, looksLikePairingCode } from '../ai/admins.js';
 import { runAgentTurn, AgentUnavailableError } from '../ai/agent.js';
@@ -113,19 +113,20 @@ export async function dispatchInbound(
         await reply(event, channel, conversationId, turn.reply);
         return { handledBy: 'department', role: routed.role, actions: turn.actions };
       } catch (e) {
-        // A department that cannot answer must not swallow the customer's
-        // message: the existing pipeline is still there and still works.
+        // A department that cannot answer must not swallow the customer's message silently
         console.error(
-          `[dispatch] ${routed.role} could not answer, falling back to the pipeline:`,
+          `[dispatch] ${routed.role} could not answer:`,
           e instanceof Error ? e.message : e
         );
+        await reply(event, channel, conversationId, "Sorry, I am having trouble connecting right now.");
+        return { handledBy: 'none', reason: 'department_failed' };
       }
     }
   }
 
-  // --- 4. the existing pipeline --------------------------------------------
-  const forwarded = await forwardToPipeline(event, channel.secretToken);
-  return { handledBy: 'pipeline', ...forwarded };
+  // If no LLM is configured or no department caught it, just acknowledge it.
+  console.log('[dispatch] No active department to route to, and n8n is disabled.');
+  return { handledBy: 'none', reason: 'no_route' };
 }
 
 /**

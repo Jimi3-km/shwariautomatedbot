@@ -146,7 +146,7 @@ export function SetupReadinessPanel() {
                   Messages will reach the Inbox, but the assistant cannot answer until{' '}
                   {deliveryGaps.map((v) => <code key={v} style={{ fontWeight: 600 }}>{v}</code>)
                     .reduce<React.ReactNode[]>((acc, el, i) => i === 0 ? [el] : [...acc, ' and ', el], [])}
-                  {' '}is set, and the <strong>Send Reply (Channel API)</strong> node in n8n points at this server.
+                  {' '}is set.
                 </div>
               </div>
             </section>

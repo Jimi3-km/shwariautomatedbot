@@ -264,53 +264,7 @@ async function upsertLead(event: NormalizedInboundEvent, conversationId: string)
  * care which product the message came from. The old name is still honoured so
  * an existing deployment does not go quiet on upgrade.
  */
-export function pipelineUrl(): string {
-  return process.env.N8N_AGENT_WEBHOOK_URL || process.env.N8N_META_WEBHOOK_URL || '';
-}
 
-export async function forwardToPipeline(
-  event: NormalizedInboundEvent,
-  secretToken: string | null
-): Promise<{ forwarded: boolean; reason?: string }> {
-  const url = pipelineUrl();
-  if (!url) {
-    console.warn(
-      '[inbound] N8N_AGENT_WEBHOOK_URL is not set; message stored but no AI reply will be generated'
-    );
-    return { forwarded: false, reason: 'pipeline_not_configured' };
-  }
-  if (!secretToken) {
-    console.warn(`[inbound] channel ${event.channelId} has no secret token; cannot authenticate to the pipeline`);
-    return { forwarded: false, reason: 'channel_not_provisioned' };
-  }
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-channel-secret': secretToken,
-      },
-      body: JSON.stringify({
-        customer_id: event.customerId,
-        customer_name: event.customerName,
-        message_id: event.messageId,
-        text: event.text,
-        media: event.media,
-        timestamp: event.timestamp,
-      }),
-    });
-
-    if (!res.ok) {
-      console.error(`[inbound] pipeline returned HTTP ${res.status} for channel ${event.channelId}`);
-      return { forwarded: false, reason: 'pipeline_error' };
-    }
-    return { forwarded: true };
-  } catch (e) {
-    console.error('[inbound] could not reach the pipeline:', e instanceof Error ? e.message : e);
-    return { forwarded: false, reason: 'pipeline_unreachable' };
-  }
-}
 
 /** Turn a parsed provider event into normalized events for one channel. */
 export function normalize(

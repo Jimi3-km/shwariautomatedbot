@@ -80,12 +80,8 @@ export const instagramOAuthConfigured = (): ConfigGap =>
  */
 export const instagramConnectConfigured = (): ConfigGap =>
   gap([
-    ['INSTAGRAM_CLIENT_ID', metaConfig.instagram.clientId],
-    ['INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret],
-    ['INSTAGRAM_CONNECT_REDIRECT_URI', metaConfig.instagram.connectRedirectUri],
+    ['META_APP_ID', metaConfig.appId],
     ['META_APP_SECRET', metaConfig.appSecret],
-    ['META_VERIFY_TOKEN', metaConfig.verifyToken],
-    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 
 /** WhatsApp Embedded Signup: the user never pastes a token. */
@@ -93,10 +89,6 @@ export const whatsappEmbeddedSignupConfigured = (): ConfigGap =>
   gap([
     ['META_APP_ID', metaConfig.appId],
     ['META_APP_SECRET', metaConfig.appSecret],
-    ['META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId],
-    ['META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri],
-    ['META_VERIFY_TOKEN', metaConfig.verifyToken],
-    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 
 export const webhookConfigured = (): ConfigGap =>
