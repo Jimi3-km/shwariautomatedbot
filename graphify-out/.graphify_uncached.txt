@@ -1,0 +1,11 @@
+C:\Users\Administrator\shwariagents\shwariautomatedbot\README.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\archive\dashboard.single-tenant.html
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\AGENT_ARCHITECTURE.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\AGENT_QA.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\ARCHITECTURE.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\AUTH_SETUP.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\HOW_THE_LLM_WORKS.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\META_CREDENTIALS.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\SETUP.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\docs\SHWARI_AGENT.md
+C:\Users\Administrator\shwariagents\shwariautomatedbot\index.html

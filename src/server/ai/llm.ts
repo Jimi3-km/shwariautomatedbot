@@ -14,7 +14,7 @@
  */
 
 const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-const DEFAULT_MODEL = 'meta/llama-3.3-70b-instruct';
+const DEFAULT_MODEL = 'meta/llama-3.2-11b-vision-instruct';
 
 /**
  * Reasoning models spend the token budget twice.
@@ -86,10 +86,10 @@ export type ModelProfile = 'primary' | 'fast' | 'fallback';
 
 export function resolveModel(profile: ModelProfile = 'primary'): string {
   if (profile === 'fast') {
-    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
+    return process.env.SHWARI_FAST_MODEL || 'meta/llama-3.2-11b-vision-instruct';
   }
   if (profile === 'fallback') {
-    return process.env.SHWARI_FALLBACK_MODEL || 'meta/llama-3.3-70b-instruct';
+    return process.env.SHWARI_FALLBACK_MODEL || 'meta/llama-3.2-11b-vision-instruct';
   }
   return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
 }
@@ -228,9 +228,6 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
         model: resolveModel(profile),
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
-        frequency_penalty: 0.2,
-        presence_penalty: 0.1,
-        stop: ['\nOwner:', '\nUser:', '\nCustomer:', '<|eot_id|>', '<|im_end|>'],
         max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
         stream: false,
         /**
