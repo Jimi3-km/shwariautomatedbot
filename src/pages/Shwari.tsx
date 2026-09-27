@@ -202,9 +202,9 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
         <Sparkles size={20} style={{ color: 'var(--accent)' }} />
       </div>
 
-      <h2 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em' }}>
+      <h1 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em' }}>
         Tell me about your business
-      </h2>
+      </h1>
       <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginTop: 6, lineHeight: 1.6 }}>
         Say it however you'd say it to a new member of staff. I'll ask about
         anything I still need, and set everything up as we talk.

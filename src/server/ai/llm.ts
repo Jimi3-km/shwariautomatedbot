@@ -215,29 +215,29 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '90000', 10));
 
+  const payload: Record<string, unknown> = {
+    model: resolveModel(profile),
+    messages: opts.messages.map(toWire),
+    temperature: opts.temperature ?? 0.3,
+    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+    stream: false,
+    chat_template_kwargs: { enable_thinking: thinkingEnabled() },
+  };
+
+  if (opts.tools?.length) {
+    payload.tools = opts.tools.map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+    payload.tool_choice = 'auto';
+  }
+
   let res: Response;
   try {
-    const payload: Record<string, unknown> = {
-      model: resolveModel(profile),
-      messages: opts.messages.map(toWire),
-      temperature: opts.temperature ?? 0.3,
-      max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
-      stream: false,
-      chat_template_kwargs: { enable_thinking: thinkingEnabled() },
-    };
-
-    if (opts.tools?.length) {
-      payload.tools = opts.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        },
-      }));
-      payload.tool_choice = 'auto';
-    }
-
     res = await fetch(`${baseUrl()}/chat/completions`, {
       method: 'POST',
       signal: controller.signal,
