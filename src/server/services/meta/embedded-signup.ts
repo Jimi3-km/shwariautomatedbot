@@ -87,6 +87,17 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
     throw new Error('None of your Facebook Pages have an Instagram Professional account linked.');
   }
 
+  // Subscribe the Facebook Page to our Webhook so we receive messages
+  const subRes = await fetch(`https://graph.facebook.com/v20.0/${targetPage.id}/subscribed_apps`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${targetPage.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks'] })
+  });
+  
+  if (!subRes.ok) {
+    console.error('Failed to subscribe page to webhook:', await subRes.text());
+  }
+
   // Retrieve Instagram account details
   const igDetailsRes = await fetch(`https://graph.facebook.com/v20.0/${igAccountId}?fields=username,name`, {
     headers: { Authorization: `Bearer ${targetPage.access_token}` }
