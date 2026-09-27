@@ -117,7 +117,7 @@ export function Integrations() {
           reject(new Error('Instagram connection was cancelled.'));
         }
       }, {
-        scope: 'instagram_basic,instagram_manage_messages,pages_manage_metadata',
+        scope: 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list',
         return_scopes: true
       });
     });

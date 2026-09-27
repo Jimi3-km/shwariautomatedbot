@@ -61,7 +61,11 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
   const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts`, {
     headers: { Authorization: `Bearer ${userAccessToken}` }
   });
-  if (!pagesRes.ok) throw new Error('Failed to fetch Facebook Pages.');
+  if (!pagesRes.ok) {
+    const errText = await pagesRes.text();
+    console.error('FB Pages Fetch Error:', errText);
+    throw new Error(`Failed to fetch Facebook Pages: ${errText}`);
+  }
   const pagesData = await pagesRes.json();
   
   if (!pagesData.data || pagesData.data.length === 0) {
@@ -75,6 +79,10 @@ export async function linkInstagramAccount(userAccessToken: string, tenantId: st
     const igRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}?fields=instagram_business_account`, {
       headers: { Authorization: `Bearer ${page.access_token}` }
     });
+    if (!igRes.ok) {
+      console.error(`Failed to fetch IG account for page ${page.id}:`, await igRes.text());
+      continue;
+    }
     const igData = await igRes.json();
     if (igData.instagram_business_account) {
       targetPage = page;
