@@ -22,18 +22,18 @@ export const INSTAGRAM_OAUTH_URL = 'https://api.instagram.com';
 export const INSTAGRAM_GRAPH_URL = 'https://graph.instagram.com';
 
 export const metaConfig = {
-  appId: process.env.META_APP_ID ?? '',
-  appSecret: process.env.META_APP_SECRET ?? '',
+  appId: (process.env.META_APP_ID ?? '').trim(),
+  appSecret: (process.env.META_APP_SECRET ?? '').trim(),
   /** Echoed back during webhook subscription (hub.verify_token). */
-  verifyToken: process.env.META_VERIFY_TOKEN ?? '',
+  verifyToken: (process.env.META_VERIFY_TOKEN ?? '').trim(),
 
   instagram: {
-    clientId: process.env.INSTAGRAM_CLIENT_ID ?? '',
-    clientSecret: process.env.INSTAGRAM_CLIENT_SECRET ?? '',
+    clientId: (process.env.INSTAGRAM_CLIENT_ID ?? '').trim(),
+    clientSecret: (process.env.INSTAGRAM_CLIENT_SECRET ?? '').trim(),
     /** Callback for Instagram sign-in (creates an account). */
-    redirectUri: process.env.INSTAGRAM_REDIRECT_URI ?? '',
+    redirectUri: (process.env.INSTAGRAM_REDIRECT_URI ?? '').trim(),
     /** Callback for attaching Instagram to an existing workspace. */
-    connectRedirectUri: process.env.INSTAGRAM_CONNECT_REDIRECT_URI ?? '',
+    connectRedirectUri: (process.env.INSTAGRAM_CONNECT_REDIRECT_URI ?? '').trim(),
   },
 
   whatsapp: {
@@ -42,12 +42,12 @@ export const metaConfig = {
      * what makes the popup walk the user through creating/selecting their
      * WhatsApp Business account rather than asking them for tokens.
      */
-    configId: process.env.META_WHATSAPP_CONFIG_ID ?? '',
-    redirectUri: process.env.META_WHATSAPP_REDIRECT_URI ?? '',
+    configId: (process.env.META_WHATSAPP_CONFIG_ID ?? '').trim(),
+    redirectUri: (process.env.META_WHATSAPP_REDIRECT_URI ?? '').trim(),
   },
 
   /** 32-byte key, hex or base64, used for AES-256-GCM token encryption. */
-  tokenEncryptionKey: process.env.META_TOKEN_ENCRYPTION_KEY ?? '',
+  tokenEncryptionKey: (process.env.META_TOKEN_ENCRYPTION_KEY ?? '').trim(),
 } as const;
 
 export interface ConfigGap {
