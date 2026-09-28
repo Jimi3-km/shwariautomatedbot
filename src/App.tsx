@@ -3,6 +3,7 @@ import { RouterProvider } from 'react-router-dom';
 import { router } from './app/routes';
 import { SessionProvider, signOutOfSupabase } from './app/SessionContext';
 import { AuthScreen, SetNewPassword } from './pages/AuthScreen';
+import { LandingPage } from './pages/LandingPage';
 import { Onboarding } from './pages/Onboarding';
 import { ToastProvider, LoadingState, ErrorState } from './components/ui';
 import { ApiError, getMe, getSupabase, initSupabase, setAuthFailureHandler } from './lib/api';
@@ -101,7 +102,7 @@ export default function App() {
       </Centered>
     );
   } else if (status === 'signed-out') {
-    content = <AuthScreen onSignedIn={loadSession} />;
+    content = <LandingPage onSignedIn={loadSession} />;
   } else if (status === 'recovery') {
     content = (
       <SetNewPassword
