@@ -6,14 +6,14 @@ const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_EL8zLqi5ldXC24aiH-Rgpg_6L5tEez
 
 export const SUPABASE_URL = (!process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes(DEAD_PROJECT_REF))
   ? DEFAULT_SUPABASE_URL
-  : process.env.SUPABASE_URL;
+  : process.env.SUPABASE_URL.trim();
 
 export const SUPABASE_ANON_KEY = (!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY.includes(DEAD_PROJECT_REF))
   ? DEFAULT_SUPABASE_ANON_KEY
-  : process.env.SUPABASE_ANON_KEY;
+  : process.env.SUPABASE_ANON_KEY.trim();
 
 export const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_ROLE_KEY.includes(DEAD_PROJECT_REF))
-  ? process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? process.env.SUPABASE_SERVICE_ROLE_KEY.trim()
   : '';
 
 export function assertSupabaseConfigured() {

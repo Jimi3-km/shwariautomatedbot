@@ -78,7 +78,7 @@ export class LlmError extends Error {
 }
 
 export function llmConfigured(): { configured: boolean; missing: string[] } {
-  const missing = process.env.SHWARI_API_KEY ? [] : ['SHWARI_API_KEY'];
+  const missing = process.env.SHWARI_API_KEY?.trim() ? [] : ['SHWARI_API_KEY'];
   return { configured: missing.length === 0, missing };
 }
 
@@ -99,7 +99,7 @@ export function llmModel(profile: ModelProfile = 'primary'): string {
 }
 
 function baseUrl(): string {
-  return (process.env.SHWARI_API_BASE || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  return (process.env.SHWARI_API_BASE || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
 }
 
 /** Our message shape → the wire shape. */
@@ -209,7 +209,7 @@ export function sanitizeCompletionText(raw: string | null): string | null {
 }
 
 async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): Promise<Completion> {
-  const apiKey = process.env.SHWARI_API_KEY;
+  const apiKey = process.env.SHWARI_API_KEY?.trim();
   if (!apiKey) throw new LlmNotConfiguredError();
 
   const controller = new AbortController();
