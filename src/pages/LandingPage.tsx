@@ -10,16 +10,13 @@ import {
   Zap,
   Shield,
   Globe,
-  ChevronRight,
-  Sparkles,
   Menu,
   X,
 } from 'lucide-react';
 import { AuthScreen } from './AuthScreen';
 
 /* ───────────────────────────────────────────────────────────────────────
-   Shared animation hook — triggers 'animate-in' when element scrolls
-   into view. CSS handles the actual transition.
+   Scroll-reveal: fade up on first intersection.
    ─────────────────────────────────────────────────────────────────────── */
 function useReveal() {
   const ref = useRef<HTMLDivElement>(null);
@@ -27,8 +24,8 @@ function useReveal() {
     const el = ref.current;
     if (!el) return;
     const io = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { el.classList.add('animate-in'); io.unobserve(el); } },
-      { threshold: 0.12 },
+      ([e]) => { if (e.isIntersecting) { el.classList.add('lp-visible'); io.unobserve(el); } },
+      { threshold: 0.1 },
     );
     io.observe(el);
     return () => io.disconnect();
@@ -37,279 +34,228 @@ function useReveal() {
 }
 function Reveal({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   const ref = useReveal();
-  return <div ref={ref} className={`reveal ${className}`}>{children}</div>;
+  return <div ref={ref} className={`lp-reveal ${className}`}>{children}</div>;
 }
 
 /* ───────────────────────────────────────────────────────────────────────
-   Landing Page
+   Override body/root scroll lock while the landing page is mounted.
    ─────────────────────────────────────────────────────────────────────── */
+function useScrollUnlock() {
+  useEffect(() => {
+    const body = document.body;
+    const root = document.getElementById('root');
+    body.style.overflow = 'auto';
+    body.style.height = 'auto';
+    if (root) { root.style.height = 'auto'; }
+    return () => {
+      body.style.overflow = '';
+      body.style.height = '';
+      if (root) { root.style.height = ''; }
+    };
+  }, []);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ */
+
 interface LandingPageProps { onSignedIn: () => void; }
 
 export function LandingPage({ onSignedIn }: LandingPageProps) {
   const [showAuth, setShowAuth] = React.useState(false);
-  const [mobileMenu, setMobileMenu] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  useScrollUnlock();
 
   if (showAuth) return <AuthScreen onSignedIn={onSignedIn} />;
 
-  const cta = () => setShowAuth(true);
+  const go = () => setShowAuth(true);
 
   return (
-    <div className="landing-root">
-      <style>{landingCSS}</style>
+    <div className="lp">
+      <style>{css}</style>
 
-      {/* ── Navbar ─────────────────────────────────────────────────── */}
+      {/* ── Nav ──────────────────────────────────────────────────── */}
       <nav className="lp-nav">
-        <div className="lp-container lp-nav-inner">
-          <a href="#" className="lp-logo">
-            <Bot size={28} strokeWidth={2.2} />
-            <span>Shwari</span>
-          </a>
-
-          {/* Desktop links */}
+        <div className="lp-w lp-nav-row">
+          <a href="#" className="lp-brand"><Bot size={24} /><span>Shwari</span></a>
           <div className="lp-nav-links">
             <a href="#features">Features</a>
+            <a href="#channels">Channels</a>
             <a href="#commerce">Commerce</a>
-            <a href="#integrations">Integrations</a>
           </div>
-
-          <div className="lp-nav-actions">
-            <button onClick={cta} className="lp-btn-ghost">Sign In</button>
-            <button onClick={cta} className="lp-btn-primary lp-btn-sm">
-              Get Started <ArrowRight size={16} />
-            </button>
+          <div className="lp-nav-right">
+            <button onClick={go} className="lp-link-btn">Sign in</button>
+            <button onClick={go} className="lp-primary-btn lp-sm">Get Started</button>
           </div>
-
-          {/* Mobile hamburger */}
-          <button className="lp-hamburger" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Menu">
-            {mobileMenu ? <X size={24} /> : <Menu size={24} />}
+          <button className="lp-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
+            {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
-
-        {/* Mobile dropdown */}
-        {mobileMenu && (
-          <div className="lp-mobile-menu">
-            <a href="#features" onClick={() => setMobileMenu(false)}>Features</a>
-            <a href="#commerce" onClick={() => setMobileMenu(false)}>Commerce</a>
-            <a href="#integrations" onClick={() => setMobileMenu(false)}>Integrations</a>
-            <button onClick={() => { setMobileMenu(false); cta(); }} className="lp-btn-primary" style={{ width: '100%', marginTop: 8 }}>
-              Get Started Free
-            </button>
+        {menuOpen && (
+          <div className="lp-dropdown">
+            <a href="#features" onClick={() => setMenuOpen(false)}>Features</a>
+            <a href="#channels" onClick={() => setMenuOpen(false)}>Channels</a>
+            <a href="#commerce" onClick={() => setMenuOpen(false)}>Commerce</a>
+            <hr />
+            <button onClick={() => { setMenuOpen(false); go(); }} className="lp-primary-btn" style={{ width: '100%' }}>Get Started</button>
           </div>
         )}
       </nav>
 
-      {/* ── Hero ───────────────────────────────────────────────────── */}
+      {/* ── Hero ─────────────────────────────────────────────────── */}
       <section className="lp-hero">
-        <div className="lp-hero-glow" />
-        <div className="lp-container lp-hero-content">
+        <div className="lp-w">
+          <Reveal><p className="lp-kicker">AI-powered business operations</p></Reveal>
           <Reveal>
-            <div className="lp-badge">
-              <Sparkles size={14} /> Now with AI-powered team collaboration
-            </div>
-          </Reveal>
-          <Reveal>
-            <h1 className="lp-hero-title">
-              Your entire business,<br />
-              <span className="lp-gradient-text">run by AI.</span>
+            <h1 className="lp-h1">
+              Your entire business,<br />run by AI.
             </h1>
           </Reveal>
           <Reveal>
-            <p className="lp-hero-sub">
-              Deploy a dedicated AI team that handles customer conversations, processes orders,
-              manages bookings, and collects payments — across every messaging channel — while you focus on growth.
+            <p className="lp-sub">
+              Deploy a team of specialized AI agents that handle customer conversations,
+              process orders, manage bookings, and collect payments — across every
+              messaging channel — while you focus on growth.
             </p>
           </Reveal>
           <Reveal>
-            <div className="lp-hero-ctas">
-              <button onClick={cta} className="lp-btn-primary lp-btn-lg">
-                Start Free <ArrowRight size={18} />
-              </button>
-              <a href="#features" className="lp-btn-outline lp-btn-lg">
-                See How It Works
-              </a>
+            <div className="lp-hero-actions">
+              <button onClick={go} className="lp-primary-btn lp-lg">Start Free <ArrowRight size={16} /></button>
+              <a href="#features" className="lp-outline-btn lp-lg">How it works</a>
             </div>
           </Reveal>
           <Reveal>
-            <div className="lp-hero-stats">
-              <div className="lp-stat">
-                <span className="lp-stat-num">100%</span>
-                <span className="lp-stat-label">AI Handling Rate</span>
-              </div>
-              <div className="lp-stat-divider" />
-              <div className="lp-stat">
-                <span className="lp-stat-num">5</span>
-                <span className="lp-stat-label">Specialized Agents</span>
-              </div>
-              <div className="lp-stat-divider" />
-              <div className="lp-stat">
-                <span className="lp-stat-num">24/7</span>
-                <span className="lp-stat-label">Always Online</span>
-              </div>
+            <div className="lp-metrics">
+              <div><strong>100%</strong><span>AI handling rate</span></div>
+              <div><strong>5</strong><span>Specialized agents</span></div>
+              <div><strong>24/7</strong><span>Always online</span></div>
             </div>
           </Reveal>
-          <Reveal className="lp-hero-img-wrap">
-            <div className="lp-hero-img-frame">
-              <img src="/screenshots/overview-page.png" alt="Shwari Dashboard Overview" loading="eager" />
-              <div className="lp-hero-img-fade" />
+          <Reveal>
+            <div className="lp-hero-img">
+              <img src="/screenshots/overview-page.png" alt="Shwari Dashboard" />
             </div>
           </Reveal>
         </div>
       </section>
 
-      {/* ── Logos / Trust ──────────────────────────────────────────── */}
-      <section className="lp-trust">
-        <div className="lp-container">
+      {/* ── Partners ─────────────────────────────────────────────── */}
+      <div className="lp-partners">
+        <div className="lp-w">
           <Reveal>
-            <p className="lp-trust-label">Built on trusted infrastructure</p>
-            <div className="lp-trust-logos">
-              {['Meta Business API', 'Telegram Bot API', 'M-Pesa', 'NVIDIA NIM'].map((t) => (
-                <span key={t} className="lp-trust-item">{t}</span>
+            <p className="lp-partners-label">Built on</p>
+            <div className="lp-partners-row">
+              {['Meta Business API', 'Telegram Bot API', 'M-Pesa', 'NVIDIA NIM'].map(t => (
+                <span key={t}>{t}</span>
               ))}
             </div>
           </Reveal>
         </div>
-      </section>
+      </div>
 
-      {/* ── Feature 1: AI Team ────────────────────────────────────── */}
+      {/* ── AI Team ──────────────────────────────────────────────── */}
       <section id="features" className="lp-section">
-        <div className="lp-container">
+        <div className="lp-w">
           <Reveal>
-            <div className="lp-section-header">
-              <div className="lp-badge-purple"><Users size={14} /> AI Workforce</div>
-              <h2 className="lp-section-title">
-                Five specialized agents.<br />
-                <span className="lp-gradient-text">Zero configuration.</span>
-              </h2>
-              <p className="lp-section-desc">
-                Your AI team — Shwari, Sales, Support, Bookings, and Orders & Payments —
-                comes pre-trained and ready to work. Just tell Shwari about your business
-                and the entire team adapts.
-              </p>
-            </div>
+            <p className="lp-label">AI Workforce</p>
+            <h2 className="lp-h2">Five agents. Zero configuration.</h2>
+            <p className="lp-desc">
+              Your AI team — Shwari, Sales, Support, Bookings, and Orders & Payments —
+              comes pre-trained. Tell Shwari about your business and they all adapt.
+            </p>
           </Reveal>
 
-          <div className="lp-feature-grid">
-            <Reveal className="lp-feature-visual">
-              <div className="lp-screenshot-card">
-                <img src="/screenshots/AI-Team-page.png" alt="AI Team Configuration" />
+          <div className="lp-split">
+            <Reveal className="lp-split-media">
+              <div className="lp-img-card">
+                <img src="/screenshots/AI-Team-page.png" alt="AI Team" />
               </div>
             </Reveal>
-            <Reveal className="lp-feature-details">
-              <ul className="lp-check-list">
+            <Reveal className="lp-split-text">
+              <ul className="lp-checks">
                 {[
-                  ['Executive assistant', 'Shwari manages your entire business setup, directs the team, and reports back to you.'],
-                  ['Sales agent', 'Answers product and pricing questions, qualifies interest, and closes orders automatically.'],
-                  ['Support agent', 'Handles customer issues with your policies and knowledge base — no scripts needed.'],
-                  ['Bookings agent', 'Schedules appointments, reschedules, and sends reminders without human intervention.'],
-                  ['Orders & Payments', 'Processes orders, generates secure payment links, and tracks fulfilment.'],
-                ].map(([title, desc], i) => (
+                  ['Executive assistant', 'Manages your business setup, directs the team, and reports back.'],
+                  ['Sales agent', 'Answers pricing questions, qualifies leads, closes orders.'],
+                  ['Support agent', 'Resolves customer issues using your knowledge base.'],
+                  ['Bookings agent', 'Schedules, reschedules, and sends reminders.'],
+                  ['Orders & Payments', 'Processes orders and generates payment links.'],
+                ].map(([t, d], i) => (
                   <li key={i}>
-                    <div className="lp-check-icon"><Check size={14} strokeWidth={3} /></div>
-                    <div>
-                      <strong>{title}</strong>
-                      <span>{desc}</span>
-                    </div>
+                    <span className="lp-check"><Check size={12} strokeWidth={3} /></span>
+                    <div><strong>{t}</strong><span>{d}</span></div>
                   </li>
                 ))}
               </ul>
             </Reveal>
           </div>
 
-          {/* Agent chat screenshot */}
           <Reveal>
-            <div className="lp-wide-screenshot">
-              <div className="lp-screenshot-card">
-                <img src="/screenshots/shwari-agent-page.png" alt="Shwari Agent Chat Interface" />
-              </div>
-              <p className="lp-screenshot-caption">
-                Talk to Shwari like a colleague. It remembers everything, learns your preferences, and acts on your behalf.
-              </p>
+            <div className="lp-wide-img">
+              <div className="lp-img-card"><img src="/screenshots/shwari-agent-page.png" alt="Agent Chat" /></div>
+              <p className="lp-caption">Talk to Shwari like a colleague. It learns your preferences and acts on your behalf.</p>
             </div>
           </Reveal>
         </div>
       </section>
 
-      {/* ── Feature 2: Integrations ───────────────────────────────── */}
-      <section id="integrations" className="lp-section lp-section-alt">
-        <div className="lp-container">
+      {/* ── Channels ─────────────────────────────────────────────── */}
+      <section id="channels" className="lp-section lp-section-alt">
+        <div className="lp-w">
           <Reveal>
-            <div className="lp-section-header">
-              <div className="lp-badge-blue"><MessageSquare size={14} /> Omnichannel</div>
-              <h2 className="lp-section-title">
-                Every channel.<br />
-                <span className="lp-gradient-text">One inbox.</span>
-              </h2>
-              <p className="lp-section-desc">
-                WhatsApp, Instagram, Telegram, and Webchat — unified into a single stream.
-                Your AI team handles conversations across all channels simultaneously,
-                with seamless human handoff when needed.
-              </p>
-            </div>
+            <p className="lp-label">Omnichannel</p>
+            <h2 className="lp-h2">Every channel. One inbox.</h2>
+            <p className="lp-desc">
+              WhatsApp, Instagram, Telegram, and Webchat in a single stream.
+              Your AI team handles all of them simultaneously.
+            </p>
           </Reveal>
 
-          <div className="lp-feature-grid lp-feature-grid-reverse">
-            <Reveal className="lp-feature-details">
-              <div className="lp-icon-features">
+          <div className="lp-split lp-split-reverse">
+            <Reveal className="lp-split-text">
+              <div className="lp-features-list">
                 {[
-                  { icon: Globe, title: 'Multi-channel messaging', desc: 'Reach customers wherever they are — one platform, every channel.' },
-                  { icon: Zap, title: 'One-click WhatsApp setup', desc: 'Embedded Signup connects your number in seconds — no API keys to paste.' },
-                  { icon: Shield, title: 'Official Meta integration', desc: 'Built on the official Meta Business API with end-to-end encryption.' },
-                  { icon: Users, title: 'Human handoff', desc: 'AI handles the volume. Your team steps in for high-value moments.' },
-                ].map(({ icon: Icon, title, desc }, i) => (
-                  <div key={i} className="lp-icon-feature">
-                    <div className="lp-icon-wrap"><Icon size={20} /></div>
-                    <div>
-                      <strong>{title}</strong>
-                      <span>{desc}</span>
-                    </div>
+                  { icon: Globe, t: 'Multi-channel messaging', d: 'Reach customers wherever they are.' },
+                  { icon: Zap, t: 'One-click WhatsApp setup', d: 'Embedded Signup — no API keys to paste.' },
+                  { icon: Shield, t: 'Official Meta integration', d: 'Built on the official Business API.' },
+                  { icon: Users, t: 'Human handoff', d: 'AI handles volume. You handle high-value moments.' },
+                ].map(({ icon: I, t, d }, i) => (
+                  <div key={i} className="lp-feat-item">
+                    <div className="lp-feat-icon"><I size={18} /></div>
+                    <div><strong>{t}</strong><span>{d}</span></div>
                   </div>
                 ))}
               </div>
             </Reveal>
-            <Reveal className="lp-feature-visual">
-              <div className="lp-screenshot-card">
-                <img src="/screenshots/inbox-page.png" alt="Unified Inbox" />
-              </div>
-              <div className="lp-screenshot-card" style={{ marginTop: 24 }}>
-                <img src="/screenshots/Integrations-page.png" alt="Channel Integrations" />
-              </div>
+            <Reveal className="lp-split-media">
+              <div className="lp-img-card"><img src="/screenshots/inbox-page.png" alt="Inbox" /></div>
+              <div className="lp-img-card" style={{ marginTop: 16 }}><img src="/screenshots/Integrations-page.png" alt="Integrations" /></div>
             </Reveal>
           </div>
         </div>
       </section>
 
-      {/* ── Feature 3: Commerce ────────────────────────────────────── */}
+      {/* ── Commerce ─────────────────────────────────────────────── */}
       <section id="commerce" className="lp-section">
-        <div className="lp-container">
+        <div className="lp-w">
           <Reveal>
-            <div className="lp-section-header">
-              <div className="lp-badge-green"><ShoppingBag size={14} /> Commerce</div>
-              <h2 className="lp-section-title">
-                Products. Services. Payments.<br />
-                <span className="lp-gradient-text">All in one place.</span>
-              </h2>
-              <p className="lp-section-desc">
-                Turn every conversation into revenue. Your AI agents showcase products,
-                schedule services, and generate secure payment links — automatically.
-              </p>
-            </div>
+            <p className="lp-label">Commerce</p>
+            <h2 className="lp-h2">Products. Services. Payments.</h2>
+            <p className="lp-desc">
+              Turn conversations into revenue. Agents showcase products,
+              book services, and collect payments automatically.
+            </p>
           </Reveal>
 
-          <div className="lp-commerce-grid">
+          <div className="lp-cards-3">
             {[
-              { img: '/screenshots/products-page.png', icon: ShoppingBag, title: 'Product Catalog', desc: 'Manage inventory with images, pricing, and variants. Agents recommend the right products to each customer.' },
-              { img: '/screenshots/services-page.png', icon: Sparkles, title: 'Service Bookings', desc: 'Define packages, availability, and pricing. Your booking agent handles scheduling end-to-end.' },
-              { img: '/screenshots/payments-page.png', icon: CreditCard, title: 'Payment Tracking', desc: 'Generate payment links, track invoices, and reconcile revenue — all from a single dashboard.' },
-            ].map(({ img, icon: Icon, title, desc }, i) => (
+              { img: '/screenshots/products-page.png', icon: ShoppingBag, t: 'Product Catalog', d: 'Manage inventory with images, pricing, and variants.' },
+              { img: '/screenshots/services-page.png', icon: CreditCard, t: 'Service Bookings', d: 'Define packages and availability. AI handles scheduling.' },
+              { img: '/screenshots/payments-page.png', icon: CreditCard, t: 'Payment Tracking', d: 'Generate links, track invoices, reconcile revenue.' },
+            ].map(({ img, icon: I, t, d }, i) => (
               <Reveal key={i}>
-                <div className="lp-commerce-card">
-                  <div className="lp-commerce-card-img">
-                    <img src={img} alt={title} />
-                  </div>
-                  <div className="lp-commerce-card-body">
-                    <div className="lp-commerce-card-icon"><Icon size={20} /></div>
-                    <h3>{title}</h3>
-                    <p>{desc}</p>
+                <div className="lp-card">
+                  <div className="lp-card-img"><img src={img} alt={t} /></div>
+                  <div className="lp-card-body">
+                    <h3>{t}</h3>
+                    <p>{d}</p>
                   </div>
                 </div>
               </Reveal>
@@ -318,29 +264,23 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
         </div>
       </section>
 
-      {/* ── CTA ────────────────────────────────────────────────────── */}
-      <section className="lp-cta-section">
-        <div className="lp-cta-glow" />
-        <div className="lp-container">
+      {/* ── CTA ──────────────────────────────────────────────────── */}
+      <section className="lp-cta">
+        <div className="lp-w">
           <Reveal>
-            <div className="lp-cta-card">
+            <div className="lp-cta-box">
               <h2>Ready to put your business on autopilot?</h2>
               <p>Set up takes five minutes. Your AI team starts working immediately.</p>
-              <button onClick={cta} className="lp-btn-primary lp-btn-lg">
-                Create Your Free Account <ChevronRight size={18} />
-              </button>
+              <button onClick={go} className="lp-primary-btn lp-lg">Create Your Free Account</button>
             </div>
           </Reveal>
         </div>
       </section>
 
-      {/* ── Footer ─────────────────────────────────────────────────── */}
+      {/* ── Footer ───────────────────────────────────────────────── */}
       <footer className="lp-footer">
-        <div className="lp-container lp-footer-inner">
-          <div className="lp-footer-brand">
-            <Bot size={22} strokeWidth={2.2} />
-            <span>Shwari</span>
-          </div>
+        <div className="lp-w lp-footer-row">
+          <div className="lp-brand"><Bot size={20} /><span>Shwari</span></div>
           <p>&copy; {new Date().getFullYear()} Shwari. All rights reserved.</p>
         </div>
       </footer>
@@ -349,428 +289,215 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Scoped CSS — injected via <style> so it's self-contained and doesn't
-   leak into the authenticated app.
+   Scoped styles — clean, no glows, no gradients, no sparkles.
    ═══════════════════════════════════════════════════════════════════════ */
-const landingCSS = `
-/* ── Reset for landing only ────────────────────────────────────────── */
-.landing-root {
-  --lp-bg: #050505;
-  --lp-surface: #0a0a0f;
-  --lp-surface-2: #111118;
-  --lp-border: rgba(255,255,255,0.06);
-  --lp-border-2: rgba(255,255,255,0.1);
-  --lp-text: #e8e8ec;
-  --lp-text-2: #9a9ab0;
-  --lp-text-3: #5e5e72;
-  --lp-accent: #7c5cff;
-  --lp-accent-2: #a78bfa;
-  --lp-accent-glow: rgba(124,92,255,0.15);
-  --lp-green: #34d399;
-  --lp-blue: #60a5fa;
-  --lp-radius: 16px;
-  --lp-max: 1200px;
-
-  min-height: 100vh;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: var(--lp-bg);
-  color: var(--lp-text);
+const css = `
+.lp {
+  --c-bg: #050505;
+  --c-s1: #0c0c0c;
+  --c-s2: #131313;
+  --c-border: rgba(255,255,255,0.07);
+  --c-t1: #ededed;
+  --c-t2: #888;
+  --c-t3: #555;
+  --c-accent: #7c5cff;
+  --c-green: #3dd68c;
+  --radius: 12px;
+  --max-w: 1120px;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  background: var(--c-bg);
+  color: var(--c-t1);
   line-height: 1.6;
 }
+.lp *, .lp *::before, .lp *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.lp img { max-width: 100%; display: block; }
+.lp a { color: inherit; text-decoration: none; }
+.lp ul { list-style: none; }
 
-.landing-root *, .landing-root *::before, .landing-root *::after { box-sizing: border-box; }
+.lp-w { max-width: var(--max-w); margin: 0 auto; padding: 0 20px; }
 
-.lp-container { max-width: var(--lp-max); margin: 0 auto; padding: 0 24px; }
+/* reveal */
+.lp-reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.lp-reveal.lp-visible { opacity: 1; transform: none; }
 
-/* ── Reveal animation ──────────────────────────────────────────────── */
-.reveal {
-  opacity: 0;
-  transform: translateY(32px);
-  transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1);
-}
-.reveal.animate-in {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* ── Nav ────────────────────────────────────────────────────────────── */
+/* ── Nav ──────────────────────────────────────────────────────────── */
 .lp-nav {
   position: sticky; top: 0; z-index: 100;
-  background: rgba(5,5,5,0.7);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
-  border-bottom: 1px solid var(--lp-border);
+  background: rgba(5,5,5,0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--c-border);
 }
-.lp-nav-inner {
-  display: flex; align-items: center; justify-content: space-between;
-  height: 64px;
-}
-.lp-logo {
-  display: flex; align-items: center; gap: 10px;
-  text-decoration: none; color: var(--lp-text);
-  font-weight: 700; font-size: 20px; letter-spacing: -0.02em;
-}
-.lp-logo svg { color: var(--lp-accent); }
-.lp-nav-links { display: flex; gap: 32px; }
-.lp-nav-links a {
-  color: var(--lp-text-2); text-decoration: none; font-size: 14px; font-weight: 500;
-  transition: color 0.2s;
-}
-.lp-nav-links a:hover { color: var(--lp-text); }
-.lp-nav-actions { display: flex; align-items: center; gap: 12px; }
-.lp-hamburger {
-  display: none; background: none; border: none; color: var(--lp-text);
-  cursor: pointer; padding: 4px;
-}
-.lp-mobile-menu {
-  display: none;
-  flex-direction: column; gap: 8px;
-  padding: 16px 24px 24px;
-  border-top: 1px solid var(--lp-border);
-}
-.lp-mobile-menu a {
-  color: var(--lp-text-2); text-decoration: none; font-size: 15px;
-  padding: 8px 0; font-weight: 500;
-}
-
+.lp-nav-row { display: flex; align-items: center; height: 56px; }
+.lp-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; }
+.lp-brand svg { color: var(--c-accent); }
+.lp-nav-links { display: flex; gap: 28px; margin-left: 40px; }
+.lp-nav-links a { font-size: 13px; color: var(--c-t2); font-weight: 500; transition: color .15s; }
+.lp-nav-links a:hover { color: var(--c-t1); }
+.lp-nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.lp-menu-btn { display: none; background: none; border: none; color: var(--c-t1); cursor: pointer; margin-left: auto; }
+.lp-dropdown { display: none; flex-direction: column; padding: 12px 20px 20px; gap: 4px; }
+.lp-dropdown a { padding: 10px 0; font-size: 14px; color: var(--c-t2); font-weight: 500; }
+.lp-dropdown hr { border: none; border-top: 1px solid var(--c-border); margin: 8px 0; }
 @media (max-width: 768px) {
-  .lp-nav-links, .lp-nav-actions { display: none; }
-  .lp-hamburger { display: block; }
-  .lp-mobile-menu { display: flex; }
+  .lp-nav-links, .lp-nav-right { display: none; }
+  .lp-menu-btn { display: block; }
+  .lp-dropdown { display: flex; }
 }
 
-/* ── Buttons ────────────────────────────────────────────────────────── */
-.lp-btn-primary {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: var(--lp-accent);
-  color: #fff; border: none; border-radius: 12px;
-  font-weight: 600; font-size: 15px; cursor: pointer;
-  padding: 12px 24px;
-  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
-  box-shadow: 0 0 24px var(--lp-accent-glow);
-}
-.lp-btn-primary:hover {
-  background: #6a48e8;
-  transform: translateY(-1px);
-  box-shadow: 0 0 40px rgba(124,92,255,0.25);
-}
-.lp-btn-sm { padding: 8px 18px; font-size: 14px; border-radius: 10px; }
-.lp-btn-lg { padding: 16px 32px; font-size: 16px; border-radius: 14px; }
-.lp-btn-outline {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: transparent; color: var(--lp-text);
-  border: 1px solid var(--lp-border-2); border-radius: 12px;
-  font-weight: 600; font-size: 15px; cursor: pointer;
-  padding: 12px 24px; text-decoration: none;
-  transition: border-color 0.2s, background 0.2s;
-}
-.lp-btn-outline:hover { border-color: var(--lp-text-3); background: rgba(255,255,255,0.03); }
-.lp-btn-ghost {
-  background: none; border: none; color: var(--lp-text-2);
-  font-weight: 500; font-size: 14px; cursor: pointer;
-  padding: 8px 12px; transition: color 0.2s;
-}
-.lp-btn-ghost:hover { color: var(--lp-text); }
-
-/* ── Badges ─────────────────────────────────────────────────────────── */
-.lp-badge, .lp-badge-purple, .lp-badge-blue, .lp-badge-green {
+/* buttons */
+.lp-primary-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; font-weight: 600; border-radius: 100px;
-  padding: 6px 14px;
+  background: var(--c-accent); color: #fff; border: none; border-radius: 8px;
+  font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer;
+  transition: opacity .15s;
 }
-.lp-badge { background: rgba(124,92,255,0.1); color: var(--lp-accent-2); border: 1px solid rgba(124,92,255,0.15); }
-.lp-badge-purple { background: rgba(124,92,255,0.1); color: var(--lp-accent-2); border: 1px solid rgba(124,92,255,0.15); }
-.lp-badge-blue { background: rgba(96,165,250,0.1); color: var(--lp-blue); border: 1px solid rgba(96,165,250,0.15); }
-.lp-badge-green { background: rgba(52,211,153,0.1); color: var(--lp-green); border: 1px solid rgba(52,211,153,0.15); }
+.lp-primary-btn:hover { opacity: 0.88; }
+.lp-sm { padding: 7px 14px; font-size: 13px; }
+.lp-lg { padding: 14px 28px; font-size: 15px; border-radius: 10px; }
+.lp-outline-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; color: var(--c-t1); border: 1px solid var(--c-border);
+  border-radius: 8px; font-size: 14px; font-weight: 600; padding: 10px 20px;
+  cursor: pointer; transition: border-color .15s;
+}
+.lp-outline-btn:hover { border-color: var(--c-t3); }
+.lp-link-btn { background: none; border: none; color: var(--c-t2); font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 10px; }
+.lp-link-btn:hover { color: var(--c-t1); }
 
-/* ── Hero ───────────────────────────────────────────────────────────── */
-.lp-hero {
-  position: relative;
-  padding: 80px 0 0;
-  overflow: hidden;
+/* ── Hero ─────────────────────────────────────────────────────────── */
+.lp-hero { padding: 72px 0 0; text-align: center; }
+.lp-kicker {
+  font-size: 13px; font-weight: 600; color: var(--c-accent);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px;
 }
-.lp-hero-glow {
-  position: absolute;
-  top: -200px; left: 50%; transform: translateX(-50%);
-  width: 800px; height: 600px;
-  background: radial-gradient(ellipse, rgba(124,92,255,0.12) 0%, transparent 70%);
-  pointer-events: none;
+.lp-h1 {
+  font-size: clamp(32px, 5.5vw, 64px); font-weight: 800;
+  letter-spacing: -0.03em; line-height: 1.1; color: #fff; margin-bottom: 20px;
 }
-.lp-hero-content { text-align: center; position: relative; z-index: 1; }
-.lp-hero-title {
-  font-size: clamp(36px, 6vw, 72px);
-  font-weight: 800; letter-spacing: -0.03em;
-  line-height: 1.08; margin: 24px 0;
-  color: #fff;
+.lp-sub {
+  max-width: 580px; margin: 0 auto 36px; font-size: 16px;
+  color: var(--c-t2); line-height: 1.7;
 }
-.lp-gradient-text {
-  background: linear-gradient(135deg, var(--lp-accent) 0%, #c084fc 50%, var(--lp-blue) 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  background-clip: text;
+.lp-hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
+.lp-metrics {
+  display: flex; justify-content: center; gap: 48px; margin-bottom: 56px; flex-wrap: wrap;
 }
-.lp-hero-sub {
-  max-width: 640px; margin: 0 auto 40px;
-  font-size: clamp(16px, 2vw, 19px);
-  color: var(--lp-text-2); line-height: 1.7;
+.lp-metrics > div { text-align: center; }
+.lp-metrics strong { display: block; font-size: 24px; font-weight: 800; color: #fff; }
+.lp-metrics span { font-size: 12px; color: var(--c-t3); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
+.lp-hero-img {
+  max-width: 960px; margin: 0 auto;
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--c-border);
 }
-.lp-hero-ctas {
-  display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;
-  margin-bottom: 48px;
-}
+.lp-hero-img img { width: 100%; }
 
-/* Stats */
-.lp-hero-stats {
-  display: flex; gap: 32px; justify-content: center; align-items: center;
-  margin-bottom: 64px; flex-wrap: wrap;
+/* ── Partners ─────────────────────────────────────────────────────── */
+.lp-partners { padding: 48px 0; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }
+.lp-partners-label {
+  text-align: center; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--c-t3); margin-bottom: 16px;
 }
-.lp-stat { text-align: center; }
-.lp-stat-num { display: block; font-size: 28px; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
-.lp-stat-label { font-size: 13px; color: var(--lp-text-3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
-.lp-stat-divider { width: 1px; height: 40px; background: var(--lp-border-2); }
+.lp-partners-row { display: flex; justify-content: center; gap: 36px; flex-wrap: wrap; }
+.lp-partners-row span { font-size: 13px; font-weight: 600; color: var(--c-t3); }
 
-/* Hero image */
-.lp-hero-img-wrap { width: 100%; }
-.lp-hero-img-frame {
-  position: relative;
-  max-width: 1000px; margin: 0 auto;
-  border-radius: 20px; overflow: hidden;
-  border: 1px solid var(--lp-border-2);
-  box-shadow: 0 40px 100px rgba(0,0,0,0.5), 0 0 60px var(--lp-accent-glow);
+/* ── Sections ─────────────────────────────────────────────────────── */
+.lp-section { padding: 96px 0; }
+.lp-section-alt { background: var(--c-s1); }
+.lp-label {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--c-accent); margin-bottom: 12px; text-align: center;
 }
-.lp-hero-img-frame img {
-  width: 100%; display: block;
+.lp-h2 {
+  font-size: clamp(24px, 3.5vw, 40px); font-weight: 800;
+  letter-spacing: -0.025em; line-height: 1.15; color: #fff;
+  text-align: center; margin-bottom: 12px;
 }
-.lp-hero-img-fade {
-  position: absolute; bottom: 0; left: 0; right: 0; height: 120px;
-  background: linear-gradient(to top, var(--lp-bg), transparent);
-  pointer-events: none;
-}
+.lp-desc { font-size: 15px; color: var(--c-t2); text-align: center; max-width: 520px; margin: 0 auto 56px; line-height: 1.7; }
 
-/* ── Trust ──────────────────────────────────────────────────────────── */
-.lp-trust {
-  padding: 64px 0;
-  border-top: 1px solid var(--lp-border);
-  border-bottom: 1px solid var(--lp-border);
-}
-.lp-trust-label {
-  text-align: center; font-size: 12px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--lp-text-3); margin-bottom: 24px;
-}
-.lp-trust-logos {
-  display: flex; justify-content: center; gap: 40px; flex-wrap: wrap;
-  align-items: center;
-}
-.lp-trust-item {
-  font-size: 15px; font-weight: 600; color: var(--lp-text-3);
-  letter-spacing: 0.02em;
-  transition: color 0.2s;
-}
-.lp-trust-item:hover { color: var(--lp-text-2); }
-
-/* ── Sections ──────────────────────────────────────────────────────── */
-.lp-section { padding: 100px 0; }
-.lp-section-alt { background: var(--lp-surface); }
-.lp-section-header { text-align: center; max-width: 700px; margin: 0 auto 64px; }
-.lp-section-title {
-  font-size: clamp(28px, 4vw, 48px);
-  font-weight: 800; letter-spacing: -0.03em;
-  line-height: 1.15; color: #fff; margin: 20px 0 16px;
-}
-.lp-section-desc {
-  font-size: 17px; color: var(--lp-text-2); line-height: 1.7;
-  max-width: 560px; margin: 0 auto;
-}
-
-/* Feature grid */
-.lp-feature-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 64px;
-  align-items: start;
-}
-.lp-feature-grid-reverse .lp-feature-visual { order: 2; }
-.lp-feature-grid-reverse .lp-feature-details { order: 1; }
+/* split layout */
+.lp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; margin-bottom: 56px; }
+.lp-split-reverse .lp-split-media { order: 2; }
+.lp-split-reverse .lp-split-text { order: 1; }
 @media (max-width: 768px) {
-  .lp-feature-grid { grid-template-columns: 1fr; gap: 40px; }
-  .lp-feature-grid-reverse .lp-feature-visual { order: 0; }
-  .lp-feature-grid-reverse .lp-feature-details { order: 0; }
+  .lp-split { grid-template-columns: 1fr; gap: 32px; }
+  .lp-split-reverse .lp-split-media, .lp-split-reverse .lp-split-text { order: unset; }
 }
 
-/* Screenshot cards */
-.lp-screenshot-card {
-  border-radius: var(--lp-radius); overflow: hidden;
-  border: 1px solid var(--lp-border-2);
-  background: var(--lp-surface-2);
-  box-shadow: 0 8px 40px rgba(0,0,0,0.3);
-  transition: transform 0.4s cubic-bezier(0.16,1,0.3,1), box-shadow 0.4s;
+/* image cards */
+.lp-img-card {
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--c-border); background: var(--c-s2);
 }
-.lp-screenshot-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.4), 0 0 40px var(--lp-accent-glow);
-}
-.lp-screenshot-card img { width: 100%; display: block; }
+.lp-img-card img { width: 100%; }
 
-.lp-wide-screenshot { text-align: center; margin-top: 64px; }
-.lp-wide-screenshot .lp-screenshot-card { max-width: 900px; margin: 0 auto; }
-.lp-screenshot-caption {
-  margin-top: 20px; font-size: 15px; color: var(--lp-text-3);
-  font-style: italic;
-}
+.lp-wide-img { text-align: center; }
+.lp-wide-img .lp-img-card { max-width: 880px; margin: 0 auto; }
+.lp-caption { margin-top: 16px; font-size: 14px; color: var(--c-t3); }
 
-/* Check list */
-.lp-check-list {
-  list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 20px;
+/* check list */
+.lp-checks { display: flex; flex-direction: column; gap: 16px; }
+.lp-checks li { display: flex; gap: 12px; align-items: flex-start; }
+.lp-check {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px;
+  background: rgba(61,214,140,0.1); color: var(--c-green);
+  display: flex; align-items: center; justify-content: center; margin-top: 2px;
 }
-.lp-check-list li {
-  display: flex; gap: 14px; align-items: flex-start;
-}
-.lp-check-icon {
-  flex-shrink: 0;
-  width: 24px; height: 24px;
-  border-radius: 8px;
-  background: rgba(52,211,153,0.12);
-  color: var(--lp-green);
-  display: flex; align-items: center; justify-content: center;
-  margin-top: 2px;
-}
-.lp-check-list li strong {
-  display: block; color: #fff; font-weight: 600;
-  font-size: 15px; margin-bottom: 2px;
-}
-.lp-check-list li span {
-  font-size: 14px; color: var(--lp-text-2); line-height: 1.5;
-}
+.lp-checks strong { display: block; font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 1px; }
+.lp-checks span { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
 
-/* Icon features */
-.lp-icon-features {
-  display: flex; flex-direction: column; gap: 28px;
+/* features list */
+.lp-features-list { display: flex; flex-direction: column; gap: 24px; }
+.lp-feat-item { display: flex; gap: 14px; align-items: flex-start; }
+.lp-feat-icon {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 9px;
+  background: var(--c-s2); border: 1px solid var(--c-border);
+  color: var(--c-t2); display: flex; align-items: center; justify-content: center;
 }
-.lp-icon-feature {
-  display: flex; gap: 16px; align-items: flex-start;
-}
-.lp-icon-wrap {
-  flex-shrink: 0;
-  width: 44px; height: 44px;
-  border-radius: 12px;
-  background: rgba(124,92,255,0.1);
-  border: 1px solid rgba(124,92,255,0.15);
-  color: var(--lp-accent-2);
-  display: flex; align-items: center; justify-content: center;
-}
-.lp-icon-feature strong {
-  display: block; color: #fff; font-weight: 600;
-  font-size: 15px; margin-bottom: 4px;
-}
-.lp-icon-feature span {
-  font-size: 14px; color: var(--lp-text-2); line-height: 1.5;
-}
+.lp-feat-item strong { display: block; font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+.lp-feat-item span { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
 
-/* Commerce grid */
-.lp-commerce-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+/* commerce cards */
+.lp-cards-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 768px) { .lp-cards-3 { grid-template-columns: 1fr; } }
+.lp-card {
+  border-radius: var(--radius); border: 1px solid var(--c-border);
+  background: var(--c-s1); overflow: hidden;
+  transition: border-color .2s;
 }
-@media (max-width: 768px) {
-  .lp-commerce-grid { grid-template-columns: 1fr; }
-}
-.lp-commerce-card {
-  border-radius: var(--lp-radius);
-  border: 1px solid var(--lp-border-2);
-  background: var(--lp-surface);
-  overflow: hidden;
-  transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
-}
-.lp-commerce-card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(124,92,255,0.2);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-}
-.lp-commerce-card-img { padding: 16px 16px 0; }
-.lp-commerce-card-img img {
-  width: 100%; display: block; border-radius: 12px;
-  border: 1px solid var(--lp-border);
-}
-.lp-commerce-card-body { padding: 20px 24px 28px; }
-.lp-commerce-card-icon {
-  width: 40px; height: 40px; border-radius: 10px;
-  background: rgba(124,92,255,0.1);
-  border: 1px solid rgba(124,92,255,0.15);
-  color: var(--lp-accent-2);
-  display: flex; align-items: center; justify-content: center;
-  margin-bottom: 16px;
-}
-.lp-commerce-card h3 {
-  font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 8px;
-}
-.lp-commerce-card p {
-  font-size: 14px; color: var(--lp-text-2); line-height: 1.6;
-}
+.lp-card:hover { border-color: rgba(255,255,255,0.12); }
+.lp-card-img { padding: 12px 12px 0; }
+.lp-card-img img { border-radius: 8px; border: 1px solid var(--c-border); }
+.lp-card-body { padding: 16px 20px 24px; }
+.lp-card h3 { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+.lp-card p { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
 
-/* ── CTA ────────────────────────────────────────────────────────────── */
-.lp-cta-section {
-  position: relative;
-  padding: 120px 0;
-  overflow: hidden;
+/* ── CTA ──────────────────────────────────────────────────────────── */
+.lp-cta { padding: 96px 0; }
+.lp-cta-box {
+  text-align: center; padding: 64px 32px;
+  border-radius: 16px; border: 1px solid var(--c-border); background: var(--c-s1);
 }
-.lp-cta-glow {
-  position: absolute;
-  top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 600px; height: 400px;
-  background: radial-gradient(ellipse, rgba(124,92,255,0.1) 0%, transparent 70%);
-  pointer-events: none;
-}
-.lp-cta-card {
-  text-align: center;
-  padding: 80px 40px;
-  border-radius: 24px;
-  border: 1px solid var(--lp-border-2);
-  background: linear-gradient(180deg, var(--lp-surface-2) 0%, var(--lp-surface) 100%);
-  position: relative;
-}
-.lp-cta-card h2 {
-  font-size: clamp(24px, 4vw, 40px);
-  font-weight: 800; color: #fff;
-  letter-spacing: -0.02em; margin-bottom: 16px;
-}
-.lp-cta-card p {
-  font-size: 17px; color: var(--lp-text-2);
-  margin-bottom: 32px;
-}
+.lp-cta-box h2 { font-size: clamp(22px, 3vw, 32px); font-weight: 800; color: #fff; margin-bottom: 12px; }
+.lp-cta-box p { font-size: 15px; color: var(--c-t2); margin-bottom: 28px; }
 
-/* ── Footer ─────────────────────────────────────────────────────────── */
-.lp-footer {
-  padding: 40px 0;
-  border-top: 1px solid var(--lp-border);
-}
-.lp-footer-inner {
-  display: flex; justify-content: space-between; align-items: center;
-  flex-wrap: wrap; gap: 16px;
-}
-.lp-footer-brand {
-  display: flex; align-items: center; gap: 8px;
-  color: var(--lp-text-2); font-weight: 700; font-size: 16px;
-}
-.lp-footer-brand svg { color: var(--lp-accent); }
-.lp-footer p { font-size: 13px; color: var(--lp-text-3); }
+/* ── Footer ───────────────────────────────────────────────────────── */
+.lp-footer { padding: 32px 0; border-top: 1px solid var(--c-border); }
+.lp-footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.lp-footer p { font-size: 12px; color: var(--c-t3); }
 
-/* ── Mobile polish ──────────────────────────────────────────────────── */
+/* ── Mobile ───────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .lp-hero { padding-top: 48px; }
-  .lp-hero-title { margin: 16px 0; }
-  .lp-hero-sub { font-size: 16px; margin-bottom: 28px; }
-  .lp-hero-ctas { flex-direction: column; align-items: center; }
-  .lp-hero-ctas .lp-btn-lg { width: 100%; justify-content: center; }
-  .lp-hero-stats { gap: 20px; }
-  .lp-stat-num { font-size: 22px; }
-  .lp-stat-divider { height: 28px; }
+  .lp-hero-actions { flex-direction: column; align-items: stretch; }
+  .lp-hero-actions .lp-primary-btn, .lp-hero-actions .lp-outline-btn { justify-content: center; }
+  .lp-metrics { gap: 28px; }
+  .lp-metrics strong { font-size: 20px; }
   .lp-section { padding: 64px 0; }
-  .lp-section-header { margin-bottom: 40px; }
-  .lp-cta-section { padding: 64px 0; }
-  .lp-cta-card { padding: 48px 24px; border-radius: 16px; }
-  .lp-hero-img-frame { border-radius: 12px; }
-  .lp-footer-inner { flex-direction: column; text-align: center; }
-  .lp-trust-logos { gap: 24px; }
+  .lp-cta { padding: 48px 0; }
+  .lp-cta-box { padding: 40px 20px; border-radius: 12px; }
+  .lp-footer-row { flex-direction: column; text-align: center; }
 }
 `;
