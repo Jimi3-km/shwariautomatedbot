@@ -1,5 +1,5 @@
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, oneOf, bool, type Tool } from './types.js';
+import { ToolInputError, str, num, oneOf, bool, likeLiteral, isCustomerTurn, customerScope, type Tool } from './types.js';
 
 /**
  * Tools for reading the business back to its owner, and for moving customers
@@ -84,7 +84,8 @@ export const saveProduct: Tool = {
       .from('products')
       .select('id, name, description, price, sku, currency, in_stock')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', lookupName)
+      .ilike('name', likeLiteral(lookupName))
+      .limit(1)
       .maybeSingle();
 
     let data;
@@ -199,14 +200,19 @@ export const updateCustomer: Tool = {
       stage: { type: 'string', enum: [...LEAD_STAGES] },
       note: { type: 'string', description: 'Appended to the existing notes, never replacing them.' },
     },
-    required: ['lead_id'],
     additionalProperties: false,
   },
   mutates: true,
 
   async run(args, ctx) {
-    const leadId = num(args, 'lead_id');
-    if (leadId === null) throw new ToolInputError('lead_id is required.');
+    // In a customer's own conversation the customer is whoever is talking; the
+    // model does not get to name a different one.
+    const leadId = isCustomerTurn(ctx) ? (await customerScope(ctx)).leadId : num(args, 'lead_id');
+    if (leadId === null) {
+      throw new ToolInputError(
+        isCustomerTurn(ctx) ? 'This customer has no record yet to update.' : 'lead_id is required.'
+      );
+    }
 
     const stage = str(args, 'stage', { lower: true });
     const note = str(args, 'note', { max: 2000 });
@@ -445,7 +451,7 @@ export const removeProduct: Tool = {
       .from('products')
       .update({ in_stock: false })
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', name)
+      .ilike('name', likeLiteral(name))
       .select('id, name');
 
     if (error) throw new Error(error.message);
@@ -500,7 +506,7 @@ export const saveCustomerDetails: Tool = {
     // Resolve which lead this is for: the conversation's own customer, or a
     // named lead_id. A customer-facing agent can only ever reach the person it
     // is actually talking to — it has no way to name someone else.
-    const leadId = num(args, 'lead_id');
+    const leadId = isCustomerTurn(ctx) ? null : num(args, 'lead_id');
     let targetId: number | null = null;
 
     if (leadId !== null) {
@@ -522,6 +528,7 @@ export const saveCustomerDetails: Tool = {
           .eq('tenant_id', ctx.tenantId)
           .eq('channel_type', conv.channel_type)
           .eq('customer_id', conv.customer_id)
+          .limit(1)
           .maybeSingle();
         targetId = data?.id ?? null;
       }

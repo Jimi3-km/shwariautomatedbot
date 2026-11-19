@@ -24,7 +24,30 @@ export interface Routed {
   classified: boolean;
 }
 
-export async function chooseDepartment(tenantId: string, text: string): Promise<Routed | null> {
+/** A message too short to carry a topic of its own: "yes", "ok", "10am", "the second one". */
+function isShortFollowUp(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && t.length <= 24 && t.split(/\s+/).length <= 4;
+}
+
+/** The department that last answered in this conversation, if it recorded one. */
+async function lastDepartment(tenantId: string, conversationId: string): Promise<AgentRole | null> {
+  const { data } = await serviceClient
+    .from('agent_tool_calls')
+    .select('agent_role, created_at')
+    .eq('tenant_id', tenantId)
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const role = Array.isArray(data) ? (data[0]?.agent_role as AgentRole | undefined) : undefined;
+  return role && DEPARTMENTS.includes(role) ? role : null;
+}
+
+export async function chooseDepartment(
+  tenantId: string,
+  text: string,
+  conversationId?: string | null
+): Promise<Routed | null> {
   /**
    * A customer can arrive before anyone has opened the dashboard. Without this
    * the query below finds nothing, every customer message falls through to the
@@ -47,6 +70,13 @@ export async function chooseDepartment(tenantId: string, text: string): Promise<
   if (!live.length) return null;
   if (live.length === 1) return { role: live[0], classified: false };
 
+  // "Yes" belongs to whoever asked the question. Re-classifying a bare
+  // confirmation would hand a half-finished booking to sales mid-sentence.
+  if (conversationId && isShortFollowUp(text)) {
+    const previous = await lastDepartment(tenantId, conversationId).catch(() => null);
+    if (previous && live.includes(previous)) return { role: previous, classified: false };
+  }
+
   const menu = live
     .map((role) => `${role}: ${AGENT_BLUEPRINTS[role].summary}`)
     .join('\n');
@@ -62,8 +92,12 @@ export async function chooseDepartment(tenantId: string, text: string): Promise<
         { role: 'user', content: text.slice(0, 1000) },
       ],
       temperature: 0,
-      maxTokens: 8,
-      timeoutMs: 15_000,
+      // One word. Reasoning is forced off: with it on, the thinking alone would
+      // use the whole budget and the answer would come back empty.
+      maxTokens: 16,
+      thinking: false,
+      profile: 'fast',
+      timeoutMs: 10_000,
     });
 
     const answer = (result.text ?? '').toLowerCase().replace(/[^a-z]/g, '');

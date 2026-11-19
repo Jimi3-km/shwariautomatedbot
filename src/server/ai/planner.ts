@@ -1,7 +1,5 @@
 import { complete, type ToolDefinition, type ChatMessage } from './llm.js';
 import { runTool, TOOLS, type AgentContext } from './tools/index.js';
-import { canUserRunTool } from '../security/permissions.js';
-import type { Role } from '../auth.js';
 
 export interface PlanStep {
   tool: string;
@@ -17,11 +15,38 @@ export interface StructuredPlan {
 export interface PlanExecutionResult {
   reply: string;
   actions: string[];
+  /** Steps that actually succeeded. Zero means the caller should run a normal turn instead. */
   executedSteps: number;
 }
 
+const MAX_PLAN_STEPS = 12;
+
+/**
+ * Tools a plan may never contain.
+ *
+ * A plan runs straight through with nobody saying yes in between, so it is
+ * limited to additive setup work. Anything that removes something, reaches a
+ * customer, or changes how the team behaves has to go through the ordinary
+ * conversational turn, where the manager's rule — say what you are about to do
+ * and get a yes first — applies. A plan containing one of these is not
+ * trimmed; it is abandoned, and the normal loop takes the request instead.
+ */
+const NEVER_PLANNED = new Set([
+  'remove_service', 'remove_product',
+  'cancel_appointment', 'reschedule_appointment',
+  'message_customer', 'set_conversation_handling',
+  'cancel_follow_up', 'schedule_follow_up',
+  'update_order_status', 'update_ticket',
+  'configure_agent', 'activate_agent', 'update_agent_settings',
+  'delegate_to_agent',
+]);
+
 /**
  * Heuristic to detect whether an owner instruction warrants structured multi-tool planning.
+ *
+ * Deliberately narrow: a plan skips the conversation, so it is only worth it
+ * for a real setup brief or a message that plainly lists several jobs. A long
+ * message on its own is not a reason — long messages are usually questions.
  */
 export function isComplexCommand(text: string): boolean {
   const lower = text.toLowerCase();
@@ -31,8 +56,10 @@ export function isComplexCommand(text: string): boolean {
   const hasSetup = setupKeywords.some((k) => lower.includes(k));
   const hasMultipleActions = multiActionKeywords.some((k) => lower.includes(k));
   const hasMultipleSentences = text.split(/[.;\n]/).filter((s) => s.trim().length > 10).length >= 2;
+  const isQuestion = /\?\s*$/.test(text.trim());
 
-  return hasSetup || (hasMultipleActions && hasMultipleSentences) || text.length > 200;
+  if (isQuestion) return false;
+  return (hasSetup && text.trim().length >= 30) || (hasMultipleActions && hasMultipleSentences);
 }
 
 const PLANNER_SYSTEM_PROMPT = `You are the Shwari Executive Operations Planner.
@@ -51,19 +78,26 @@ Output ONLY valid JSON matching this schema:
 }
 
 Rules:
-1. Only select real tools from the provided tool catalogue.
+1. Only select real tools from the provided tool catalogue. If the request needs anything not in the catalogue, output {"summary": "", "steps": []}.
 2. Order steps logically: configure business profile first, then services/products, then opening hours, then payment instructions.
-3. Validate that arguments conform to tool parameter specifications.
-4. Output nothing except the JSON object. No markdown backticks, no explanatory prose.`;
+3. Use exactly the argument names and types in each tool's "parameters" JSON Schema. Never invent an argument.
+4. Only include what the owner actually stated. Never invent a price, an hour or a detail to fill a gap; leave that step out.
+5. At most ${MAX_PLAN_STEPS} steps.
+6. Output nothing except the JSON object. No markdown backticks, no explanatory prose.`;
 
 export async function createAndExecutePlan(
   text: string,
   orientationBlock: string,
   availableTools: ToolDefinition[],
-  ctx: AgentContext
+  ctx: AgentContext,
+  deadlineAt?: number
 ): Promise<PlanExecutionResult | null> {
-  const toolsCatalogueSummary = availableTools
-    .map((t) => `- ${t.name}: ${t.description}`)
+  const plannable = availableTools.filter((t) => !NEVER_PLANNED.has(t.name));
+
+  // Names, descriptions and the full parameter schema: without the schema the
+  // model guesses at argument names and every step fails validation.
+  const toolsCatalogue = plannable
+    .map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`)
     .join('\n');
 
   const messages: ChatMessage[] = [
@@ -74,7 +108,7 @@ export async function createAndExecutePlan(
 ${orientationBlock}
 
 Available Tools:
-${toolsCatalogueSummary}
+${toolsCatalogue}
 
 Owner Request:
 "${text}"
@@ -89,6 +123,7 @@ Formulate the execution plan:`,
       temperature: 0.1,
       maxTokens: 3000,
       profile: 'primary',
+      deadlineAt,
     });
 
     if (!completion.text) return null;
@@ -103,28 +138,40 @@ Formulate the execution plan:`,
     if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {
       return null;
     }
+    if (plan.steps.length > MAX_PLAN_STEPS) return null;
+
+    // Validate the whole plan before running any of it. One step that is not
+    // plannable means this request needs a conversation, not a batch.
+    const plannableNames = new Set(plannable.map((t) => t.name));
+    for (const step of plan.steps) {
+      if (!step || typeof step.tool !== 'string') return null;
+      if (!plannableNames.has(step.tool) || !ctx.allowedTools.includes(step.tool)) return null;
+      if (step.arguments !== undefined && (typeof step.arguments !== 'object' || step.arguments === null || Array.isArray(step.arguments))) {
+        return null;
+      }
+    }
 
     const actions: string[] = [];
     const stepOutcomes: string[] = [];
+    let succeeded = 0;
+    let failed = 0;
 
     for (const step of plan.steps) {
-      if (!ctx.allowedTools.includes(step.tool)) {
-        stepOutcomes.push(`⚠️ Skipped ${step.tool}: Not allowed for this agent.`);
+      if (deadlineAt && deadlineAt - Date.now() < 4_000) {
+        stepOutcomes.push(`… ${step.description || step.tool} (not started — ran out of time, ask me again)`);
+        failed++;
         continue;
       }
 
-      // Check RBAC permission if executed by user
-      const userRole: Role = (ctx.userId ? 'owner' : 'admin') as Role;
-      if (!canUserRunTool(userRole, step.tool)) {
-        stepOutcomes.push(`⚠️ Skipped ${step.tool}: Requires higher privileges.`);
-        continue;
-      }
-
-      const outcome = await runTool(TOOLS, step.tool, JSON.stringify(step.arguments), ctx);
+      // runTool applies the agent's allow-list and the signed-in person's own
+      // permissions, so there is no second, weaker check here.
+      const outcome = await runTool(TOOLS, step.tool, JSON.stringify(step.arguments ?? {}), ctx);
       if (outcome.ok) {
+        succeeded++;
         if (TOOLS.get(step.tool)?.mutates) actions.push(step.tool);
         stepOutcomes.push(`✓ ${step.description || step.tool}`);
       } else {
+        failed++;
         const errMessage =
           outcome.payload && typeof outcome.payload === 'object' && 'error' in outcome.payload
             ? String((outcome.payload as { error: unknown }).error)
@@ -133,23 +180,30 @@ Formulate the execution plan:`,
       }
     }
 
+    const closing = failed
+      ? `${succeeded} of ${plan.steps.length} steps worked. Tell me how you'd like to handle the rest.`
+      : actions.length > 0
+        ? 'All updates have been saved to your business.'
+        : 'That is everything. What would you like to review next?';
+
     const reply = [
       `**Plan Executed:** ${plan.summary}`,
       '',
       ...stepOutcomes,
       '',
-      actions.length > 0
-        ? 'All updates have been saved to your business.'
-        : 'Execution finished. What would you like to review next?',
+      closing,
     ].join('\n');
 
     return {
       reply,
       actions,
-      executedSteps: stepOutcomes.length,
+      // Only steps that worked count. A plan in which nothing succeeded reports
+      // zero, and the caller runs an ordinary turn instead of sending a list of
+      // failures as the answer.
+      executedSteps: succeeded,
     };
   } catch (err) {
-    console.warn('[planner] plan-first generation failed, falling back to turn loop:', err);
+    console.warn('[planner] plan-first generation failed, falling back to turn loop:', err instanceof Error ? err.message : err);
     return null;
   }
 }

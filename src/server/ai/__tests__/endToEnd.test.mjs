@@ -122,6 +122,10 @@ function reset(seed = {}) {
     'GET appointments': [],
     'GET conversations': [],
     'GET knowledge_gaps': [],
+    // The signed-in person commanding the agent is this business's owner.
+    'GET tenant_users': [{ role: 'owner' }],
+    'GET agent_settings': [],
+    'GET business_hours': [],
     'POST agent_tool_calls': [],
     ...seed,
   };
@@ -363,7 +367,9 @@ await t('the orders agent checks calendar availability', async () => {
       tools: AGENT_BLUEPRINTS.orders.tools, permissions: {}, escalation: '', status: 'active',
     }],
     'GET conversation_messages': [],
-    'GET appointments': [{ id: 'a1', starts_at: '2026-09-04T10:00:00Z', service_name: 'Delivery' }],
+    // A customer turn is scoped to the conversation's own customer.
+    'GET conversations': [{ id: 'conv-1', lead_id: 7, customer_id: 'cust-7', customer_name: 'Alice', channel_type: 'telegram' }],
+    'GET appointments': [{ id: 'a1', lead_id: 7, starts_at: '2026-09-04T10:00:00Z', service_name: 'Delivery' }],
   });
   script = [
     toolCall('list_appointments', { from: '2026-09-04T00:00:00Z', to: '2026-09-04T23:59:59Z' }),

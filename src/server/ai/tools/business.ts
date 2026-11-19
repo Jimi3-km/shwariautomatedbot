@@ -1,5 +1,5 @@
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, bool, oneOf, type Tool } from './types.js';
+import { ToolInputError, str, num, bool, oneOf, likeLiteral, type Tool } from './types.js';
 
 /**
  * Tools that read and shape the business itself: profile, services, opening
@@ -164,7 +164,8 @@ export const saveService: Tool = {
       .from('services')
       .select('id, name, description, price_amount, price_note, duration_minutes, booking_mode, active')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', lookupName)
+      .ilike('name', likeLiteral(lookupName))
+      .limit(1)
       .maybeSingle();
 
     let data;
@@ -238,7 +239,7 @@ export const removeService: Tool = {
       .from('services')
       .update({ active: false, updated_at: new Date().toISOString() })
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', name)
+      .ilike('name', likeLiteral(name))
       .select('id, name');
 
     if (error) throw new Error(error.message);
@@ -456,8 +457,8 @@ export const saveBusinessFact: Tool = {
       .from('knowledge_gaps')
       .update({ status: 'answered', resolution: value, updated_at: new Date().toISOString() })
       .eq('tenant_id', ctx.tenantId)
-      .eq('status', 'asked')
-      .ilike('question', `%${key.replace(/_/g, ' ')}%`);
+      .in('status', ['open', 'asked'])
+      .ilike('question', `%${likeLiteral(key.replace(/_/g, ' '))}%`);
 
     return { saved: { category, key } };
   },
@@ -484,7 +485,8 @@ export const recordKnowledgeGap: Tool = {
       .from('knowledge_gaps')
       .select('id, times_seen')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('question', question)
+      .ilike('question', likeLiteral(question))
+      .limit(1)
       .maybeSingle();
 
     if (existing) {

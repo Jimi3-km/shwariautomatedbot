@@ -98,6 +98,26 @@ export function llmModel(profile: ModelProfile = 'primary'): string {
   return resolveModel(profile);
 }
 
+/**
+ * Models a tenant's "AI Agent" settings may select.
+ *
+ * The setting is free text in the database and reachable by anyone who can
+ * edit it, so it is honoured only when the operator listed the model here or
+ * it is one the server already runs. Anything else is ignored rather than
+ * billed.
+ */
+export function allowedModel(requested: string | null | undefined): string | null {
+  const model = (requested ?? '').trim();
+  if (!model) return null;
+  const allow = new Set(
+    [
+      ...(process.env.SHWARI_ALLOWED_MODELS ?? '').split(','),
+      resolveModel('primary'), resolveModel('fast'), resolveModel('fallback'),
+    ].map((m) => m.trim()).filter(Boolean)
+  );
+  return allow.has(model) ? model : null;
+}
+
 function baseUrl(): string {
   return (process.env.SHWARI_API_BASE || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
 }
@@ -135,6 +155,12 @@ export interface CompleteOptions {
   timeoutMs?: number;
   /** Targeted model profile. Defaults to 'primary'. */
   profile?: ModelProfile;
+  /** Force reasoning on or off for this call, whatever SHWARI_THINKING says. */
+  thinking?: boolean;
+  /** An explicit model id, overriding the profile. Callers must have allowlisted it. */
+  model?: string;
+  /** Epoch ms after which the whole turn has run out of time; caps this call's timeout. */
+  deadlineAt?: number;
 }
 
 /**
@@ -146,15 +172,37 @@ export interface CompleteOptions {
  */
 export async function complete(opts: CompleteOptions): Promise<Completion> {
   const profile = opts.profile ?? 'primary';
+  const model = opts.model?.trim() || resolveModel(profile);
   try {
-    return await executeCompletion(opts, profile);
+    return await executeCompletion(opts, model);
   } catch (err) {
-    if (profile !== 'fallback' && err instanceof LlmError && (err.status >= 500 || err.status === 429)) {
-      console.warn(`[llm] ${profile} model failed with HTTP ${err.status}; retrying with fallback model...`);
-      return await executeCompletion(opts, 'fallback');
-    }
-    throw err;
+    const retryable = err instanceof LlmError && (err.status >= 500 || err.status === 429);
+    if (!retryable || profile === 'fallback') throw err;
+
+    const fallback = resolveModel('fallback');
+    const rateLimited = (err as LlmError).status === 429;
+    const timedOut = (err as LlmError).status === 504;
+
+    // Retrying the very same model only makes sense when it was rate limited,
+    // and then only after a pause. A timeout on the same model would just
+    // spend the caller's whole budget twice.
+    if (fallback === model && (!rateLimited || timedOut)) throw err;
+    if (opts.deadlineAt && opts.deadlineAt - Date.now() < 3_000) throw err;
+
+    if (rateLimited) await sleep(Math.min(RATE_LIMIT_BACKOFF_MS, remaining(opts.deadlineAt) / 2));
+    console.warn(`[llm] ${model} failed with HTTP ${(err as LlmError).status}; retrying with ${fallback}`);
+    return await executeCompletion(opts, fallback);
   }
+}
+
+const RATE_LIMIT_BACKOFF_MS = parseInt(process.env.SHWARI_RATE_LIMIT_BACKOFF_MS || '1500', 10);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function remaining(deadlineAt: number | undefined): number {
+  return deadlineAt ? Math.max(0, deadlineAt - Date.now()) : Number.MAX_SAFE_INTEGER;
 }
 
 /**
@@ -171,32 +219,29 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   text = text.replace(/\?{2,}/g, '?');
   text = text.replace(/\.{4,}/g, '...');
 
-  // 2. Collapse repetitive identical sentences / phrases (autoregressive loops)
-  const sentences = text.split(/(?<=[.?!])\s+/);
-  const dedupedSentences: string[] = [];
-  for (const s of sentences) {
-    const trimmed = s.trim();
-    if (!trimmed) continue;
-    // Skip if identical to the sentence right before it
-    if (
-      dedupedSentences.length > 0 &&
-      dedupedSentences[dedupedSentences.length - 1].toLowerCase() === trimmed.toLowerCase()
-    ) {
-      continue;
+  // 2. Collapse repetitive identical sentences (autoregressive loops), one
+  //    line at a time. Line breaks are the reply's structure - bullets, steps,
+  //    paragraphs - so they are never joined away; only a sentence that repeats
+  //    the one immediately before it on the same line is dropped.
+  const lines = text.split(/\r?\n/).map((line) => {
+    const sentences = line.trim().split(/(?<=[.?!])[ \t]+/);
+    const kept: string[] = [];
+    for (const s of sentences) {
+      const trimmed = s.trim();
+      if (!trimmed) continue;
+      if (kept.length > 0 && kept[kept.length - 1].toLowerCase() === trimmed.toLowerCase()) continue;
+      kept.push(trimmed);
     }
-    dedupedSentences.push(trimmed);
-  }
-  text = dedupedSentences.join(' ');
+    return kept.join(' ');
+  });
 
-  // 3. Collapse repetitive identical lines
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // 3. Collapse repetitive identical lines, and runs of blank lines to one.
   const dedupedLines: string[] = [];
   for (const line of lines) {
-    if (
-      dedupedLines.length > 0 &&
-      dedupedLines[dedupedLines.length - 1].toLowerCase() === line.toLowerCase()
-    ) {
-      continue;
+    const previous = dedupedLines[dedupedLines.length - 1];
+    if (previous !== undefined) {
+      if (!line && !previous) continue;
+      if (line && previous.toLowerCase() === line.toLowerCase()) continue;
     }
     dedupedLines.push(line);
   }
@@ -208,12 +253,18 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   return text.trim() || null;
 }
 
-async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): Promise<Completion> {
+async function executeCompletion(opts: CompleteOptions, model: string): Promise<Completion> {
   const apiKey = process.env.SHWARI_API_KEY?.trim();
   if (!apiKey) throw new LlmNotConfiguredError();
 
+  // One call never outlives the turn it belongs to. The per-call ceiling is
+  // sized to fit inside a serverless function's lifetime with room to reply.
+  const perCall = opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '30000', 10);
+  const budget = Math.min(perCall, remaining(opts.deadlineAt));
+  if (budget < 1_000) throw new LlmError('The model took too long to answer', 504);
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '90000', 10));
+  const timer = setTimeout(() => controller.abort(), budget);
 
   let res: Response;
   try {
@@ -225,7 +276,7 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: resolveModel(profile),
+        model,
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
         
@@ -236,7 +287,7 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
          * Sending it 
          * keeps one code path for both.
          */
-        chat_template_kwargs: { enable_thinking: thinkingEnabled() },
+        chat_template_kwargs: { enable_thinking: opts.thinking ?? thinkingEnabled() },
         ...(opts.tools?.length
           ? {
               tools: opts.tools.map((t) => ({

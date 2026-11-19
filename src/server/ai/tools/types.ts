@@ -2,6 +2,8 @@ import { serviceClient } from '../../supabase.js';
 import { logAuditEvent } from '../../security/audit.js';
 import type { ToolDefinition } from '../llm.js';
 import type { AgentRole } from '../roles.js';
+import { canUserRunTool } from '../../security/permissions.js';
+import type { Role } from '../../auth.js';
 
 /**
  * The tool layer.
@@ -29,7 +31,86 @@ export interface AgentContext {
   conversationId: string | null;
   /** Tool names this agent is configured to use. */
   allowedTools: string[];
+  /**
+   * True when this turn answers a customer rather than staff. Left unset it is
+   * derived: a department with no signed-in user behind it is serving a
+   * customer. See isCustomerTurn.
+   */
+  customerFacing?: boolean;
+  /** The staff member's role in this business, when a person is commanding the agent. */
+  userRole?: Role | null;
+  /** The business's IANA timezone, used to read times the model gives without an offset. */
+  timezone?: string | null;
+  /**
+   * Per-turn memory of mutating calls, so a model that repeats itself does not
+   * create a second order or a second booking.
+   */
+  turn?: { done: Map<string, unknown> };
 }
+
+/**
+ * Is this turn serving a customer?
+ *
+ * A customer turn is the dangerous one: the person typing is anonymous and
+ * controls the model's input, so every tool must act only on the customer the
+ * conversation belongs to — never on an id the model was talked into sending.
+ */
+export function isCustomerTurn(ctx: AgentContext): boolean {
+  return ctx.customerFacing ?? (ctx.agentRole !== 'manager' && !ctx.userId);
+}
+
+export interface CustomerScope {
+  leadId: number | null;
+  customerId: string | null;
+  customerName: string | null;
+  channelType: string | null;
+}
+
+/**
+ * The one customer a customer-facing turn may touch: whoever the conversation
+ * belongs to. Throws when there is no conversation, because then there is no
+ * customer this turn could legitimately act for.
+ */
+export async function customerScope(ctx: AgentContext): Promise<CustomerScope> {
+  if (!ctx.conversationId) {
+    throw new ToolInputError('There is no customer conversation here to act on.');
+  }
+  const { data } = await serviceClient
+    .from('conversations')
+    .select('id, lead_id, customer_id, customer_name, channel_type')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('id', ctx.conversationId)
+    .maybeSingle();
+  if (!data) throw new ToolInputError('This conversation is no longer available.');
+  return {
+    leadId: data.lead_id ?? null,
+    customerId: data.customer_id ?? null,
+    customerName: data.customer_name ?? null,
+    channelType: data.channel_type ?? null,
+  };
+}
+
+/**
+ * Does a row belong to the customer in scope? A row matches on its lead, or —
+ * for a customer with no lead yet — on the channel identity.
+ */
+export function ownedBy(
+  row: { lead_id?: number | null; customer_id?: string | null } | null | undefined,
+  scope: CustomerScope
+): boolean {
+  if (!row) return false;
+  if (scope.leadId !== null && row.lead_id != null) return Number(row.lead_id) === Number(scope.leadId);
+  if (scope.customerId && row.customer_id) return String(row.customer_id) === String(scope.customerId);
+  return false;
+}
+
+/** Escape LIKE wildcards so a name is matched literally by ilike. */
+export function likeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+/** Arguments a customer-facing model may never use to point at someone else. */
+const CUSTOMER_STRIPPED_ARGS = ['lead_id', 'customer_email', 'customer_id'];
 
 export interface Tool {
   readonly name: string;
@@ -100,8 +181,41 @@ export async function runTool(
   // means to or not. Drop it rather than let it near a query.
   if ('tenant_id' in args) delete args.tenant_id;
 
+  // On a customer turn the model's input is written by an anonymous person. It
+  // does not get to name which customer a tool acts on, or where an email
+  // goes: those come from the conversation, so the arguments are dropped here
+  // before any tool can read them.
+  if (isCustomerTurn(ctx)) {
+    for (const key of CUSTOMER_STRIPPED_ARGS) if (key in args) delete args[key];
+  }
+
+  // A signed-in person commanding the agent gets no more than their own role
+  // allows in the dashboard.
+  if (ctx.userId && ctx.userRole !== undefined && !canUserRunTool(ctx.userRole ?? 'viewer', name)) {
+    await record(ctx, name, args, false, null, 'staff role lacks permission');
+    return {
+      ok: false,
+      payload: { error: 'The person asking does not have permission for that. Tell them an owner or admin needs to do it.' },
+    };
+  }
+
+  // The same mutating call twice in one turn is the model repeating itself,
+  // not the customer ordering twice.
+  const dedupeKey = tool.mutates && ctx.turn ? `${name}:${JSON.stringify(args)}` : null;
+  if (dedupeKey && ctx.turn!.done.has(dedupeKey)) {
+    return {
+      ok: true,
+      payload: {
+        already_done: true,
+        result: ctx.turn!.done.get(dedupeKey),
+        note: 'You already did exactly this a moment ago and it worked. Do not do it again; tell them the result.',
+      },
+    };
+  }
+
   try {
     const result = await tool.run(args, ctx);
+    if (dedupeKey) ctx.turn!.done.set(dedupeKey, result);
     await record(ctx, name, args, true, result, null);
     return { ok: true, payload: result };
   } catch (e) {
