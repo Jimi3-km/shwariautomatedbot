@@ -1,5 +1,8 @@
 # Getting the Meta credentials — step by step
 
+> **Note.** n8n is no longer part of the system. Any `N8N_*` variable mentioned
+> below is not read; messages are handled by this API and the native agent.
+
 For the app **builtwithai dm agent**, App ID **`1561926828265582`**
 (Tech Provider verified, use cases already configured).
 

@@ -44,7 +44,9 @@ accountRouter.get(
     const { data: memberships } = await serviceClient
       .from('tenant_users')
       .select('tenant_id, role, tenants(business_name, slug)')
-      .eq('user_id', ctx.userId);
+      .eq('user_id', ctx.userId)
+      .order('created_at', { ascending: true })
+      .order('tenant_id', { ascending: true });
 
     const { data: tenant } = await ctx.db
       .from('tenants')
@@ -78,20 +80,61 @@ accountRouter.get(
   })
 );
 
+/**
+ * Change a member's role.
+ *
+ * The rules, mirrored by a trigger in 20261119_0018_authz_hardening.sql so that
+ * calling PostgREST directly cannot get round them:
+ *   - nobody changes their own role
+ *   - only an owner may grant or take away the owner role
+ *   - a workspace always keeps at least one owner
+ */
 accountRouter.patch(
   '/team/:id',
   requireAuth,
   requireAdmin,
   handler(async (req, res) => {
+    const ctx = req.ctx!;
     const role = req.body?.role;
     if (!['owner', 'admin', 'member', 'viewer'].includes(role)) {
       return res.status(400).json({ error: 'Invalid role' });
     }
-    const { data, error } = await req.ctx!.db
+
+    const { data: target, error: readErr } = await ctx.db
+      .from('tenant_users')
+      .select('id, user_id, role')
+      .eq('id', req.params.id)
+      .eq('tenant_id', ctx.tenantId)
+      .maybeSingle();
+    if (readErr) return res.status(400).json({ error: readErr.message });
+    if (!target) return res.status(404).json({ error: 'Member not found' });
+
+    if (target.user_id === ctx.userId) {
+      return res.status(403).json({ error: 'You cannot change your own role' });
+    }
+    if (target.role === role) return res.json(target);
+
+    if ((role === 'owner' || target.role === 'owner') && ctx.role !== 'owner') {
+      return res.status(403).json({ error: 'Only an owner can grant or remove the owner role' });
+    }
+
+    if (target.role === 'owner') {
+      const { count, error: countErr } = await ctx.db
+        .from('tenant_users')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', ctx.tenantId)
+        .eq('role', 'owner');
+      if (countErr) return res.status(400).json({ error: countErr.message });
+      if ((count ?? 0) <= 1) {
+        return res.status(409).json({ error: 'A workspace must keep at least one owner' });
+      }
+    }
+
+    const { data, error } = await ctx.db
       .from('tenant_users')
       .update({ role })
       .eq('id', req.params.id)
-      .eq('tenant_id', req.ctx!.tenantId)
+      .eq('tenant_id', ctx.tenantId)
       .select('id, user_id, role')
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });

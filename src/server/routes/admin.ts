@@ -39,6 +39,48 @@ export interface AgentTurnRecord {
   label: TurnLabel | null;
 }
 
+/** Parses an ISO date/timestamp query value. `undefined` = absent, `null` = invalid. */
+function parseDate(value: unknown): string | null | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > 40) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** Most turns scanned when a filter can only be applied after the labels are joined. */
+const POST_FILTER_SCAN_LIMIT = 2000;
+
+/**
+ * Labels for a set of turns, keyed by turn id.
+ *
+ * A label only counts when its tenant_id matches the turn's own tenant. RLS and
+ * the API both enforce that on write, but this read runs on the service client,
+ * so it re-checks rather than trusting whatever row happens to carry the id.
+ */
+async function loadLabels(
+  turns: Array<{ id: number | string; tenant_id: string }>,
+  targetTenantId: string | null
+): Promise<Map<number | string, TurnLabel>> {
+  const map = new Map<number | string, TurnLabel>();
+  if (!turns.length) return map;
+  const tenantOf = new Map(turns.map((t) => [String(t.id), t.tenant_id]));
+  const ids = turns.map((t) => t.id);
+
+  for (let i = 0; i < ids.length; i += 200) {
+    let q = serviceClient
+      .from('agent_turn_labels')
+      .select('*')
+      .in('turn_event_id', ids.slice(i, i + 200));
+    if (targetTenantId) q = q.eq('tenant_id', targetTenantId);
+    const { data, error } = await q;
+    if (error || !data) continue;
+    for (const l of data as TurnLabel[]) {
+      if (tenantOf.get(String(l.turn_event_id)) === l.tenant_id) map.set(l.turn_event_id, l);
+    }
+  }
+  return map;
+}
+
 function detectLanguageHint(text: string): 'sw' | 'sheng' | 'en' {
   const lower = text.toLowerCase();
   const shengKeywords = ['niaje', 'sasa', 'mambo', 'rada', 'manze', 'aje', 'maze', 'fiti'];
@@ -84,6 +126,23 @@ adminRouter.get(
     const limit = Math.min(Math.max(parseInt(String(rawLimit || '50'), 10) || 50, 1), 200);
     const offset = Math.max(parseInt(String(rawOffset || '0'), 10) || 0, 0);
 
+    const startDate = parseDate(start_date);
+    const endDate = parseDate(end_date);
+    if (startDate === null || endDate === null) {
+      return res.status(400).json({ error: 'start_date and end_date must be ISO dates' });
+    }
+
+    const toolQuery = typeof tool === 'string' ? tool.trim().toLowerCase() : '';
+    const labelQuery = typeof label === 'string' ? label : '';
+    if (labelQuery && !['ok', 'needs_improvement', 'bug', 'unlabeled'].includes(labelQuery)) {
+      return res.status(400).json({ error: 'label must be one of: ok, needs_improvement, bug, unlabeled' });
+    }
+    // The tool and label filters need the joined label / the details array, so
+    // they cannot be pushed into the query. When either is set, scan a bounded
+    // window, filter, and only then paginate -- otherwise `total` and the page
+    // sizes describe the unfiltered set.
+    const postFilter = Boolean(toolQuery || labelQuery);
+
     let query = serviceClient
       .from('audit_events')
       .select('id, tenant_id, actor_id, actor_type, agent_role, action, resource_type, details, created_at', {
@@ -108,14 +167,12 @@ adminRouter.get(
     if (typeof status === 'string' && status) {
       query = query.contains('details', { status });
     }
-    if (typeof start_date === 'string' && start_date) {
-      query = query.gte('created_at', start_date);
-    }
-    if (typeof end_date === 'string' && end_date) {
-      query = query.lte('created_at', end_date);
-    }
+    if (startDate) query = query.gte('created_at', startDate);
+    if (endDate) query = query.lte('created_at', endDate);
 
-    const { data: turns, count, error } = await query.range(offset, offset + limit - 1);
+    const { data: turns, count, error } = postFilter
+      ? await query.range(0, POST_FILTER_SCAN_LIMIT - 1)
+      : await query.range(offset, offset + limit - 1);
 
     if (error) {
       console.error('[admin] failed to fetch agent turns:', error.message);
@@ -130,20 +187,7 @@ adminRouter.get(
       details: AgentTurnRecord['details'];
     }>;
 
-    // Fetch matching labels for these turns
-    const turnIds = turnList.map((t) => t.id);
-    let labelsMap = new Map<number | string, TurnLabel>();
-
-    if (turnIds.length > 0) {
-      const { data: labels, error: labelErr } = await serviceClient
-        .from('agent_turn_labels')
-        .select('*')
-        .in('turn_event_id', turnIds);
-
-      if (!labelErr && labels) {
-        labelsMap = new Map((labels as TurnLabel[]).map((l) => [l.turn_event_id, l]));
-      }
-    }
+    const labelsMap = await loadLabels(turnList, targetTenantId);
 
     // Assemble turn records with attached labels
     let records: AgentTurnRecord[] = turnList.map((t) => ({
@@ -155,21 +199,27 @@ adminRouter.get(
       label: labelsMap.get(t.id) ?? null,
     }));
 
-    // Post-filter by tool if requested
-    if (typeof tool === 'string' && tool.trim()) {
-      const toolQuery = tool.trim().toLowerCase();
+    if (toolQuery) {
       records = records.filter((r) =>
         (r.details.tools_invoked ?? []).some((t) => t.toLowerCase().includes(toolQuery))
       );
     }
+    if (labelQuery === 'unlabeled') {
+      records = records.filter((r) => !r.label);
+    } else if (labelQuery) {
+      records = records.filter((r) => r.label?.label === labelQuery);
+    }
 
-    // Post-filter by label if requested
-    if (typeof label === 'string' && label) {
-      if (label === 'unlabeled') {
-        records = records.filter((r) => !r.label);
-      } else {
-        records = records.filter((r) => r.label?.label === label);
-      }
+    if (postFilter) {
+      const total = records.length;
+      return res.json({
+        turns: records.slice(offset, offset + limit),
+        total,
+        limit,
+        offset,
+        // True when the scan window was full, i.e. older turns were not examined.
+        truncated: turnList.length >= POST_FILTER_SCAN_LIMIT,
+      });
     }
 
     return res.json({
@@ -219,13 +269,26 @@ adminRouter.post(
       return res.status(403).json({ error: 'Forbidden: Cannot label turn from another tenant' });
     }
 
+    // turn_event_id is unique, so an existing label for this turn that belongs
+    // to a different tenant (written around the API) must not be adopted.
+    const { data: existing } = await serviceClient
+      .from('agent_turn_labels')
+      .select('id, tenant_id')
+      .eq('turn_event_id', turnId)
+      .maybeSingle();
+    if (existing && existing.tenant_id !== event.tenant_id) {
+      await serviceClient.from('agent_turn_labels').delete().eq('id', existing.id);
+    }
+
     const payload = {
       turn_event_id: turnId,
       tenant_id: event.tenant_id,
       labeled_by: ctx.userId,
       label,
-      tags: Array.isArray(tags) ? tags.map((t) => String(t).trim()).filter(Boolean) : [],
-      notes: typeof notes === 'string' ? notes.trim() : '',
+      tags: Array.isArray(tags)
+        ? tags.map((t) => String(t).trim().slice(0, 60)).filter(Boolean).slice(0, 20)
+        : [],
+      notes: typeof notes === 'string' ? notes.trim().slice(0, 4000) : '',
       updated_at: new Date().toISOString(),
     };
 
@@ -284,19 +347,7 @@ adminRouter.get(
     }
 
     const turnList = turns ?? [];
-    const turnIds = turnList.map((t) => t.id);
-
-    let labelsMap = new Map<number | string, TurnLabel>();
-    if (turnIds.length > 0) {
-      const { data: labels } = await serviceClient
-        .from('agent_turn_labels')
-        .select('*')
-        .in('turn_event_id', turnIds);
-
-      if (labels) {
-        labelsMap = new Map((labels as TurnLabel[]).map((l) => [l.turn_event_id, l]));
-      }
-    }
+    const labelsMap = await loadLabels(turnList as Array<{ id: number; tenant_id: string }>, targetTenantId);
 
     const datasetEntries = [];
 

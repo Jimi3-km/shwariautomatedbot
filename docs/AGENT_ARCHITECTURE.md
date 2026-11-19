@@ -1,5 +1,14 @@
 # Shwari Agent Workforce Architecture & Evaluation Guide
 
+> **Current state (kept in sync with the code).** Customers are answered by the
+> native agent in `src/server/ai/` — n8n is no longer part of the system. The
+> default model is `nvidia/nemotron-3-ultra-550b-a55b` on NVIDIA's OpenAI-compatible endpoint
+> (override with `SHWARI_MODEL`, `SHWARI_FAST_MODEL`, `SHWARI_FALLBACK_MODEL`).
+> There are five agent roles, defined in `src/server/ai/roles.ts`: a manager
+> plus the sales, booking, support and orders departments. The authoritative
+> list of tools is the code in `src/server/ai/tools/`; where a name or count
+> below disagrees with it, the code is right.
+
 This document describes the production architecture, multi-model execution, security policy, and evaluation framework for the Shwari Agent Workforce.
 
 ---
@@ -102,7 +111,7 @@ Every business tenant is automatically provisioned with 5 specialized agent role
 The runtime leverages OpenAI-compatible endpoints on NVIDIA NIM:
 
 - **Primary Profile (`SHWARI_PRIMARY_MODEL`)**:
-  - Default: `moonshotai/kimi-k3` or `meta/llama-3.3-70b-instruct`.
+  - Default: `nvidia/nemotron-3-ultra-550b-a55b` or `meta/llama-3.3-70b-instruct`.
   - Roles: `manager`, `sales`, `support`.
   - Purpose: High-reasoning agentic turns, multi-step tool calls, and complex customer inquiries.
 - **Fast Profile (`SHWARI_FAST_MODEL`)**:

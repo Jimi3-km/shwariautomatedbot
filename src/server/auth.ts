@@ -7,6 +7,8 @@ export type Role = 'owner' | 'admin' | 'member' | 'viewer';
 export interface TenantContext {
   userId: string;
   email: string | null;
+  /** True only when Supabase Auth has confirmed the address. */
+  emailVerified: boolean;
   tenantId: string;
   role: Role;
   accessToken: string;
@@ -56,8 +58,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   // not yet a member of any tenant cannot see tenant_users under RLS.
   const { data: memberships, error: mErr } = await serviceClient
     .from('tenant_users')
-    .select('tenant_id, role')
-    .eq('user_id', user.id);
+    .select('tenant_id, role, created_at')
+    .eq('user_id', user.id)
+    // Deterministic default: the oldest membership, with the id as tie-break.
+    .order('created_at', { ascending: true })
+    .order('tenant_id', { ascending: true });
 
   if (mErr) {
     // This was previously swallowed, which made a 42501 "permission denied for
@@ -93,6 +98,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   req.ctx = {
     userId: user.id,
     email: user.email ?? null,
+    emailVerified: Boolean(user.email_confirmed_at),
     tenantId: chosen.tenant_id,
     role: chosen.role as Role,
     accessToken: token,
@@ -106,7 +112,7 @@ declare global {
   namespace Express {
     interface Request {
       /** Set by requireUser. Present before a tenant exists. */
-      authUser?: { id: string; email: string | null; accessToken: string };
+      authUser?: { id: string; email: string | null; emailVerified: boolean; accessToken: string };
       /** Exact request bytes, kept by the body parser for HMAC verification. */
       rawBody?: Buffer;
     }
@@ -128,7 +134,12 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   if (error || !data?.user) {
     return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
   }
-  req.authUser = { id: data.user.id, email: data.user.email ?? null, accessToken: token };
+  req.authUser = {
+    id: data.user.id,
+    email: data.user.email ?? null,
+    emailVerified: Boolean(data.user.email_confirmed_at),
+    accessToken: token,
+  };
   next();
 }
 
@@ -139,6 +150,10 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
 export function isSuperAdmin(req: Request): boolean {
   const email = req.ctx?.email || req.authUser?.email;
   if (!email) return false;
+  // An unconfirmed address proves nothing: anyone can sign up with someone
+  // else's email. Only a confirmed one may match the super-admin list.
+  const verified = req.ctx ? req.ctx.emailVerified : req.authUser?.emailVerified;
+  if (!verified) return false;
   const superAdminList = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
     .split(',')
     .map((e) => e.trim().toLowerCase())

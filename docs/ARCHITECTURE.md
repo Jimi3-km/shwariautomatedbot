@@ -1,6 +1,6 @@
 # Multi-Tenant AI Workforce Platform Architecture
 
-The dashboard is the management portal. The native Express server and NVIDIA Moonshot AI Workforce engine handle inbound conversations and operational workflows. Supabase is the system of record with PostgreSQL Row-Level Security (RLS). WhatsApp, Instagram, Telegram, and WebChat are integrated channels.
+The dashboard is the management portal. The native Express server and native AI workforce engine (`src/server/ai/`, NVIDIA-hosted model) handle inbound conversations and operational workflows. Supabase is the system of record with PostgreSQL Row-Level Security (RLS). WhatsApp, Instagram, Telegram, and WebChat are integrated channels.
 
 ```
 Business owner ──> Dashboard (React) ──> Dashboard API (Express) ──> Supabase
@@ -31,13 +31,24 @@ number alone — `leads` and `conversations` are both uniquely keyed that way.
 ## Two layers of isolation
 
 1. Every API query filters `.eq('tenant_id', ctx.tenantId)` explicitly.
-2. Every query runs through a Supabase client carrying the caller's JWT, so
-   RLS applies independently. A missed filter in application code still
-   cannot cross a tenant boundary.
+2. Dashboard routes (catalog, commerce, inbox, operations, analytics, team)
+   run through a Supabase client carrying the caller's JWT, so RLS applies
+   independently. A missed filter there still cannot cross a tenant boundary.
 
-Run `supabase/tests/tenant_isolation.sql` to verify. It impersonates the
-`authenticated` role and sets `request.jwt.claims`, exercising the real
-policies, and pairs every negative assertion with a positive control.
+The exception is code that has no user session or must cross RLS on purpose:
+webhooks, the AI agent and its tools, onboarding, the Shwari routes and the
+admin QA routes use the service-role client. There the explicit `tenant_id`
+filter is the only layer, so every such query must carry one. The tenant always
+comes from the verified session or the resolved channel, never from the client.
+
+Rules that must hold even for someone calling PostgREST directly are enforced
+in the database (`20261119_0018_authz_hardening.sql`): membership roles, QA
+labels, payment verification and agent configuration.
+
+Run `supabase/tests/tenant_isolation.sql` to verify. It seeds its own two
+tenants inside a transaction and rolls back, impersonates the `authenticated`
+role with `request.jwt.claims` to exercise the real policies and triggers, and
+pairs every denial with a positive control.
 
 ## Secrets
 
@@ -52,8 +63,9 @@ the server process; they are never returned to the browser after saving.
 The AI records an unverified **claim**. It cannot verify one. This is enforced
 by `payments_verification_guard`, a database trigger that rejects any write
 setting `verification_status = 'verified'` unless `verified_by` is a real
-staff user of the same tenant — so it binds the service-role/n8n path too, not
-only the dashboard.
+staff user of the same tenant — so it binds the service-role path (the AI
+agent) too, not only the dashboard. A signed-in user can only attest as
+themselves, and the amount of a verified payment cannot be changed.
 
 Flow: claim recorded `unverified` → dashboard shows it → staff verifies →
 `verified` → receipt can be issued. A receipt for a non-verified payment is
@@ -73,7 +85,7 @@ except `/api/health` and `/api/public-config`.
 | GET | `/conversations` | filters: search, channel_type, status, handled_by, unread; paginated |
 | GET | `/conversations/:id` | thread, lead, payments |
 | POST | `/conversations/:id/read` | clear unread |
-| POST | `/conversations/:id/takeover` | `{ai_enabled}` — flips whether n8n replies |
+| POST | `/conversations/:id/takeover` | `{ai_enabled}` — flips whether the AI replies |
 | POST | `/conversations/:id/reply` | staff reply, dispatched by channel type |
 | GET | `/analytics?days=` | time series + totals, real data only |
 | GET | `/onboarding` | setup checklist, completion computed server-side |
@@ -95,50 +107,37 @@ except `/api/health` and `/api/public-config`.
 | GET/POST/PATCH | `/orders`, `/orders/:id` | |
 
 Roles: `viewer` read-only, `member` writes, `admin`/`owner` also manage
-business settings, channels and team.
+business settings, channels, agents and team. Only an `owner` can grant or
+remove `owner`; nobody can change their own role; a workspace always keeps at
+least one owner.
 
-## Channel connection (Telegram)
+## Channels
 
-1. Owner pastes a BotFather token into the dashboard.
-2. Server calls `getMe` to validate it and learn the bot id.
-3. Server mints a 32-byte CSPRNG webhook secret.
-4. Server calls `setWebhook` against `N8N_TELEGRAM_WEBHOOK_URL` with that secret.
-5. Row written to `channels` with `status='active'`.
-6. Token never returned to the browser.
+Each channel is a provider under `src/server/channels/providers/` (Telegram,
+WhatsApp, Instagram, web chat). Connecting one validates the credentials with
+the platform, mints a per-channel webhook secret, registers the webhook against
+this API and writes a `channels` row. Secrets are never returned to the browser.
 
-`channels` has `UNIQUE (channel_type, channel_account_id)`, so one bot cannot
-be claimed by two tenants.
+`channels` has `UNIQUE (channel_type, channel_account_id)`, so one account
+cannot be claimed by two tenants.
 
-WhatsApp is modelled but not implemented. `POST /api/channels/whatsapp`
-returns 501 listing exactly what Meta credentials are required. Nothing is
-faked.
-
-## n8n workflow shape
+## Inbound pipeline
 
 ```
-Telegram Inbound (webhook /telegram-in)
-  → Resolve Channel        (secret header → tenant)
-  → Load Tenant Config
-  → Load Agent Settings
-  → Guard Tenant
-  → Load Conversation State
-  → AI Still Handling?     (false when staff took over → stop)
-  → Extract Message Data
-  → Sales Agent            (Product Tool, tenant-scoped memory)
-  → Prepare Reply
-  → Send Reply             (tenant's own bot token)
-  → Log Conversation       (legacy conversation_logs, kept for compatibility)
-  → Upsert Conversation    (normalized, primary)
-  → Log Conversation Messages
-  → Check Existing Lead → Create/Update Lead
-  → Is Payment? → Record Payment Claim (unverified) → Payment Alert
-              └→ Notify Admin          (tenant's notification_target)
+Platform webhook  (/api/webhooks/meta | /api/webhooks/telegram | web chat POST)
+  → authenticate          (HMAC signature / secret header / signed visitor token)
+  → resolve channel       (→ tenant; the client never names a tenant)
+  → claim event           (webhook_events unique key: duplicates are dropped)
+  → persist message       (conversations + conversation_messages)
+  → AI still handling?    (false when staff took over → stop)
+  → route to a department agent and run the turn   (src/server/ai/)
+  → send reply through the channel provider, store it in the transcript
 ```
 
-Follow-ups read `public.followup_candidates`, a view that applies each
-tenant's own `followup_delay_hours` and composes the message from that
-tenant's own `agent_name`, `business_name` and template. The branch is
-currently **disabled** pending end-to-end testing.
+n8n is no longer involved: there is no external workflow, and the
+`N8N_*` variables are not read. Scheduled work (follow-ups, token refresh,
+clean-up) is triggered by the `crons` declared in `vercel.json`, which call the
+internal routes with `INTERNAL_API_SECRET`.
 
 ## Frontend structure
 
@@ -166,4 +165,7 @@ in `src/` imports from it, and the build excludes it.
 
 See `.env.example`. The server refuses to start unless `SUPABASE_URL`,
 `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are all set — it will not
-serve an unauthenticated API.
+serve an unauthenticated API, and there are no built-in fallback values. Set
+`CORS_ORIGIN` in production. `SUPER_ADMIN_EMAILS` (comma-separated) names the
+operators who may read agent turns across tenants; it only matches accounts
+whose email address has been confirmed.

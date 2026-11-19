@@ -31,34 +31,23 @@ That is enough to deploy, sign up, onboard and use web chat.
 
 ---
 
-## 2. The AI pipeline (required for any AI reply)
+## 2. The AI agent (required for any AI reply)
 
 Without these, messages still arrive and appear in the Inbox — they just get no
 automated reply.
 
 | Variable | Value |
 |---|---|
-| `N8N_AGENT_WEBHOOK_URL` | The production URL of the **Meta Inbound** webhook node in n8n, e.g. `https://<you>.app.n8n.cloud/webhook/meta-in`. Used by WhatsApp, Instagram **and web chat**. |
-| `INTERNAL_API_SECRET` | Invent one: `openssl rand -hex 32`. Lets n8n send replies back through this API. |
-| `SHWARI_API_KEY` | An NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). Powers the Shwari agent — see [SHWARI_AGENT.md](SHWARI_AGENT.md). |
+| `SHWARI_API_KEY` | An NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). Powers every agent — see [SHWARI_AGENT.md](SHWARI_AGENT.md). |
+| `SHWARI_MODEL` | Optional. Defaults to `nvidia/nemotron-3-ultra-550b-a55b`. `SHWARI_FAST_MODEL` and `SHWARI_FALLBACK_MODEL` are optional overrides for the fast and fallback profiles. |
+| `INTERNAL_API_SECRET` | Invent one: `openssl rand -hex 32`. Authenticates the scheduled jobs that call `/api/internal/*`. |
 
-`N8N_TELEGRAM_WEBHOOK_URL` is no longer read. Telegram delivers to
-`<PUBLIC_API_URL>/api/webhooks/telegram` now, and the API hands the message on
-to the pipeline. Bots connected before that change still point at n8n;
-Integrations flags them and reconnecting fixes it.
-
-`N8N_META_WEBHOOK_URL` is still accepted as the old name for
-`N8N_AGENT_WEBHOOK_URL`, so an existing deployment keeps working.
-
-### In n8n, once
-
-Open the workflow and edit the **Send Reply (Channel API)** node:
-
-- **URL** → `https://<your PUBLIC_API_URL>/api/internal/send`
-- **Header** `x-internal-secret` → the same value as `INTERNAL_API_SECRET`
-
-Until you do this, WhatsApp, Instagram and web chat store messages but never
-reply. Telegram is unaffected — it keeps its own original send node.
+There is no n8n step any more. Every channel delivers to this API
+(`<PUBLIC_API_URL>/api/webhooks/...`) and the native agent replies. The old
+`N8N_AGENT_WEBHOOK_URL`, `N8N_META_WEBHOOK_URL` and `N8N_TELEGRAM_WEBHOOK_URL`
+variables are not read and can be removed. A Telegram bot that was connected
+while n8n was in use still points its webhook there: reconnect it from
+Integrations.
 
 ---
 

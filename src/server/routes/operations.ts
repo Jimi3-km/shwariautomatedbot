@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireWrite, handler } from '../auth.js';
+import { RefError, leadIdOrNull, conversationIdOrNull, customerIdOrNull, textOrNull } from './refs.js';
 
 export const operationsRouter = Router();
 
@@ -66,14 +67,25 @@ operationsRouter.post(
       return res.status(400).json({ error: 'Length must be between 1 and 480 minutes.' });
     }
 
+    let leadId, customerId, customerName, channelType;
+    try {
+      leadId = await leadIdOrNull(ctx, req.body?.lead_id);
+      customerId = customerIdOrNull(req.body?.customer_id);
+      customerName = textOrNull(req.body?.customer_name, 200, 'customer_name');
+      channelType = textOrNull(req.body?.channel_type, 32, 'channel_type');
+    } catch (e) {
+      if (e instanceof RefError) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+
     const { data, error } = await ctx.db
       .from('appointments')
       .insert({
         tenant_id: ctx.tenantId,
-        lead_id: req.body?.lead_id ?? null,
-        customer_id: req.body?.customer_id ?? null,
-        customer_name: req.body?.customer_name ?? null,
-        channel_type: req.body?.channel_type ?? null,
+        lead_id: leadId,
+        customer_id: customerId,
+        customer_name: customerName,
+        channel_type: channelType,
         service_name: serviceName,
         starts_at: new Date(startsAt).toISOString(),
         duration_minutes: Math.round(duration),
@@ -160,13 +172,23 @@ operationsRouter.post(
       return res.status(400).json({ error: `priority must be one of: ${TICKET_PRIORITIES.join(', ')}` });
     }
 
+    let leadId, conversationId, customerName;
+    try {
+      leadId = await leadIdOrNull(ctx, req.body?.lead_id);
+      conversationId = await conversationIdOrNull(ctx, req.body?.conversation_id);
+      customerName = textOrNull(req.body?.customer_name, 200, 'customer_name');
+    } catch (e) {
+      if (e instanceof RefError) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+
     const { data, error } = await ctx.db
       .from('support_tickets')
       .insert({
         tenant_id: ctx.tenantId,
-        lead_id: req.body?.lead_id ?? null,
-        conversation_id: req.body?.conversation_id ?? null,
-        customer_name: req.body?.customer_name ?? null,
+        lead_id: leadId,
+        conversation_id: conversationId,
+        customer_name: customerName,
         subject: subject.slice(0, 200),
         body: String(req.body?.body || '').slice(0, 4000),
         priority,

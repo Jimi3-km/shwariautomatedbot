@@ -53,13 +53,13 @@ globalThis.fetch = async (url, init = {}) => {
   if (href.includes('/auth/v1/user')) {
     const token = (init.headers?.authorization || init.headers?.Authorization || '').replace('Bearer ', '').trim();
     if (token === 'admin-token') {
-      return json({ user: { id: 'user-admin', email: 'admin@shwari.ai' } });
+      return json({ user: { id: 'user-admin', email: 'admin@shwari.ai', email_confirmed_at: '2026-01-01T00:00:00Z' } });
     }
     if (token === 'superadmin-token') {
-      return json({ user: { id: 'user-super', email: 'super@shwari.ai' } });
+      return json({ user: { id: 'user-super', email: 'super@shwari.ai', email_confirmed_at: '2026-01-01T00:00:00Z' } });
     }
     if (token === 'viewer-token') {
-      return json({ user: { id: 'user-viewer', email: 'viewer@shwari.ai' } });
+      return json({ user: { id: 'user-viewer', email: 'viewer@shwari.ai', email_confirmed_at: '2026-01-01T00:00:00Z' } });
     }
     return json({ error: 'unauthorized' }, 401);
   }

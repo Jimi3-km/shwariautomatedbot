@@ -1,5 +1,14 @@
 # Shwari Agent
 
+> **Current state (kept in sync with the code).** Customers are answered by the
+> native agent in `src/server/ai/` — n8n is no longer part of the system. The
+> default model is `nvidia/nemotron-3-ultra-550b-a55b` on NVIDIA's OpenAI-compatible endpoint
+> (override with `SHWARI_MODEL`, `SHWARI_FAST_MODEL`, `SHWARI_FALLBACK_MODEL`).
+> There are five agent roles, defined in `src/server/ai/roles.ts`: a manager
+> plus the sales, booking, support and orders departments. The authoritative
+> list of tools is the code in `src/server/ai/tools/`; where a name or count
+> below disagrees with it, the code is right.
+
 The business owner talks to Shwari in plain English. Shwari learns the
 business, writes what it learns into structured tables the other agents read,
 and stays on afterwards as the owner's AI administrator.

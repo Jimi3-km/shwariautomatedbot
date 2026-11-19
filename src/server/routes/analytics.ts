@@ -135,7 +135,7 @@ analyticsRouter.get(
       return n ?? 0;
     };
 
-    const [{ data: business }, { data: agent }, products, activeChannels, conversations] =
+    const [{ data: business }, { data: agent }, products, services, activeChannels, conversations] =
       await Promise.all([
         ctx.db.from('tenants')
           .select('business_name, business_description, address, payment_details, contact_info')
@@ -143,6 +143,7 @@ analyticsRouter.get(
         ctx.db.from('agent_settings')
           .select('persona, sales_script').eq('tenant_id', t).maybeSingle(),
         count('products'),
+        count('services'),
         count('channels', (q) => q.eq('status', 'active')),
         count('conversations'),
       ]);
@@ -155,7 +156,7 @@ analyticsRouter.get(
     const steps = [
       { id: 'business', label: 'Add your business details',
         done: Boolean(business?.business_name && business?.business_description), href: '/settings' },
-      { id: 'products', label: 'Add your first product', done: products > 0, href: '/products' },
+      { id: 'products', label: 'Add your first product or service', done: products + services > 0, href: '/products' },
       { id: 'channel', label: 'Connect a messaging channel', done: activeChannels > 0, href: '/integrations' },
       { id: 'agent', label: 'Configure your AI agent', done: agentConfigured, href: '/agent' },
       { id: 'payments', label: 'Add your payment details', done: paymentsConfigured, href: '/settings' },

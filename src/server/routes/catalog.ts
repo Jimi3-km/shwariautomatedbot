@@ -24,6 +24,14 @@ catalogRouter.get(
   })
 );
 
+/** The keys of a request body that were actually sent. */
+function definedOnly(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
+  return Object.fromEntries(
+    Object.entries(body as Record<string, unknown>).filter(([, v]) => v !== undefined)
+  );
+}
+
 function productPayload(body: any, tenantId: string, currencyFallback: string) {
   const price = body.price === '' || body.price == null ? null : Number(body.price);
   if (price != null && (!Number.isFinite(price) || price < 0)) {
@@ -77,9 +85,26 @@ catalogRouter.put(
     const { data: tenant } = await ctx.db
       .from('tenants').select('currency').eq('id', ctx.tenantId).single();
 
+    // A PUT that names only some fields changes only those fields. The payload
+    // builder fills defaults for anything absent, so it is fed the stored row
+    // overlaid with the request rather than the request alone -- otherwise a
+    // "rename" would silently put the product back in stock and clear its SKU.
+    const { data: current, error: readErr } = await ctx.db
+      .from('products')
+      .select('name, sku, description, price, currency, variant, payment_options, in_stock')
+      .eq('id', req.params.id)
+      .eq('tenant_id', ctx.tenantId)
+      .maybeSingle();
+    if (readErr) return res.status(400).json({ error: readErr.message });
+    if (!current) return res.status(404).json({ error: 'Product not found' });
+
     let payload;
     try {
-      payload = productPayload(req.body, ctx.tenantId, tenant?.currency || 'KES');
+      payload = productPayload(
+        { ...current, ...definedOnly(req.body) },
+        ctx.tenantId,
+        tenant?.currency || 'KES'
+      );
     } catch (e: any) {
       return res.status(e.status || 400).json({ error: e.message });
     }
@@ -144,6 +169,21 @@ catalogRouter.get(
   })
 );
 
+/** Model ids a tenant may select: the ones this deployment is configured for. */
+function allowedModels(): Set<string> {
+  const fromEnv = [
+    process.env.SHWARI_ALLOWED_MODELS,
+    process.env.SHWARI_MODEL,
+    process.env.SHWARI_PRIMARY_MODEL,
+    process.env.SHWARI_FAST_MODEL,
+    process.env.SHWARI_FALLBACK_MODEL,
+  ]
+    .flatMap((v) => (v ?? '').split(','))
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return new Set(['nvidia/nemotron-3-ultra-550b-a55b', ...fromEnv]);
+}
+
 catalogRouter.put(
   '/agent',
   requireAuth,
@@ -161,14 +201,43 @@ catalogRouter.put(
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (b.persona !== undefined) updates.persona = b.persona;
-    if (b.custom_instructions !== undefined) updates.custom_instructions = b.custom_instructions;
-    if (b.followup_template !== undefined) updates.followup_template = b.followup_template;
-    if (b.model !== undefined) updates.model = String(b.model);
+
+    // Free text that ends up in a prompt: strings only, and bounded.
+    for (const key of ['persona', 'custom_instructions', 'followup_template'] as const) {
+      if (b[key] === undefined) continue;
+      if (b[key] !== null && typeof b[key] !== 'string') {
+        return res.status(400).json({ error: `${key} must be text` });
+      }
+      if (typeof b[key] === 'string' && b[key].length > 8000) {
+        return res.status(400).json({ error: `${key} is too long (8000 characters at most)` });
+      }
+      updates[key] = b[key];
+    }
+
+    // The model is chosen from a server-side list. A tenant must not be able to
+    // point its agent at an arbitrary (and arbitrarily expensive) model id, so
+    // a value outside the list is ignored rather than stored.
+    if (typeof b.model === 'string' && allowedModels().has(b.model.trim())) {
+      updates.model = b.model.trim();
+    }
+
     if (memoryWindow !== undefined) updates.memory_window = memoryWindow;
     if (delay !== undefined) updates.followup_delay_hours = delay;
-    if (b.sales_script !== undefined) updates.sales_script = b.sales_script;
-    if (b.escalation_rules !== undefined) updates.escalation_rules = b.escalation_rules;
+
+    if (b.sales_script !== undefined) {
+      const ok =
+        Array.isArray(b.sales_script) &&
+        b.sales_script.length <= 40 &&
+        b.sales_script.every((x: unknown) => typeof x === 'string' && x.length <= 1000);
+      if (!ok) return res.status(400).json({ error: 'sales_script must be a list of short text steps' });
+      updates.sales_script = b.sales_script;
+    }
+    if (b.escalation_rules !== undefined) {
+      const v = b.escalation_rules;
+      const ok = v === null || (typeof v === 'object' && JSON.stringify(v).length <= 8000);
+      if (!ok) return res.status(400).json({ error: 'escalation_rules must be a small object or list' });
+      updates.escalation_rules = v;
+    }
     if (b.upsell_catalogue !== undefined) {
       updates.upsell_catalogue = Array.isArray(b.upsell_catalogue) ? b.upsell_catalogue : [];
     }
@@ -318,11 +387,13 @@ catalogRouter.post(
   requireWrite,
   handler(async (req, res) => {
     const ctx = req.ctx!;
-    const { data, error } = await ctx.db
-      .from('services')
-      .insert(servicePayload(req.body, ctx.tenantId))
-      .select('*')
-      .single();
+    let payload;
+    try {
+      payload = servicePayload(req.body ?? {}, ctx.tenantId);
+    } catch (e: any) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    const { data, error } = await ctx.db.from('services').insert(payload).select('*').single();
 
     if (error) {
       // The unique index is on lower(name), so a near-duplicate is caught by
@@ -342,9 +413,27 @@ catalogRouter.put(
   requireWrite,
   handler(async (req, res) => {
     const ctx = req.ctx!;
+    // Same rule as products: only the fields that were sent change.
+    const { data: current, error: readErr } = await ctx.db
+      .from('services')
+      .select('name, description, price_amount, price_note, duration_minutes, booking_mode, active')
+      .eq('id', req.params.id)
+      .eq('tenant_id', ctx.tenantId)
+      .maybeSingle();
+    if (readErr) return res.status(400).json({ error: readErr.message });
+    if (!current) return res.status(404).json({ error: 'Service not found' });
+
+    let payload;
+    try {
+      payload = servicePayload({ ...current, ...definedOnly(req.body) }, ctx.tenantId);
+    } catch (e: any) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    const { tenant_id: _drop, ...updates } = payload;
+
     const { data, error } = await ctx.db
       .from('services')
-      .update(servicePayload(req.body, ctx.tenantId))
+      .update(updates)
       .eq('id', req.params.id)
       .eq('tenant_id', ctx.tenantId)
       .select('*')

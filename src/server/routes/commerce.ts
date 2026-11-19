@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
+import { RefError, leadIdOrNull, customerIdOrNull, textOrNull } from './refs.js';
 import { logAuditEvent } from '../security/audit.js';
 
 export const commerceRouter = Router();
@@ -121,6 +122,22 @@ commerceRouter.post(
       return res.status(400).json({ error: 'total must be a non-negative number' });
     }
 
+    let leadId, customerId, channelType, deliveryLocation;
+    try {
+      leadId = await leadIdOrNull(ctx, req.body?.lead_id);
+      customerId = customerIdOrNull(req.body?.customer_id);
+      channelType = textOrNull(req.body?.channel_type, 32, 'channel_type');
+      deliveryLocation = textOrNull(req.body?.delivery_location, 500, 'delivery_location');
+    } catch (e) {
+      if (e instanceof RefError) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+    if (items.length > 200) return res.status(400).json({ error: 'Too many items' });
+    const subtotal = req.body?.subtotal == null ? null : Number(req.body.subtotal);
+    if (subtotal != null && (!Number.isFinite(subtotal) || subtotal < 0)) {
+      return res.status(400).json({ error: 'subtotal must be a non-negative number' });
+    }
+
     const orderRef = `${tenant?.order_prefix || 'ORD'}-${Date.now().toString(36).toUpperCase()}`;
 
     const { data, error } = await ctx.db
@@ -128,14 +145,14 @@ commerceRouter.post(
       .insert({
         tenant_id: ctx.tenantId,
         order_ref: orderRef,
-        lead_id: req.body?.lead_id ?? null,
-        customer_id: req.body?.customer_id ?? null,
-        channel_type: req.body?.channel_type ?? null,
+        lead_id: leadId,
+        customer_id: customerId,
+        channel_type: channelType,
         items,
-        subtotal: req.body?.subtotal == null ? null : Number(req.body.subtotal),
+        subtotal,
         total,
         currency: String(req.body?.currency || tenant?.currency || 'KES').toUpperCase().slice(0, 3),
-        delivery_location: req.body?.delivery_location ?? null,
+        delivery_location: deliveryLocation,
         status: 'pending',
       })
       .select('*').single();
