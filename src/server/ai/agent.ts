@@ -9,6 +9,9 @@ import { describeNow, safeTimezone } from './time.js';
 import type { Role } from '../auth.js';
 import { isComplexCommand, createAndExecutePlan } from './planner.js';
 import { logAgentTurn } from '../security/eval.js';
+import { checkReply, correctionMessage, honestHoldingReply, humanizeReply } from './guard.js';
+import { recordSignals, signalsBlock } from './signals.js';
+import { loadLessons } from './learning.js';
 
 /**
  * The agent runtime.
@@ -58,12 +61,18 @@ export interface AgentTurnInput {
    * conversation_messages as usual.
    */
   history?: ChatMessage[];
+  /** Set when a colleague passed this customer over within the same message. */
+  handover?: { from: AgentRole; summary: string };
+  /** The moment the whole turn must be finished by. Defaults to now + the turn budget. */
+  deadlineAt?: number;
 }
 
 export interface AgentTurnResult {
   reply: string;
   /** Tools that actually changed something, for the UI to surface. */
   actions: string[];
+  /** The agent that wrote the reply, which differs from the one asked when it was handed over. */
+  answeredBy?: AgentRole;
 }
 
 export class AgentUnavailableError extends Error {
@@ -465,7 +474,7 @@ async function history(tenantId: string, conversationId: string | null, limit: n
  */
 export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
   const startTime = Date.now();
-  const deadlineAt = startTime + TURN_DEADLINE_MS;
+  const deadlineAt = input.deadlineAt ?? startTime + TURN_DEADLINE_MS;
 
   const agent = await loadAgent(input.tenantId, input.role);
   if (!agent) throw new AgentUnavailableError(`This business has no ${input.role} agent.`);
@@ -476,10 +485,16 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const role: AgentRole = input.role;
   const customerFacing = role !== 'manager' && !input.userId;
 
-  const [orient, settings, userRole] = await Promise.all([
+  const [orient, settings, userRole, lessons, signals] = await Promise.all([
     orientation(input.tenantId, role),
     role === 'manager' ? Promise.resolve(null) : loadAgentSettings(input.tenantId).catch(() => null),
     input.userId ? staffRole(input.tenantId, input.userId).catch(() => null) : Promise.resolve(undefined),
+    loadLessons(input.tenantId, role),
+    // Read how this customer is behaving - what they want, how keen, how they
+    // feel - and keep the lead's score current while we are at it.
+    customerFacing && input.conversationId
+      ? recordSignals(input.tenantId, input.conversationId)
+      : Promise.resolve(null),
   ]);
 
   const ctx: AgentContext = {
@@ -495,7 +510,8 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     // undefined = nobody signed in; null = signed in but not a member, which
     // runTool treats as the least-privileged role.
     ...(input.userId ? { userRole: userRole ?? null } : {}),
-    turn: { done: new Map() },
+    // A customer is passed between departments at most once per message.
+    turn: { done: new Map(), handoffUsed: Boolean(input.handover) },
   };
 
   const available = toolsFor(ctx.allowedTools);
@@ -556,7 +572,14 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         orient.text,
         priorTurns.length === 0,
         customerBlock,
-        settings ? { persona: settings.persona, customInstructions: settings.customInstructions } : undefined
+        settings ? { persona: settings.persona, customInstructions: settings.customInstructions } : undefined,
+        {
+          channelType,
+          signals: signals ? signalsBlock(signals) : null,
+          lessons,
+          handover: input.handover ?? null,
+          staffCommanded: role !== 'manager' && Boolean(input.userId),
+        }
       ),
     },
     ...priorTurns,
@@ -564,6 +587,10 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   ];
 
   const actions: string[] = [];
+  /** Every tool that succeeded, reads included: what a claim in the reply can rest on. */
+  const okTools: string[] = [];
+  const toolNames = [...TOOLS.keys()];
+  let corrected = false;
   const profile: ModelProfile = (role === 'booking' || role === 'orders') ? 'fast' : 'primary';
   const model = settings?.model ?? undefined;
 
@@ -582,7 +609,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         tools: lastRound ? undefined : definitions,
         // Warm rather than clinical. Low enough that it does not improvise
         // facts, high enough that it does not answer the same way every time.
-        temperature: 0.4,
+        temperature: customerFacing ? 0.5 : 0.4,
         profile,
         model,
         deadlineAt,
@@ -596,14 +623,39 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       }
       // Out of time after work was already done: say so honestly rather than
       // failing the whole turn and losing the fact that something changed.
-      if (actions.length) return { reply: fallbackReply(), actions };
+      if (actions.length) return { reply: fallbackReply(customerFacing), actions, answeredBy: role };
       throw e;
     }
 
     if (!result.toolCalls.length) {
-      const reply = result.text?.trim() || fallbackReply();
+      const draft = result.text?.trim();
+      if (!draft) {
+        const reply = fallbackReply(customerFacing);
+        log(reply, actions, profile, 'fallback');
+        return { reply, actions, answeredBy: role };
+      }
+
+      // The behaviour check: nothing goes out claiming work that was not done,
+      // confirming a payment, or exposing how the system works.
+      const check = checkReply({ reply: draft, okTools, toolNames, customerFacing });
+      if (!check.ok) {
+        const canRetry = !corrected && !lastRound && deadlineAt - Date.now() > FINAL_ANSWER_RESERVE_MS;
+        if (canRetry) {
+          corrected = true;
+          messages.push({ role: 'assistant', content: draft });
+          messages.push({ role: 'user', content: correctionMessage(check) });
+          continue;
+        }
+        if (check.issues.includes('unbacked_action') || check.issues.includes('confirms_payment') || check.issues.includes('raw_data')) {
+          const reply = honestHoldingReply(check.issues, customerFacing);
+          log(reply, actions, profile, 'fallback', `held back: ${check.issues.join(', ')}`);
+          return { reply, actions, answeredBy: role };
+        }
+      }
+
+      const reply = humanizeReply(draft, { channelType, toolNames }) || fallbackReply(customerFacing);
       log(reply, actions, profile, 'success');
-      return { reply, actions };
+      return { reply, actions, answeredBy: role };
     }
 
     messages.push({ role: 'assistant', content: result.text ?? null, toolCalls: result.toolCalls });
@@ -613,6 +665,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       const repeated = Boolean(
         outcome.payload && typeof outcome.payload === 'object' && (outcome.payload as any).already_done
       );
+      if (outcome.ok) okTools.push(call.name);
       if (outcome.ok && !repeated && TOOLS.get(call.name)?.mutates) actions.push(call.name);
       messages.push({
         role: 'tool',
@@ -620,13 +673,37 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         content: fitToolResult(outcome.payload),
       });
     }
+
+    // This agent decided the customer needs a colleague. The colleague takes
+    // the same message, with its own rules and tools, inside the same deadline
+    // - so the customer gets one answer from the right department rather than
+    // "please contact bookings".
+    const handoff = ctx.turn?.handoff;
+    if (handoff && customerFacing && !input.handover) {
+      log(`(passed to ${handoff.role})`, [...actions, 'hand_to_department'], profile, 'success');
+      try {
+        const next = await runAgentTurn({
+          ...input,
+          role: handoff.role,
+          handover: { from: role, summary: handoff.summary },
+          deadlineAt,
+        });
+        return { reply: next.reply, actions: [...actions, ...next.actions], answeredBy: next.answeredBy ?? handoff.role };
+      } catch (e) {
+        console.warn(`[agent] ${handoff.role} could not take the handover:`, e instanceof Error ? e.message : e);
+        // Carry on as the original department rather than leave them unanswered.
+        ctx.turn!.handoff = undefined;
+      }
+    }
   }
 
-  const reply = fallbackReply();
+  const reply = fallbackReply(customerFacing);
   log(reply, actions, profile, 'fallback');
-  return { reply, actions };
+  return { reply, actions, answeredBy: role };
 }
 
-function fallbackReply(): string {
-  return "Sorry — I didn't manage to work that one out. Could you tell me again in a different way?";
+function fallbackReply(customerFacing = false): string {
+  return customerFacing
+    ? "Sorry, I didn't quite get that. Could you say it another way?"
+    : "Sorry — I didn't manage to work that one out. Could you tell me again in a different way?";
 }

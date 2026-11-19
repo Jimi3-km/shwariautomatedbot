@@ -45,7 +45,13 @@ export interface AgentContext {
    * Per-turn memory of mutating calls, so a model that repeats itself does not
    * create a second order or a second booking.
    */
-  turn?: { done: Map<string, unknown> };
+  turn?: {
+    done: Map<string, unknown>;
+    /** Set by hand_to_department: the colleague who should answer instead. */
+    handoff?: { role: AgentRole; summary: string };
+    /** One handover per customer message, so two departments cannot bounce someone. */
+    handoffUsed?: boolean;
+  };
 }
 
 /**
@@ -181,6 +187,8 @@ export async function runTool(
   // means to or not. Drop it rather than let it near a query.
   if ('tenant_id' in args) delete args.tenant_id;
 
+  args = tidyArguments(args);
+
   // On a customer turn the model's input is written by an anonymous person. It
   // does not get to name which customer a tool acts on, or where an email
   // goes: those come from the conversation, so the arguments are dropped here
@@ -228,6 +236,54 @@ export async function runTool(
     }
     await record(ctx, name, args, false, null, e instanceof Error ? e.message : String(e));
     return { ok: false, payload: { error: message } };
+  }
+}
+
+/** What a model writes when it means "nothing" but was made to fill the field. */
+const EMPTY_WORDS = new Set(['null', 'none', 'undefined', 'n/a', 'na', 'nil', 'unknown', 'not provided', 'not specified']);
+
+/** A stand-in the model invented instead of a value: "customer's ID", "<phone>", "[name]". */
+const PLACEHOLDER = /^(?:<[^>]*>|(?:the |this )?(?:customer|client|user|lead)(?:'s|’s|s)? (?:id|name|phone|email|location|address|number|details)|your[_ ]\w+|todo|tbd|xxx+)$/i;
+
+/**
+ * Repair the ways a model habitually fills in a field it had nothing for.
+ *
+ * Seen in production: `"total": "null"`, `"lead_id": "customer's ID"`, and a
+ * list sent as a Python-style string. Each made a real order fail. A value
+ * that means "nothing" is removed so the tool's own defaults and required
+ * checks apply, and a list sent as text is read as the list it was meant to be.
+ */
+export function tidyArguments(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string') {
+      const v = value.trim();
+      if (EMPTY_WORDS.has(v.toLowerCase()) || PLACEHOLDER.test(v)) continue;
+      if (/^[\[{]/.test(v) && /[\]}]$/.test(v)) {
+        const parsed = parseLoose(v);
+        if (parsed !== undefined && parsed !== null) { out[key] = parsed; continue; }
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function parseLoose(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch { /* try the Python spelling below */ }
+  try {
+    return JSON.parse(
+      text
+        .replace(/'/g, '"')
+        .replace(/\bNone\b/g, 'null')
+        .replace(/\bTrue\b/g, 'true')
+        .replace(/\bFalse\b/g, 'false')
+    );
+  } catch {
+    return undefined;
   }
 }
 

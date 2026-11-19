@@ -110,15 +110,21 @@ export async function dispatchInbound(
           conversationId,
           text: text || '(the customer sent an attachment)',
         });
-        await reply(event, channel, conversationId, turn.reply);
-        return { handledBy: 'department', role: routed.role, actions: turn.actions };
+        const answeredBy = turn.answeredBy ?? routed.role;
+        // Stamped so the next message is routed knowing who the customer was
+        // talking to, and so the Inbox can show which department replied.
+        await reply(event, channel, conversationId, turn.reply, { department: answeredBy });
+        return { handledBy: 'department', role: answeredBy, actions: turn.actions };
       } catch (e) {
         // A department that cannot answer must not swallow the customer's message silently
         console.error(
           `[dispatch] ${routed.role} could not answer:`,
           e instanceof Error ? e.message : e
         );
-        await reply(event, channel, conversationId, "Sorry, I am having trouble connecting right now.");
+        await reply(
+          event, channel, conversationId,
+          "Sorry, something went wrong on our side just now. Your message has reached us and someone will get back to you shortly."
+        );
         return { handledBy: 'none', reason: 'department_failed' };
       }
     }

@@ -26,6 +26,10 @@ import {
   getBusinessSettings, listChannels, listConversations, readConversation,
   listPaymentClaims, getAgentSettings, updateAgentSettings,
 } from './dashboard.js';
+import {
+  getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
+  leadPipeline, reviewAgentQuality,
+} from './growth.js';
 
 /**
  * The tool catalogue.
@@ -52,6 +56,8 @@ const ALL: Tool[] = [
   saveCustomerDetails, businessMetrics, attentionNeeded,
   getBusinessSettings, listChannels, listConversations, readConversation,
   listPaymentClaims, getAgentSettings, updateAgentSettings,
+  getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
+  leadPipeline, reviewAgentQuality,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));

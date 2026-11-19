@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { requireAuth, requireAdmin, isSuperAdmin, handler } from '../auth.js';
 import { serviceClient } from '../supabase.js';
+import { saveLesson } from '../ai/learning.js';
+import { ALL_ROLES, type AgentRole } from '../ai/roles.js';
 
 export const adminRouter = Router();
 
@@ -256,7 +258,7 @@ adminRouter.post(
     // Validate that the turn event exists and caller has authority over its tenant
     const { data: event, error: eventErr } = await serviceClient
       .from('audit_events')
-      .select('id, tenant_id')
+      .select('id, tenant_id, agent_role')
       .eq('id', turnId)
       .eq('action', 'agent.turn')
       .maybeSingle();
@@ -303,7 +305,24 @@ adminRouter.post(
       return res.status(500).json({ error: 'Failed to save label' });
     }
 
-    return res.json({ ok: true, label: savedLabel });
+    // A review that says what was wrong is a lesson for that department: the
+    // reviewer's note is fed back so the same mistake is not repeated. Only
+    // notes on turns marked as wrong, and only when there is something to learn.
+    let lessonSaved = false;
+    const note = typeof notes === 'string' ? notes.trim() : '';
+    if (label !== 'ok' && note.length >= 12) {
+      const role = ALL_ROLES.includes((event as any).agent_role) ? ((event as any).agent_role as AgentRole) : null;
+      const result = await saveLesson({
+        tenantId: event.tenant_id,
+        role,
+        lesson: note,
+        source: 'qa_label',
+        createdBy: ctx.userId,
+      }).catch(() => null);
+      lessonSaved = Boolean(result && result.saved);
+    }
+
+    return res.json({ ok: true, label: savedLabel, lesson_saved: lessonSaved });
   })
 );
 

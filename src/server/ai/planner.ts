@@ -39,6 +39,7 @@ const NEVER_PLANNED = new Set([
   'update_order_status', 'update_ticket',
   'configure_agent', 'activate_agent', 'update_agent_settings',
   'delegate_to_agent',
+  'teach_team', 'forget_lesson', 'hand_to_department',
 ]);
 
 /**

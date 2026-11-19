@@ -1,3 +1,4 @@
+import { isRealQuestion } from '../learning.js';
 import { serviceClient } from '../../supabase.js';
 import { ToolInputError, str, num, bool, oneOf, likeLiteral, type Tool } from './types.js';
 
@@ -177,7 +178,7 @@ export const saveService: Tool = {
         name,
         updated_at: new Date().toISOString(),
       };
-      if ('description' in args) patch.description = str(args, 'description', { max: 2000 }) || null;
+      if ('description' in args) patch.description = str(args, 'description', { max: 2000 });
       if (price !== null) patch.price_amount = price;
       if ('price_note' in args) patch.price_note = str(args, 'price_note', { max: 200 }) || null;
       if (duration !== null) patch.duration_minutes = Math.round(duration);
@@ -199,7 +200,9 @@ export const saveService: Tool = {
       const row = {
         tenant_id: ctx.tenantId,
         name,
-        description: str(args, 'description', { max: 2000 }) || null,
+        // The column is NOT NULL: a service saved without a description gets an
+        // empty one, not a failed save.
+        description: str(args, 'description', { max: 2000 }),
         price_amount: price,
         price_note: str(args, 'price_note', { max: 200 }) || null,
         duration_minutes: duration === null ? null : Math.round(duration),
@@ -467,7 +470,7 @@ export const saveBusinessFact: Tool = {
 export const recordKnowledgeGap: Tool = {
   name: 'record_knowledge_gap',
   description:
-    'Record a question you could not answer from business knowledge. Use this instead of guessing. Asking the same question twice increases its count, so the owner sees what customers keep asking about.',
+    "Record a question about the business that a customer asked and you could not answer from what you looked up - a price, a policy, a service, a location. Use this instead of guessing. Only for the customer's own question, in their words: never for something you yourself are missing (a name, an id, a date) and never for a greeting or a one-word message.",
   parameters: {
     type: 'object',
     properties: {
@@ -480,6 +483,15 @@ export const recordKnowledgeGap: Tool = {
 
   async run(args, ctx) {
     const question = str(args, 'question', { required: true, max: 300 });
+
+    // Noise in this list is what makes an owner stop reading it. A fragment or
+    // the agent's own confusion is acknowledged and dropped.
+    if (!isRealQuestion(question)) {
+      return {
+        recorded: false,
+        note: 'That is not a customer question about the business, so it was not recorded. Ask the customer for what you need, or help with what you have.',
+      };
+    }
 
     const { data: existing } = await serviceClient
       .from('knowledge_gaps')
@@ -498,9 +510,16 @@ export const recordKnowledgeGap: Tool = {
       return { recorded: true, times_seen: existing.times_seen + 1 };
     }
 
-    const { error } = await serviceClient
+    // Remembering which conversation asked is what lets a staff reply there
+    // teach the answer later. The column arrives with migration 0020; without
+    // it the question is still recorded.
+    const row: Record<string, unknown> = { tenant_id: ctx.tenantId, question, status: 'open' };
+    let { error } = await serviceClient
       .from('knowledge_gaps')
-      .insert({ tenant_id: ctx.tenantId, question, status: 'open' });
+      .insert(ctx.conversationId ? { ...row, conversation_id: ctx.conversationId } : row);
+    if (error && ctx.conversationId && (error.code === 'PGRST204' || error.code === '42703')) {
+      ({ error } = await serviceClient.from('knowledge_gaps').insert(row));
+    }
     if (error) throw new Error(error.message);
     return { recorded: true, times_seen: 1 };
   },

@@ -94,6 +94,13 @@ const CAPABILITY_LABELS: Record<string, string> = {
   activate_agent: 'Switch a department on or off',
   delegate_to_agent: 'Hand a job to a department',
   setup_status: 'Check what setup still needs',
+  get_customer_history: "Look up a customer's bookings, orders and tickets",
+  hand_to_department: 'Pass a customer to the right department',
+  teach_team: 'Teach the team a correction',
+  list_lessons: 'See what the team has been taught',
+  forget_lesson: 'Retire a lesson',
+  lead_pipeline: 'Read the sales pipeline and who to chase',
+  review_agent_quality: 'Review how the team is performing',
 };
 
 export function Agents() {

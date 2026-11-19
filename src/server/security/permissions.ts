@@ -73,6 +73,8 @@ const TOOL_PERMISSIONS: Record<string, Permission> = {
   update_order_status: 'orders:write',
   message_customer: 'conversations:write',
   set_conversation_handling: 'conversations:write',
+  teach_team: 'agents:configure',
+  forget_lesson: 'agents:configure',
 };
 
 export function canUserRunTool(role: Role, toolName: string): boolean {

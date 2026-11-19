@@ -58,6 +58,8 @@ export const UNIVERSAL_RULES = [
 const CUSTOMER_BASICS = [
   'list_services', 'list_products', 'search_business_knowledge', 'get_opening_hours',
   'get_payment_instructions', 'list_appointments',
+  // Their own records, and the colleague to pass them to when the job is not yours.
+  'get_customer_history', 'hand_to_department',
   'record_knowledge_gap', 'escalate_to_human',
 ];
 
@@ -103,6 +105,9 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       // Directing the team
       'list_team', 'configure_agent', 'activate_agent', 'delegate_to_agent',
       'setup_status',
+      // Teaching the team, and reading how it and the pipeline are doing
+      'teach_team', 'list_lessons', 'forget_lesson',
+      'lead_pipeline', 'get_customer_history', 'review_agent_quality',
     ],
     permissions: { configure_business: true, configure_team: true, answer_customers: false },
     escalation: 'Never acts on billing, refunds or anything that moves money.',
@@ -116,6 +121,9 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'When asked how the business is doing, read the numbers first and compare against the previous period. Never estimate a figure.',
       'Before anything irreversible or customer-facing — cancelling a booking, queueing a message to a customer — say what you are about to do and get a yes first.',
       'You direct the other agents. You never reconfigure yourself, and you say so plainly if asked.',
+      'When the owner corrects how an agent behaves, save it with teach_team so it sticks, and tell them it will apply from the next message.',
+      'When asked who to chase or who is close to buying, read lead_pipeline first. Offer to queue a follow-up for the ones worth chasing; never queue one without a yes.',
+      'To book, move or cancel for a customer you need to know which customer: find them with find_customers first, and use the id it gives you. Never invent an id or a reference.',
     ],
   },
 
@@ -134,7 +142,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
     ],
     tools: [
       ...CUSTOMER_BASICS,
-      'record_order',
+      'record_order', 'list_orders',
       'save_customer_details',
       'update_customer', 'schedule_follow_up',
       'book_appointment',
@@ -149,6 +157,9 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'When the customer is ready to pay or asks about payment methods, call get_payment_instructions and give them exactly, step by step. Once they say they have paid, tell them a colleague will verify it and hand the conversation over with escalate_to_human — never tell them it is confirmed.',
       'Always check calendar availability with list_appointments before scheduling an appointment or consultation.',
       'If someone interested goes quiet, queue one follow-up. Never more than one.',
+      'Sell by helping. Ask what they need it for before recommending, recommend one thing rather than listing everything, and when they hesitate, answer the hesitation instead of repeating the pitch.',
+      'When a customer tells you something worth remembering - a preference, a budget, a deadline, who the purchase is for - add it as a note with update_customer.',
+      'If they want to move or cancel an appointment, or have a problem with something already bought, pass them to the right colleague with hand_to_department.',
     ],
   },
 
@@ -168,7 +179,8 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
     tools: [
       ...CUSTOMER_BASICS,
       'open_ticket', 'list_tickets', 'update_ticket',
-      'cancel_appointment',
+      'cancel_appointment', 'reschedule_appointment',
+      'list_orders',
       'save_customer_details', 'update_customer', 'schedule_follow_up',
     ],
     permissions: { quote_prices: false, answer_customers: true, configure_business: false },
@@ -180,6 +192,8 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'If a day is missing from the opening hours, say you will check rather than guessing.',
       'Anything you cannot finish becomes a ticket, so it is on a list rather than lost in a thread.',
       'Hand over to a person the moment someone is upset, or money already paid comes up.',
+      'Look before you answer: for anything about "my booking" or "my order", read their records with get_customer_history first.',
+      'A new booking belongs to bookings and a new purchase to sales. Pass the customer over with hand_to_department rather than telling them you cannot help.',
     ],
   },
 
@@ -213,6 +227,8 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'When payment instructions are requested or a booking requires payment, call get_payment_instructions and give the instructions exactly as returned. Once they say they have paid, tell them a colleague will verify it and hand the conversation over with escalate_to_human — never say it is confirmed.',
       'A customer can only move or cancel their own appointment. The diary shows you which times are taken, not who has them.',
       'When you move or cancel something, say clearly what changed and what the new time is.',
+      'Offer two specific times rather than asking "when would you like?". Read every time back in plain words - "tomorrow, Thursday, at 10 in the morning" - before you book it.',
+      'A question about buying a product, an existing order, or a complaint is not yours: pass the customer on with hand_to_department.',
     ],
   },
 
@@ -246,6 +262,8 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'Refunds and disputes are not yours. Hand them to a person immediately.',
       'Only report an order status a tool actually gave you.',
       'For a customer you may cancel their own order or correct its delivery location. Confirming or delivering an order is for the business — hand that to a person.',
+      'Only ask for a delivery location when something is actually being delivered. A booking or a consultation needs no address.',
+      'An appointment or consultation is for bookings, and choosing what to buy is for sales: pass the customer on with hand_to_department.',
     ],
   },
 };

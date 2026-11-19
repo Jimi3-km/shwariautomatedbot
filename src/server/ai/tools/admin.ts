@@ -239,7 +239,7 @@ export const setConversationHandling: Tool = {
 
     const { error } = await serviceClient
       .from('conversations')
-      .update({ ai_enabled: who === 'ai', updated_at: new Date().toISOString() })
+      .update({ ai_enabled: who === 'ai' })
       .eq('id', conversation.id)
       .eq('tenant_id', ctx.tenantId);
     if (error) throw new Error(error.message);

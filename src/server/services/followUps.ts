@@ -1,6 +1,8 @@
 import { serviceClient } from '../supabase.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 import { retryInterruptedEvents } from './pipeline.js';
+import { planNurture } from './nurture.js';
+import { learnFromStaffReplies } from '../ai/learning.js';
 
 /**
  * Sending the follow-ups that have come due.
@@ -278,8 +280,18 @@ export async function housekeeping(): Promise<void> {
     console.warn('[housekeeping] event retry failed:', e instanceof Error ? e.message : e);
   }
   try {
+    await planNurture({ limit: 2, budgetMs: 8_000 });
+  } catch (e) {
+    console.warn('[housekeeping] nurture planning failed:', e instanceof Error ? e.message : e);
+  }
+  try {
     await dispatchDueFollowUps({ limit: 5, budgetMs: 10_000 });
   } catch (e) {
     console.warn('[housekeeping] follow-up dispatch failed:', e instanceof Error ? e.message : e);
+  }
+  try {
+    await learnFromStaffReplies({ limit: 1, budgetMs: 6_000 });
+  } catch (e) {
+    console.warn('[housekeeping] learning pass failed:', e instanceof Error ? e.message : e);
   }
 }

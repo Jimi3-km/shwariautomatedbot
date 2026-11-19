@@ -725,7 +725,9 @@ export const escalateToHuman: Tool = {
     // replying over the top of a colleague.
     const { data: conversation, error } = await serviceClient
       .from('conversations')
-      .update({ ai_enabled: false, updated_at: new Date().toISOString() })
+      // conversations has no updated_at column; sending one made every
+      // handover fail in production.
+      .update({ ai_enabled: false })
       .eq('tenant_id', ctx.tenantId)
       .eq('id', ctx.conversationId)
       .select('id, customer_name')

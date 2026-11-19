@@ -5,6 +5,8 @@ import { serviceClient } from '../supabase.js';
 import { handler } from '../auth.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 import { dispatchDueFollowUps } from '../services/followUps.js';
+import { planNurture } from '../services/nurture.js';
+import { learnFromStaffReplies } from '../ai/learning.js';
 import { retryInterruptedEvents } from '../services/pipeline.js';
 import { refreshInstagramTokens, pruneWebhookEvents } from '../services/maintenance.js';
 
@@ -204,11 +206,17 @@ internalRouter.get(
       console.error('[internal] event retry failed:', e instanceof Error ? e.message : e);
       return null;
     });
-    const followUps = await dispatchDueFollowUps({ limit: 25, budgetMs: 35_000 }).catch((e) => {
+    // Queue check-ins for interested customers who went quiet, before the
+    // sender below runs, so they go out in this same pass.
+    const nurture = await planNurture({ limit: 10, budgetMs: 12_000 }).catch((e) => {
+      console.error('[internal] nurture planning failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    const followUps = await dispatchDueFollowUps({ limit: 25, budgetMs: 22_000 }).catch((e) => {
       console.error('[internal] follow-up dispatch failed:', e instanceof Error ? e.message : e);
       return null;
     });
-    res.json({ ok: true, events, follow_ups: followUps });
+    res.json({ ok: true, events, nurture, follow_ups: followUps });
   })
 );
 
@@ -222,6 +230,11 @@ internalRouter.get(
       return null;
     });
     const prune = await pruneWebhookEvents().catch(() => ({ pruned: false }));
-    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune });
+    // Turn what staff told customers into knowledge the agents can use.
+    const learning = await learnFromStaffReplies({ limit: 10, budgetMs: 25_000 }).catch((e) => {
+      console.error('[internal] learning pass failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning });
   })
 );

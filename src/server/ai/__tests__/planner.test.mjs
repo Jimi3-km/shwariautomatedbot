@@ -47,8 +47,9 @@ for (const role of ALL_ROLES) {
     );
 
     assert.ok(prompt.includes(`Test ${role}`), 'must include agent name');
-    assert.ok(prompt.includes('Target Audience:'), 'must specify target audience');
-    assert.ok(prompt.includes('Strict Zero-Hallucination Policy'), 'must enforce zero-hallucination');
+    assert.ok(prompt.includes('HOW YOU SOUND') && prompt.includes('HOW YOU WORK'), 'must brief the agent on voice and method');
+    assert.ok(prompt.includes('Not your job:'), 'must say what belongs to someone else');
+    assert.ok(/zero-hallucination/i.test(prompt), 'must enforce zero-hallucination');
     assert.ok(prompt.includes('Special owner rule'), 'must include owner instructions');
     if (role === 'manager') {
       assert.ok(!prompt.includes('Customer: Jane Doe'), 'manager must not see customer block');
