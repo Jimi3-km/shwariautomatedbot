@@ -101,6 +101,10 @@ const CAPABILITY_LABELS: Record<string, string> = {
   forget_lesson: 'Retire a lesson',
   lead_pipeline: 'Read the sales pipeline and who to chase',
   review_agent_quality: 'Review how the team is performing',
+  save_products: 'Add or change several products',
+  save_services: 'Add or change several services',
+  remove_products: 'Delete products',
+  remove_services: 'Stop offering several services',
 };
 
 export function Agents() {

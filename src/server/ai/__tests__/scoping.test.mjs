@@ -218,6 +218,7 @@ await t('customer_email cannot redirect a receipt on a customer turn', async () 
   reset({
     'POST orders': [{ id: 'o1', order_ref: 'ORD-1', total: 10, currency: 'KES', status: 'pending' }],
     'GET leads': [],
+    'GET products': [{ name: 'Tea', price: 10, in_stock: true }],
   });
   const out = await call('record_order', { items: [{ name: 'Tea' }], customer_email: 'victim@example.com' }, customerCtx('sales'));
   assert.equal(out.ok, true);
@@ -247,7 +248,11 @@ await t('a time without an offset is booked in the business timezone', async () 
 console.log('\n--- runTool rails ---');
 
 await t('the same write twice in one turn happens once', async () => {
-  reset({ 'POST orders': [{ id: 'o1', order_ref: 'ORD-1', total: 10, currency: 'KES', status: 'pending' }], 'GET leads': [] });
+  reset({
+    'POST orders': [{ id: 'o1', order_ref: 'ORD-1', total: 10, currency: 'KES', status: 'pending' }],
+    'GET leads': [],
+    'GET products': [{ name: 'Tea', price: 10, in_stock: true }],
+  });
   const ctx = customerCtx('sales');
   const first = await call('record_order', { items: [{ name: 'Tea', qty: 1 }] }, ctx);
   const second = await call('record_order', { items: [{ name: 'Tea', qty: 1 }] }, ctx);

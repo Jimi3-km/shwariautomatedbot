@@ -1,3 +1,4 @@
+import { mirrorHoursToSettings } from '../hours.js';
 import { isRealQuestion } from '../learning.js';
 import { serviceClient } from '../../supabase.js';
 import { ToolInputError, str, num, bool, oneOf, likeLiteral, type Tool } from './types.js';
@@ -343,7 +344,15 @@ export const setOpeningHours: Tool = {
       .upsert(rows, { onConflict: 'tenant_id,day_of_week' });
     if (error) throw new Error(error.message);
 
-    return { set: rows.map((r) => DAYS[r.day_of_week]) };
+    // The Settings page shows its own copy of the hours. Without this the
+    // agents had the new hours and the owner, looking at Settings, saw none.
+    const shown = await mirrorHoursToSettings(ctx.tenantId).catch(() => false);
+
+    return {
+      set: rows.map((r) => DAYS[r.day_of_week]),
+      shown_on_settings_page: shown,
+      ...(shown ? {} : { note: 'The hours are saved for the agents but the Settings page could not be updated. Tell the owner.' }),
+    };
   },
 };
 

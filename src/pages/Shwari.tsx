@@ -278,6 +278,20 @@ const ACTION_LABELS: Record<string, string> = {
   schedule_follow_up: 'Queued a follow-up message',
   cancel_follow_up: 'Cancelled a queued message',
   update_customer: 'Updated a customer',
+  save_products: 'Saved products',
+  save_services: 'Saved services',
+  remove_product: 'Took a product off sale',
+  remove_products: 'Deleted products',
+  remove_services: 'Stopped offering services',
+  update_business_settings: 'Updated your settings',
+  set_payment_instructions: 'Saved how customers pay',
+  update_agent_settings: 'Changed the AI Agent settings',
+  teach_team: 'Taught the team',
+  forget_lesson: 'Retired a lesson',
+  message_customer: 'Queued a message to a customer',
+  set_conversation_handling: 'Changed who handles a conversation',
+  update_order_status: 'Updated an order',
+  delegate_to_agent: 'Handed a job to a department',
 };
 
 function ActionList({ actions }: { actions: string[] }) {

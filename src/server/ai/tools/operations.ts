@@ -1,3 +1,4 @@
+import { findInCatalogue } from './bulk.js';
 import { serviceClient } from '../../supabase.js';
 import {
   ToolInputError, str, num, oneOf, likeLiteral, isCustomerTurn, customerScope, ownedBy,
@@ -506,8 +507,33 @@ export const recordOrder: Tool = {
       };
     });
 
-    const total = num(args, 'total');
+    let total = num(args, 'total');
     if (total !== null && total < 0) throw new ToolInputError('total cannot be negative.');
+
+    // An agent sells what is in the catalogue, at the catalogue's price - for
+    // a customer and for the owner alike. A name that matches nothing on sale
+    // is refused, and a price the model supplied is replaced by the real one.
+    const unknown: string[] = [];
+    let priced = true;
+    let sum = 0;
+    for (const item of items as Array<{ name: string; qty: number; price?: number }>) {
+      const found = await findInCatalogue(ctx.tenantId, item.name);
+      if (!found) { unknown.push(item.name); continue; }
+      item.name = found.name;
+      if (found.price !== null) item.price = found.price;
+      else if (isCustomerTurn(ctx)) delete item.price;
+      if (typeof item.price === 'number') sum += item.price * item.qty;
+      else priced = false;
+    }
+    if (unknown.length) {
+      throw new ToolInputError(
+        `Not on sale: ${unknown.map((n) => `"${n}"`).join(', ')}. Only items in the catalogue can be ordered. ` +
+        'Look up the products and services, use the exact name of what the customer wants, or tell them it is not offered.'
+      );
+    }
+    // The total is what the catalogue says, never what the model worked out.
+    if (isCustomerTurn(ctx)) total = priced ? sum : null;
+    else if (total === null && priced) total = sum;
 
     const customer = await resolveCustomer(args, ctx);
 

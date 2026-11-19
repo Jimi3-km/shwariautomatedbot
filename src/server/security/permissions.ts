@@ -74,6 +74,10 @@ const TOOL_PERMISSIONS: Record<string, Permission> = {
   message_customer: 'conversations:write',
   set_conversation_handling: 'conversations:write',
   teach_team: 'agents:configure',
+  save_products: 'catalog:write',
+  save_services: 'catalog:write',
+  remove_products: 'catalog:delete',
+  remove_services: 'catalog:delete',
   forget_lesson: 'agents:configure',
 };
 

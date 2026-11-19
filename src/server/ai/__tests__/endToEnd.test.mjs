@@ -323,6 +323,7 @@ await t('the sales agent records an order, always unpaid', async () => {
     }],
   });
   rows['POST orders'] = [{ id: 'o1', order_ref: 'ORD-X' }];
+  rows['GET products'] = [{ name: 'Toothbrush', price: 450, in_stock: true }];
   script = [
     toolCall('record_order', { items: [{ name: 'Toothbrush', qty: 2, price: 450 }], total: 900 }),
     says("That's noted — someone will confirm payment shortly."),

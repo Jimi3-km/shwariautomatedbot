@@ -453,5 +453,215 @@ await t('Instagram and WhatsApp are nudged inside the 24-hour window or not at a
   assert.equal(decideNurture(quiet([first]), { delayHours: 24, channelType: 'whatsapp', now: T0 + 100 * 3_600_000 }).nurture, false);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- never saying done when it is not ---');
+
+const { extractTextToolCalls, looksLikeTextToolCall, complete } = await import('../llm.js');
+const { rowsToSettings, settingsToRows } = await import('../hours.js');
+const { autoLabel } = await import('../../security/eval.js');
+const { runTool } = await import('../tools/index.js');
+
+const OWNER = { tenantId: 't1', role: 'manager', userId: 'u1', conversationId: null, history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello.' }] };
+const ownerRows = () => ({ ...baseRows('manager'), 'GET tenant_users': [{ role: 'owner' }] });
+
+await t('a tool call written out as text is read as a call, never shown', () => {
+  const text = '<tool_call>\n<function=save_service>\n<parameter=name>\nWig Coloring & Toning\n</parameter>\n<parameter=price>\n5000\n</parameter>\n<parameter=active>\ntrue\n</parameter>\n</function>\n</tool_call>';
+  assert.ok(looksLikeTextToolCall(text));
+  const { calls, rest } = extractTextToolCalls(text);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'save_service');
+  assert.deepEqual(JSON.parse(calls[0].argumentsJson), { name: 'Wig Coloring & Toning', price: 5000, active: true });
+  assert.equal(rest, '');
+  const jsonForm = extractTextToolCalls('Sure. <tool_call>{"name":"list_products","arguments":{}}</tool_call>');
+  assert.equal(jsonForm.calls[0].name, 'list_products');
+  assert.equal(jsonForm.rest, 'Sure.');
+});
+
+await t('the completion layer turns that text into a real tool call', async () => {
+  reset();
+  script = [says('<tool_call>\n<function=remove_product>\n<parameter=name>\nMac Mini\n</parameter>\n</function>\n</tool_call>')];
+  const out = await complete({
+    messages: [{ role: 'user', content: 'delete it' }],
+    tools: [{ name: 'remove_product', description: 'x', parameters: { type: 'object', properties: {} } }],
+  });
+  assert.equal(out.toolCalls.length, 1);
+  assert.equal(out.toolCalls[0].name, 'remove_product');
+  assert.equal(out.text, null);
+});
+
+await t('asked to delete, did nothing: the reply is held and the agent made to act', async () => {
+  reset();
+  rows = ownerRows();
+  rows['GET products'] = [{ id: 'p1', name: 'iPhone 17 Pro Max' }];
+  rows['DELETE products'] = [{ id: 'p1', name: 'iPhone 17 Pro Max' }];
+  script = [
+    says("Those products don't exist in the current catalog."),
+    toolCall('remove_products', { names: ['iPhone 17 Pro Max'] }),
+    says('Deleted iPhone 17 Pro Max. Nothing else was removed.'),
+  ];
+  const out = await runAgentTurn({ ...OWNER, text: 'delete iPhone 17 Pro Max' });
+  assert.match(out.reply, /Deleted iPhone 17 Pro Max/);
+  assert.ok(db.some((r) => r.table === 'products' && r.method === 'DELETE'), 'the product was not deleted');
+  assert.ok(out.actions.includes('remove_products'));
+});
+
+await t('a claim about the catalogue with nothing read is not sent', async () => {
+  reset();
+  rows = ownerRows();
+  script = [
+    says('The store is now fully rebuilt with 10 services and 10 products.'),
+    says('Everything is in place: 10 services and 10 products.'),
+  ];
+  const out = await runAgentTurn({ ...OWNER, text: 'ok thanks, looks good?' });
+  assert.ok(!/10 (services|products)/.test(out.reply), out.reply);
+  assert.match(out.reply, /haven't been able to confirm/);
+});
+
+await t('a whole catalogue is saved in one step and the result carries the real counts', async () => {
+  reset();
+  rows = ownerRows();
+  rows['POST products'] = [{ id: 'p', name: 'x', price: 1, currency: 'KES', in_stock: true }];
+  const ctx = { tenantId: 't1', userId: 'u1', agentRole: 'manager', conversationId: null, allowedTools: AGENT_BLUEPRINTS.manager.tools, userRole: 'owner', turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'save_products', JSON.stringify({ products: [
+    { name: 'Wig A', price: 100 }, { name: 'Wig B', price: 200 }, { price: 5 },
+  ] }), ctx);
+  assert.equal(out.ok, true);
+  assert.equal(out.payload.saved_count, 2);
+  assert.equal(out.payload.failed_count, 1);
+  assert.equal(db.filter((r) => r.table === 'products' && r.method === 'POST').length, 2);
+});
+
+await t('the manager gets enough steps for setup work and is told when they run out', async () => {
+  reset();
+  rows = ownerRows();
+  rows['GET services'] = [];
+  script = [
+    ...Array.from({ length: 12 }, () => toolCall('list_services', {})),
+    says('I checked the services 12 times; nothing has been changed yet. Shall I carry on?'),
+  ];
+  const out = await runAgentTurn({ ...OWNER, text: 'list the services' });
+  assert.match(out.reply, /carry on/);
+  const lastRequest = requests[requests.length - 1];
+  assert.ok(!lastRequest.tools, 'tools are withheld on the final step');
+  assert.match(lastRequest.messages[lastRequest.messages.length - 1].content, /no more steps/);
+});
+
+await t('opening hours saved by chat appear on the Settings page, and the other way round', async () => {
+  const settings = rowsToSettings([
+    { day_of_week: 1, closed: false, opens: '08:00:00', closes: '17:00:00' },
+    { day_of_week: 0, closed: true, opens: null, closes: null },
+  ]);
+  assert.deepEqual(settings, { Monday: '08:00 - 17:00', Sunday: 'Closed' });
+
+  const back = settingsToRows({ 'Monday\u2013Saturday': '9am-6pm ', Sunday: 'Closed', note: 'by appointment' });
+  assert.equal(back.length, 7);
+  assert.deepEqual(back.find((r) => r.day_of_week === 3), { day_of_week: 3, closed: false, opens: '09:00', closes: '18:00' });
+  assert.equal(back.find((r) => r.day_of_week === 0).closed, true);
+  assert.equal(settingsToRows({ Weekdays: '8-5' })[0].closes, '17:00');
+
+  reset();
+  rows = ownerRows();
+  rows['GET business_hours'] = [{ day_of_week: 1, closed: false, opens: '08:00:00', closes: '17:00:00', note: null }];
+  const ctx = { tenantId: 't1', userId: 'u1', agentRole: 'manager', conversationId: null, allowedTools: AGENT_BLUEPRINTS.manager.tools, userRole: 'owner', turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'set_opening_hours', JSON.stringify({ days: [{ day: 'monday', opens: '08:00', closes: '17:00' }] }), ctx);
+  assert.equal(out.payload.shown_on_settings_page, true);
+  const write = db.find((r) => r.table === 'tenants' && r.method === 'PATCH');
+  assert.deepEqual(write.body.business_hours, { Monday: '08:00 - 17:00' });
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- only what the business sells ---');
+
+await t('an order for something not in the catalogue is refused', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET products'] = [];
+  rows['GET services'] = [];
+  const ctx = { tenantId: 't1', userId: null, agentRole: 'sales', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.sales.tools, turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'record_order', JSON.stringify({ items: [{ name: 'PlayStation 5', price: 1 }] }), ctx);
+  assert.equal(out.ok, false);
+  assert.match(out.payload.error, /Not on sale/);
+  assert.equal(db.filter((r) => r.table === 'orders' && r.method === 'POST').length, 0);
+});
+
+await t('the price on an order is the catalogue price, not the one the model sent', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET products'] = [{ name: 'Brazilian Wig', price: 28000, in_stock: true }];
+  rows['POST orders'] = [{ id: 'o1', order_ref: 'ORD-1', total: 56000, currency: 'KES', status: 'pending' }];
+  const ctx = { tenantId: 't1', userId: null, agentRole: 'sales', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.sales.tools, turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'record_order', JSON.stringify({ items: [{ name: 'brazilian wig', qty: 2, price: 5 }], total: 10 }), ctx);
+  assert.equal(out.ok, true);
+  const order = db.find((r) => r.table === 'orders' && r.method === 'POST').body;
+  assert.equal(order.total, 56000);
+  assert.equal(order.items[0].price, 28000);
+  assert.equal(order.items[0].name, 'Brazilian Wig');
+});
+
+await t('every agent is shown the catalogue as the boundary of what it may offer', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET services'] = [{ name: 'Wig Installation' }];
+  rows['GET products'] = [{ name: 'Brazilian Wig' }];
+  script = [says('Karibu! How can I help?')];
+  await runAgentTurn({ tenantId: 't1', role: 'sales', userId: null, conversationId: 'c1', text: 'hi' });
+  const p = systemOf(0);
+  assert.match(p, /the ONLY things this business offers/);
+  assert.ok(p.includes('Wig Installation') && p.includes('Brazilian Wig'));
+  assert.match(p, /only offer, quote, book and sell what is in this business's catalogue/);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- a returning customer starts fresh ---');
+
+await t('a months-old conversation is not replayed, and the greeting is not sent twice', async () => {
+  reset();
+  rows = baseRows('booking');
+  const old = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  rows['GET conversation_messages'] = [
+    { sender: 'customer', body: 'hello', created_at: new Date().toISOString() },
+    { sender: 'agent', body: 'I have booked a consultation for you on Friday at 4pm.', created_at: old },
+    { sender: 'customer', body: 'yes book me friday 4pm', created_at: old },
+  ];
+  script = [says('Hi Jane! How can I help today?')];
+  const out = await runAgentTurn({ tenantId: 't1', role: 'booking', userId: null, conversationId: 'c1', text: 'hello' });
+  assert.equal(out.reply, 'Hi Jane! How can I help today?');
+  const sent = requests[0].messages;
+  assert.ok(!sent.some((m) => /Friday at 4pm/.test(String(m.content)) && m.role !== 'system'), 'the old exchange must not be replayed');
+  assert.equal(sent.filter((m) => m.role === 'user' && m.content === 'hello').length, 1, 'the message is sent once');
+});
+
+await t('"the appointment has been booked" with no booking made is caught', () => {
+  assert.ok(check('The appointment has been booked for Friday at 4pm with the Calendar Management Agent.').issues.includes('unbacked_action'));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- QA labels ---');
+
+await t('every turn gets a verdict before a person looks at it', () => {
+  assert.equal(autoLabel('success').label, 'ok');
+  assert.equal(autoLabel('error', [], 'HTTP 410').label, 'bug');
+  assert.equal(autoLabel('fallback').label, 'needs_improvement');
+  assert.equal(autoLabel('fallback', ['held_back', 'unbacked_action']).label, 'needs_improvement');
+  assert.equal(autoLabel('success', ['ran_out_of_steps']).label, 'needs_improvement');
+  const fixed = autoLabel('success', ['self_corrected', 'no_work_done']);
+  assert.equal(fixed.label, 'ok');
+  assert.ok(fixed.tags.includes('auto') && fixed.tags.includes('self_corrected'));
+});
+
+await t('the verdict is written alongside the turn', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['POST audit_events'] = [{ id: 4242 }];
+  script = [says('Hi! How can I help?')];
+  await runAgentTurn({ tenantId: 't1', role: 'sales', userId: null, conversationId: 'c1', text: 'hi' });
+  await new Promise((r) => setTimeout(r, 50));
+  const label = db.find((r) => r.table === 'agent_turn_labels' && r.method === 'POST');
+  assert.ok(label, 'no label was written');
+  assert.equal(label.body.turn_event_id, 4242);
+  assert.equal(label.body.label, 'ok');
+  assert.deepEqual(label.body.tags, ['auto']);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

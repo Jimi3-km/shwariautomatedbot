@@ -1,3 +1,4 @@
+import { syncHoursFromSettings } from '../ai/hours.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
 
@@ -304,6 +305,13 @@ catalogRouter.put(
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(403).json({ error: 'Not permitted to update this business' });
+
+    // Hours edited on the Settings page are the hours the agents must use.
+    if (req.body?.business_hours !== undefined) {
+      await syncHoursFromSettings(ctx.tenantId, req.body.business_hours).catch((e) => {
+        console.warn('[catalog] could not sync opening hours:', e instanceof Error ? e.message : e);
+      });
+    }
     res.json(data);
   })
 );

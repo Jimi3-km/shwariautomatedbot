@@ -29,6 +29,13 @@ import { loadLessons } from './learning.js';
  */
 
 const MAX_TOOL_ROUNDS = 5;
+/**
+ * The manager does setup work - a whole catalogue in one request - so it gets
+ * more steps. The turn deadline still bounds how long that can take.
+ */
+const MANAGER_TOOL_ROUNDS = 12;
+/** Messages older than this gap belong to an earlier conversation, not this one. */
+const SESSION_GAP_MS = 12 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 12;
 const MAX_HISTORY_LIMIT = 40;
 
@@ -227,7 +234,7 @@ interface Orientation {
 }
 
 async function orientation(tenantId: string, role: AgentRole): Promise<Orientation> {
-  const [{ data: tenant }, { count: services }, { data: team }, { data: gaps }] = await Promise.all([
+  const [{ data: tenant }, { count: services }, { data: team }, { data: gaps }, { data: serviceNames }, { data: productNames }] = await Promise.all([
     serviceClient.from('tenants')
       .select('business_name, business_category, business_description, timezone, currency, onboarding_completed_at')
       .eq('id', tenantId).single(),
@@ -237,6 +244,10 @@ async function orientation(tenantId: string, role: AgentRole): Promise<Orientati
     serviceClient.from('knowledge_gaps').select('question')
       .eq('tenant_id', tenantId).in('status', ['open', 'asked'])
       .order('times_seen', { ascending: false }).limit(3),
+    serviceClient.from('services').select('name')
+      .eq('tenant_id', tenantId).eq('active', true).order('name').limit(30),
+    serviceClient.from('products').select('name')
+      .eq('tenant_id', tenantId).eq('in_stock', true).order('name').limit(30),
   ]);
 
   const timezone = safeTimezone(tenant?.timezone);
@@ -248,6 +259,7 @@ async function orientation(tenantId: string, role: AgentRole): Promise<Orientati
     // The model has no clock. Without this line "tomorrow" is a guess.
     `Right now it is ${describeNow(timezone)}. Work out "today", "tomorrow" and weekdays from this, and write every date-time you pass to a tool as local time in this timezone (e.g. 2026-09-04T14:30).`,
     `Services recorded: ${services ?? 0}`,
+    ...catalogueLines(serviceNames, productNames),
     `AI team: ${(team ?? []).filter((a) => a.role !== 'manager').map((a) => `${a.role} (${a.status})`).join(', ') || 'none yet'}`,
   ];
   /**
@@ -290,6 +302,32 @@ async function orientation(tenantId: string, role: AgentRole): Promise<Orientati
   );
 
   return { text: lines.join('\n'), timezone };
+}
+
+/**
+ * What is on sale, by name.
+ *
+ * Names only: prices and details are still read with a tool at the moment they
+ * are needed, so they are never stale. The point of the list is the boundary -
+ * an agent that can see the whole catalogue has no room to offer something
+ * that is not in it.
+ */
+function catalogueLines(services: unknown, products: unknown): string[] {
+  const names = (rows: unknown) =>
+    (Array.isArray(rows) ? rows : [])
+      .map((r: any) => untrustedText(r?.name, 60))
+      .filter(Boolean);
+  const s = names(services);
+  const p = names(products);
+  if (!s.length && !p.length) {
+    return ['Catalogue: nothing is on sale yet. Do not offer, quote or book anything; say the details are being set up and take their question.'];
+  }
+  return [
+    'Catalogue - the ONLY things this business offers right now. Never offer, quote, book or sell anything that is not named here; if asked for something else, say it is not offered and point to the closest thing that is.',
+    `  Services: ${s.length ? s.join('; ') : 'none'}`,
+    `  Products: ${p.length ? p.join('; ') : 'none'}`,
+    '  Prices, durations, stock and details are NOT shown here: read them with your tools every time.',
+  ];
 }
 
 /**
@@ -450,9 +488,23 @@ async function history(tenantId: string, conversationId: string | null, limit: n
     .order('created_at', { ascending: false })
     .limit(limit);
 
-  return (data ?? [])
+  // Only the conversation that is happening now. A thread can be months old:
+  // someone who booked in August and says "hello" in November is starting
+  // again, and replaying the old exchange made the agent answer the greeting
+  // with "your appointment has been booked". Walking back from the newest
+  // message, everything before a long silence is left out.
+  const newestFirst = (data ?? []).filter((m) => typeof m.body === 'string' && m.body.trim());
+  const current: typeof newestFirst = [];
+  let after = Date.now();
+  for (const m of newestFirst) {
+    const at = Date.parse(m.created_at);
+    if (Number.isFinite(at) && after - at > SESSION_GAP_MS) break;
+    current.push(m);
+    if (Number.isFinite(at)) after = at;
+  }
+
+  return current
     .reverse()
-    .filter((m) => typeof m.body === 'string' && m.body.trim())
     .map((m): ChatMessage => {
       if (m.sender === 'customer') return { role: 'user', content: m.body };
       if (m.sender === 'staff') return { role: 'assistant', content: `[A colleague replied to the customer:] ${m.body}` };
@@ -521,6 +573,16 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     input.history ??
     (await history(input.tenantId, input.conversationId, settings?.memoryWindow ?? HISTORY_LIMIT));
 
+  // The message being answered is already in the transcript by the time the
+  // turn runs. Sending it twice makes the model think the customer repeated
+  // themselves.
+  if (!input.history) {
+    const last = priorTurns[priorTurns.length - 1];
+    if (last?.role === 'user' && typeof last.content === 'string' && last.content.trim() === input.text.trim()) {
+      priorTurns.pop();
+    }
+  }
+
   let channelType = input.channelType ?? (role === 'manager' && input.userId ? 'dashboard' : null);
   if (!channelType && input.conversationId) {
     const { data: conv } = await serviceClient
@@ -532,8 +594,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     channelType = conv?.channel_type ?? null;
   }
 
+  /** What the behaviour check did on this turn, for the QA page. */
+  const flags: string[] = [];
+
   const log = (replyText: string, toolsCalled: string[], modelProfile: string, status: 'success' | 'error' | 'fallback', errorMessage?: string) =>
     void logAgentTurn({
+      flags,
       tenantId: input.tenantId,
       role,
       conversationId: input.conversationId,
@@ -591,16 +657,33 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const okTools: string[] = [];
   const toolNames = [...TOOLS.keys()];
   let corrected = false;
+  let warnedOutOfSteps = false;
+  const maxRounds = role === 'manager' ? MANAGER_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
   const profile: ModelProfile = (role === 'booking' || role === 'orders') ? 'fast' : 'primary';
   const model = settings?.model ?? undefined;
 
-  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+  for (let round = 0; round <= maxRounds; round++) {
     // On the last round - or once time is nearly up - the tools are withheld,
     // which forces the model to answer with what it has rather than looping
     // until the request times out.
     const timeLeft = deadlineAt - Date.now();
-    const lastRound = round === MAX_TOOL_ROUNDS || (round > 0 && timeLeft < FINAL_ANSWER_RESERVE_MS);
+    const lastRound = round === maxRounds || (round > 0 && timeLeft < FINAL_ANSWER_RESERVE_MS);
     if (timeLeft < 1_500) break;
+
+    // Out of steps or time with work possibly unfinished. The model is told so
+    // in as many words: without this it either wrote its next tool call out as
+    // text, or announced the whole job as done.
+    if (lastRound && round > 0 && !warnedOutOfSteps) {
+      warnedOutOfSteps = true;
+      flags.push('ran_out_of_steps');
+      messages.push({
+        role: 'user',
+        content:
+          '[Internal note - not from the person you are talking to.] You have no more steps in this turn and cannot use tools now. ' +
+          'Write your reply: say exactly what the tool results above show was completed (use their counts), say plainly what is still left to do, and offer to carry on. ' +
+          'Do not say anything was done unless a result above shows it.',
+      });
+    }
 
     let result;
     try {
@@ -637,16 +720,25 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
 
       // The behaviour check: nothing goes out claiming work that was not done,
       // confirming a payment, or exposing how the system works.
-      const check = checkReply({ reply: draft, okTools, toolNames, customerFacing });
+      const check = checkReply({
+        reply: draft, okTools, toolNames, customerFacing,
+        // Only the manager is held to "you were asked to do something".
+        ...(role === 'manager' ? { request: input.text } : {}),
+      });
       if (!check.ok) {
         const canRetry = !corrected && !lastRound && deadlineAt - Date.now() > FINAL_ANSWER_RESERVE_MS;
         if (canRetry) {
           corrected = true;
+          flags.push('self_corrected', ...check.issues);
           messages.push({ role: 'assistant', content: draft });
           messages.push({ role: 'user', content: correctionMessage(check) });
           continue;
         }
-        if (check.issues.includes('unbacked_action') || check.issues.includes('confirms_payment') || check.issues.includes('raw_data')) {
+        const serious = ['unbacked_action', 'confirms_payment', 'raw_data', 'no_work_done', 'unverified_state'] as const;
+        // Out of steps is not a false claim: the progress report stands.
+        const outOfSteps = warnedOutOfSteps && !check.issues.some((i) => i === 'unbacked_action' || i === 'confirms_payment' || i === 'raw_data');
+        if (!outOfSteps && check.issues.some((i) => (serious as readonly string[]).includes(i))) {
+          flags.push('held_back', ...check.issues);
           const reply = honestHoldingReply(check.issues, customerFacing);
           log(reply, actions, profile, 'fallback', `held back: ${check.issues.join(', ')}`);
           return { reply, actions, answeredBy: role };

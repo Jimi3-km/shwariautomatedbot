@@ -300,6 +300,71 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   return text.trim() || null;
 }
 
+export function looksLikeTextToolCall(text: string): boolean {
+  return /<\/?tool_call>|<function=[\w-]+>|<\|tool_call\|>|<parameter=[\w-]+>/i.test(text);
+}
+
+function looseValue(raw: string): unknown {
+  const v = raw.trim();
+  if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
+  if (/^(true|false)$/i.test(v)) return v.toLowerCase() === 'true';
+  if (/^[\[{]/.test(v)) {
+    try { return JSON.parse(v); } catch { /* keep it as text */ }
+  }
+  return v;
+}
+
+/**
+ * Pull tool calls out of text, in the two spellings models use:
+ *
+ *   <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+ *   <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ *
+ * Returns the calls and whatever prose was left once the markup is removed.
+ */
+export function extractTextToolCalls(text: string): { calls: ToolCall[]; rest: string } {
+  const calls: ToolCall[] = [];
+  let n = 0;
+
+  const fn = /<function=([\w-]+)>([\s\S]*?)(?:<\/function>|$)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = fn.exec(text))) {
+    const args: Record<string, unknown> = {};
+    const param = /<parameter=([\w-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|$)/gi;
+    let p: RegExpExecArray | null;
+    while ((p = param.exec(m[2]))) args[p[1]] = looseValue(p[2]);
+    calls.push({ id: `text_call_${n++}`, name: m[1], argumentsJson: JSON.stringify(args) });
+  }
+
+  if (!calls.length) {
+    const block = /<tool_call>\s*(\{[\s\S]*?\})\s*(?:<\/tool_call>|$)/gi;
+    while ((m = block.exec(text))) {
+      try {
+        const parsed = JSON.parse(m[1]);
+        const name = parsed?.name ?? parsed?.function?.name;
+        const args = parsed?.arguments ?? parsed?.parameters ?? parsed?.function?.arguments ?? {};
+        if (typeof name === 'string' && name) {
+          calls.push({
+            id: `text_call_${n++}`,
+            name,
+            argumentsJson: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+          });
+        }
+      } catch { /* not a call we can read */ }
+    }
+  }
+
+  const rest = text
+    .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi, ' ')
+    .replace(/<function=[\w-]+>[\s\S]*?(?:<\/function>|$)/gi, ' ')
+    .replace(/<\/?(?:tool_call|function|parameter)[^>]*>/gi, ' ')
+    .replace(/<\|tool_call\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  return { calls, rest };
+}
+
 async function executeCompletion(opts: CompleteOptions, model: string): Promise<Completion> {
   const apiKey = process.env.SHWARI_API_KEY?.trim();
   if (!apiKey) throw new LlmNotConfiguredError();
@@ -389,9 +454,24 @@ async function executeCompletion(opts: CompleteOptions, model: string): Promise<
    * owner should ever read, so it is dropped here rather than downstream —
    * there is no path by which it can reach a reply.
    */
-  const rawText = typeof message.content === 'string' && message.content.trim()
+  let rawText = typeof message.content === 'string' && message.content.trim()
     ? message.content.trim()
     : null;
+
+  /**
+   * Some models write a tool call into the reply as text instead of returning
+   * it as a call. Left alone, that markup is what the owner reads: a block of
+   * <tool_call> tags where an answer should be, and nothing done. It is read
+   * here as the call it was meant to be, and never survives as text.
+   */
+  if (rawText && looksLikeTextToolCall(rawText)) {
+    const extracted = extractTextToolCalls(rawText);
+    if (!toolCalls.length && opts.tools?.length) {
+      const known = new Set(opts.tools.map((t) => t.name));
+      toolCalls.push(...extracted.calls.filter((c) => known.has(c.name)));
+    }
+    rawText = extracted.rest || null;
+  }
   const text = sanitizeCompletionText(rawText);
 
   /**

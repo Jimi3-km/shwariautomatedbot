@@ -30,6 +30,7 @@ import {
   getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
   leadPipeline, reviewAgentQuality,
 } from './growth.js';
+import { saveProducts, saveServices, removeProducts, removeServices } from './bulk.js';
 
 /**
  * The tool catalogue.
@@ -58,6 +59,7 @@ const ALL: Tool[] = [
   listPaymentClaims, getAgentSettings, updateAgentSettings,
   getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
   leadPipeline, reviewAgentQuality,
+  saveProducts, saveServices, removeProducts, removeServices,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));

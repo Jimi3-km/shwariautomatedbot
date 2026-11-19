@@ -35,7 +35,9 @@ export async function dispatchInbound(
   channel: ResolvedChannel,
   conversationId: string
 ): Promise<DispatchOutcome> {
-  const text = (event.text ?? '').trim();
+  // Telegram opens every new chat with "/start". It is a greeting, not a
+  // message to interpret.
+  const text = /^\/start\b/i.test((event.text ?? '').trim()) ? 'Hello' : (event.text ?? '').trim();
 
   // Email has no provider and is answered by its own webhook route.
   if (event.channelType === 'email') return { handledBy: 'none', reason: 'email_not_dispatched' };

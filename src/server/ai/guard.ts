@@ -19,7 +19,9 @@
  * WhatsApp as asterisks.
  */
 
-export type ReplyIssue = 'unbacked_action' | 'confirms_payment' | 'leaks_internals' | 'raw_data';
+export type ReplyIssue =
+  | 'unbacked_action' | 'confirms_payment' | 'leaks_internals' | 'raw_data'
+  | 'no_work_done' | 'unverified_state';
 
 export interface ReplyCheckInput {
   reply: string;
@@ -28,6 +30,8 @@ export interface ReplyCheckInput {
   /** Every tool name the platform has, for spotting leaks. */
   toolNames: string[];
   customerFacing: boolean;
+  /** What the person asked for, so "asked for work, did none" can be caught. */
+  request?: string;
 }
 
 export interface ReplyCheck {
@@ -41,7 +45,7 @@ export interface ReplyCheck {
 const ACTION_CLAIMS: Array<{ pattern: RegExp; backedBy: string[]; what: string }> = [
   {
     what: 'a booking',
-    pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|gone ahead and\s+)?(?:booked|scheduled|reserved|pencilled|rescheduled|moved your (?:appointment|booking))\b|\byour (?:appointment|booking|consultation|slot) (?:is|has been|was) (?:now\s+)?(?:booked|confirmed|scheduled|reserved|set|moved|rescheduled)\b|\byou(?:'re| are) (?:all\s+)?(?:booked|booked in|confirmed|set) for\b|\bnimeku(?:wekea|book)\w*/i,
+    pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|gone ahead and\s+)?(?:booked|scheduled|reserved|pencilled|rescheduled|moved your (?:appointment|booking))\b|\b(?:your|the|an?|this) (?:appointment|booking|consultation|slot|session)\b[^.!?\n]{0,40}?\b(?:is|has been|was|have been) (?:now\s+|successfully\s+)?(?:booked|confirmed|scheduled|reserved|set|moved|rescheduled)\b|\byou(?:'re| are) (?:all\s+)?(?:booked|booked in|confirmed|set) for\b|\bnimeku(?:wekea|book)\w*/i,
     backedBy: ['book_appointment', 'reschedule_appointment', 'list_appointments', 'get_customer_history', 'delegate_to_agent'],
   },
   {
@@ -79,11 +83,44 @@ function sentences(text: string): string[] {
   return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 }
 
+/** An instruction to change or look something up, as opposed to chat. */
+const ASKS_FOR_WORK =
+  /^\s*(?:please\s+|can you\s+|could you\s+|kindly\s+|i want you to\s+|go ahead and\s+)?(?:add|create|make|set|setup|set up|save|update|change|edit|rename|delete|remove|clear|archive|rebuild|replace|build|configure|book|cancel|reschedule|move|record|send|queue|schedule|turn|switch|enable|disable|activate|fix|list|show|check|find|look up|what(?:'s| is| are)|how many|which|who)\b/i;
+
+/** Saying how things stand - counts, or that something is not there. */
+const STATES_FACTS =
+  /\b(?:\d+|ten|nine|eight|seven|six|five|four|three|two|twenty|a dozen)\s+(?:new\s+)?(?:products?|services?|items?|appointments?|orders?|customers?|leads?)\b|\b(?:do(?:es)?n'?t|do(?:es)? not|no longer|aren'?t|isn'?t|are not|is not) (?:exist|there|listed|in the (?:catalog|catalogue|system|list))\b|\b(?:fully|completely|all) (?:rebuilt|set up|updated|deleted|removed|done)\b|\b(?:has been|have been|is now|are now|was|were) (?:successfully\s+)?(?:saved|added|deleted|removed|updated|set|created)\b/i;
+
+const WRITES = /^(?:save|remove|set|update|book|cancel|reschedule|record|open|schedule|message|configure|activate|teach|forget|delegate|escalate)/;
+
 export function checkReply(input: ReplyCheckInput): ReplyCheck {
   const { reply, okTools, toolNames, customerFacing } = input;
   const issues: ReplyIssue[] = [];
   const notes: string[] = [];
   const did = new Set(okTools);
+
+  // The owner asked for something and the reply talks as if it happened, yet
+  // nothing was looked up or changed in this turn.
+  if (!customerFacing && input.request !== undefined) {
+    const request = input.request.trim();
+    if (!okTools.length && ASKS_FOR_WORK.test(request) && request.split(/\s+/).length >= 2) {
+      issues.push('no_work_done');
+      notes.push(
+        'You were asked to do or look up something and you used no tool in this turn, so anything you say about the business is a guess. ' +
+        'Use the right tool now: read first if you need to, then make the change, then report what the result says.'
+      );
+    } else if (STATES_FACTS.test(reply)) {
+      const changed = okTools.some((t) => WRITES.test(t));
+      const claimsChange = /\b(?:has been|have been|is now|are now|was|were) (?:successfully\s+)?(?:saved|added|deleted|removed|updated|set|created)\b|\b(?:fully|completely|all) (?:rebuilt|set up|updated|deleted|removed|done)\b/i.test(reply);
+      if (!okTools.length || (claimsChange && !changed)) {
+        issues.push('unverified_state');
+        notes.push(
+          'Your draft states how things stand - counts, that something exists or does not, or that a change was made - without anything in this turn to support it. ' +
+          'Check with a tool (list the products or services, read the setting), make any change that is still outstanding, and report only what the results show.'
+        );
+      }
+    }
+  }
 
   for (const claim of ACTION_CLAIMS) {
     if (!claim.pattern.test(reply)) continue;
@@ -117,7 +154,7 @@ export function checkReply(input: ReplyCheckInput): ReplyCheck {
   }
 
   const trimmed = reply.trim();
-  if (/^[\[{]/.test(trimmed) || /"\w+"\s*:\s*["{\[\d]/.test(trimmed)) {
+  if (/^[\[{]/.test(trimmed) || /"\w+"\s*:\s*["{\[\d]/.test(trimmed) || /<\/?tool_call>|<function=|<parameter=/i.test(trimmed)) {
     issues.push('raw_data');
     notes.push('Your draft is raw data. Write it as a short, natural message instead.');
   }
@@ -143,6 +180,9 @@ export function correctionMessage(check: ReplyCheck): string {
 export function honestHoldingReply(issues: ReplyIssue[], customerFacing: boolean): string {
   if (issues.includes('confirms_payment')) {
     return "Thanks - I've noted that. A colleague checks every payment and will confirm it with you shortly.";
+  }
+  if (issues.includes('no_work_done') || issues.includes('unverified_state')) {
+    return "I haven't been able to confirm that yet, so I won't tell you it's done. Ask me once more and I'll check what is actually saved and finish whatever is left.";
   }
   return customerFacing
     ? "I want to get this exactly right, and I haven't been able to complete it just yet. Could you confirm the details once more, and I'll sort it out straight away?"

@@ -57,12 +57,26 @@ async function threadOf(tenantId: string, conversationId: string): Promise<Threa
 
   const rows = (Array.isArray(data) ? data : []) as Array<{ sender: string; body: string; extracted?: any }>;
 
+  // "Who they were talking to" only holds for a conversation still going on.
+  // Someone returning after a long silence is routed afresh.
+  const STILL_TALKING_MS = 12 * 60 * 60 * 1000;
+  const recentEnough = (m: any) => {
+    const at = Date.parse(m?.created_at);
+    // A row with no usable timestamp is treated as current rather than dropped.
+    return !Number.isFinite(at) || Date.now() - at < STILL_TALKING_MS;
+  };
+  // Everything before the message being routed, newest first, still in session.
+  const earlierReplies = (rows as Array<any>)
+    .slice(rows[0]?.sender === 'customer' ? 1 : 0)
+    .filter(recentEnough);
+  const ongoing = earlierReplies.length > 0;
+
   let previous: AgentRole | null = null;
-  for (const m of rows) {
+  for (const m of ongoing ? earlierReplies : []) {
     const stamped = m.sender === 'agent' ? (m.extracted?.department as AgentRole | undefined) : undefined;
     if (stamped && DEPARTMENTS.includes(stamped)) { previous = stamped; break; }
   }
-  if (!previous) {
+  if (!previous && ongoing) {
     const { data: calls } = await serviceClient
       .from('agent_tool_calls')
       .select('agent_role, created_at')
@@ -75,7 +89,7 @@ async function threadOf(tenantId: string, conversationId: string): Promise<Threa
   }
 
   // Skip the newest customer message: it is the one being routed.
-  const earlier = rows.slice(rows[0]?.sender === 'customer' ? 1 : 0, 6).reverse();
+  const earlier = (ongoing ? earlierReplies.slice(0, 5) : []).reverse();
   const recent = earlier
     .filter((m) => typeof m.body === 'string' && m.body.trim())
     .map((m) => `${m.sender === 'customer' ? 'Customer' : 'Us'}: ${untrustedText(m.body, 160)}`)
