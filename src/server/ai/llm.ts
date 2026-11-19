@@ -172,10 +172,39 @@ export interface CompleteOptions {
  */
 export async function complete(opts: CompleteOptions): Promise<Completion> {
   const profile = opts.profile ?? 'primary';
-  const model = opts.model?.trim() || resolveModel(profile);
+  const configured = (opts.model?.trim() || resolveModel(profile)).trim();
+  const model = retiredModels.get(configured) ?? configured;
   try {
     return await executeCompletion(opts, model);
   } catch (err) {
+    // The provider retires hosted models: the id that worked last month starts
+    // answering 404 or 410, and every turn fails until someone edits the
+    // environment. Rather than go dark, move to a model that is still served
+    // and remember the substitution for the life of this process.
+    if (err instanceof LlmError && (err.status === 404 || err.status === 410)) {
+      const tried = new Set([model]);
+      for (const candidate of substituteModels()) {
+        if (tried.has(candidate)) continue;
+        tried.add(candidate);
+        if (opts.deadlineAt && opts.deadlineAt - Date.now() < 3_000) break;
+        try {
+          const result = await executeCompletion(opts, candidate);
+          retiredModels.set(configured, candidate);
+          console.error(
+            `[llm] model "${configured}" is no longer served (HTTP ${err.status}); using "${candidate}" instead. ` +
+              'Update SHWARI_MODEL / SHWARI_PRIMARY_MODEL / SHWARI_FAST_MODEL.'
+          );
+          return result;
+        } catch (e) {
+          if (!(e instanceof LlmError && (e.status === 404 || e.status === 410))) throw e;
+        }
+      }
+      throw new LlmError(
+        `The configured model "${configured}" is no longer served by the provider, and no substitute answered`,
+        err.status
+      );
+    }
+
     const retryable = err instanceof LlmError && (err.status >= 500 || err.status === 429);
     if (!retryable || profile === 'fallback') throw err;
 
@@ -195,7 +224,25 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
   }
 }
 
-const RATE_LIMIT_BACKOFF_MS = parseInt(process.env.SHWARI_RATE_LIMIT_BACKOFF_MS || '1500', 10);
+/** Configured model id → the substitute that answered after it was retired. */
+const retiredModels = new Map<string, string>();
+
+/**
+ * Models to try, in order, when the configured one has been retired: the
+ * operator's own fallback first, then ids the default provider serves.
+ */
+function substituteModels(): string[] {
+  return [
+    process.env.SHWARI_FALLBACK_MODEL,
+    DEFAULT_MODEL,
+    'moonshotai/kimi-k3.1-pro',
+    'nvidia/nemotron-3.5-lightning-30b-a3b',
+  ]
+    .map((m) => (m ?? '').trim())
+    .filter(Boolean);
+}
+
+const RATE_LIMIT_BACKOFF_MS =parseInt(process.env.SHWARI_RATE_LIMIT_BACKOFF_MS || '1500', 10);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
