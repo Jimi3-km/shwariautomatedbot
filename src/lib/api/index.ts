@@ -156,22 +156,10 @@ export const updateBusiness = (body: Partial<Tenant>) => request<Tenant>('/busin
 // ---------------------------------------------------------------------------
 export const getChannels = () => request<{ channels: Channel[] }>('/channels');
 
-/** The token is posted once and never returned by any endpoint afterwards. */
-export const connectTelegram = (botToken: string) =>
-  request<{ channel: Channel; bot: { id: number; username: string } }>(
-    '/channels/telegram', { method: 'POST', body: { bot_token: botToken } }
-  );
-
 export const getChannelStatus = (id: string) =>
   request<{ status: string; webhook: { configured: boolean; matches_expected: boolean; pending_update_count: number; last_error_message: string | null } }>(
     `/channels/${id}/status`
   );
-
-export const completeMetaEmbeddedSignup = (code: string) =>
-  request<{ channel: Channel }>('/channels/meta/whatsapp', { method: 'POST', body: { code } });
-
-export const completeInstagramLogin = (accessToken: string) =>
-  request<{ channel: Channel }>('/channels/meta/instagram', { method: 'POST', body: { accessToken } });
 
 export const disconnectChannel = (id: string) =>
   request<{ disconnected: boolean }>(`/channels/${id}`, { method: 'DELETE' });

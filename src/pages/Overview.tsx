@@ -14,6 +14,8 @@ import { formatMoney, humanize, relativeTime } from '../lib/format';
 const CHANNELS: Array<{ type: string; label: string }> = [
   { type: 'telegram', label: 'Telegram' },
   { type: 'whatsapp', label: 'WhatsApp' },
+  { type: 'instagram', label: 'Instagram' },
+  { type: 'webchat', label: 'Web chat' },
 ];
 
 export function Overview() {

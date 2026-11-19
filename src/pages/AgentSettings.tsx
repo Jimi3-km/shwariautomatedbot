@@ -6,13 +6,8 @@ import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Button, Card, ErrorState, Field, Input, InlineError, LoadingState,
-  PageHeader, Select, Textarea, useToast,
+  PageHeader, Textarea, useToast,
 } from '../components/ui';
-
-const MODELS = [
-  { value: 'gpt-4o-mini', label: 'Standard — fast and economical' },
-  { value: 'gpt-4o', label: 'Advanced — best quality, higher cost' },
-];
 
 interface FormState {
   persona: string;
@@ -35,7 +30,7 @@ function toForm(a: AgentSettingsType): FormState {
     persona: a.persona ?? '',
     customInstructions: a.custom_instructions ?? '',
     followupTemplate: a.followup_template ?? '',
-    model: a.model ?? 'gpt-4o-mini',
+    model: a.model ?? '',
     memoryWindow: a.memory_window ?? 50,
     followupDelayHours: a.followup_delay_hours ?? 24,
     salesScript: Array.isArray(a.sales_script) ? a.sales_script : [],
@@ -51,7 +46,8 @@ function toForm(a: AgentSettingsType): FormState {
  * business configures behaviour without being able to rewrite the guardrails.
  */
 export function AgentSettings() {
-  const { canWrite, tenant } = useSession();
+  // The agent's behaviour is a business-wide setting: owners and admins only.
+  const { isAdmin: canWrite, tenant } = useSession();
   const toast = useToast();
   const state = useAsync(() => getAgentSettings(), []);
   const [form, setForm] = useState<FormState | null>(null);
@@ -65,7 +61,6 @@ export function AgentSettings() {
       persona: f.persona,
       custom_instructions: f.customInstructions,
       followup_template: f.followupTemplate,
-      model: f.model,
       memory_window: f.memoryWindow,
       followup_delay_hours: f.followupDelayHours,
       sales_script: f.salesScript.filter((s) => s.trim()),
@@ -195,11 +190,8 @@ export function AgentSettings() {
           <Card>
             <SectionTitle title="Advanced" hint="Sensible defaults; change only if you need to." />
             <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-              <Field label="Model" hint="Which AI model answers your customers.">
-                <Select
-                  value={form.model} disabled={!canWrite} options={MODELS}
-                  onChange={(e) => set('model', e.target.value)}
-                />
+              <Field label="Model" hint="Chosen and kept up to date by the platform. It is not set per business.">
+                <Input value="Managed by Shwari" disabled readOnly />
               </Field>
               <Field label="Conversation memory" hint="How many past messages the agent keeps in mind (1–200).">
                 <Input

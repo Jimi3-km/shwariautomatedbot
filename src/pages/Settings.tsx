@@ -268,7 +268,8 @@ function PairEditor({
 }
 
 function TeamSection({ isAdmin }: { isAdmin: boolean }) {
-  const { user } = useSession();
+  const { user, role: myRole } = useSession();
+  const isOwner = myRole === 'owner';
   const toast = useToast();
   const state = useAsync(() => getTeam(), []);
 
@@ -301,12 +302,13 @@ function TeamSection({ isAdmin }: { isAdmin: boolean }) {
                 Added {formatDateTime(m.created_at)}
               </div>
             </div>
-            {isAdmin && m.user_id !== user.id ? (
+            {isAdmin && m.user_id !== user.id && (isOwner || m.role !== 'owner') ? (
               <Select
                 aria-label="Role" value={m.role} disabled={change.busy}
                 onChange={(e) => change.run(m.id, e.target.value)}
                 options={[
-                  { value: 'owner', label: 'Owner' },
+                  // Only an owner can hand out ownership.
+                  ...(isOwner ? [{ value: 'owner', label: 'Owner' }] : []),
                   { value: 'admin', label: 'Admin' },
                   { value: 'member', label: 'Member' },
                   { value: 'viewer', label: 'Viewer' },
@@ -334,7 +336,7 @@ function AccountSection() {
   const resetPassword = useMutation(async () => {
     if (!user.email) throw new Error('No email address on this account.');
     const { error } = await getSupabase().auth.resetPasswordForEmail(user.email, {
-      redirectTo: 'https://shwariautomatedbot.vercel.app/',
+      redirectTo: `${window.location.origin}/`,
     });
     if (error) throw new Error(error.message);
     toast.push('success', 'Password reset link sent to your email.');

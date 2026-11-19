@@ -37,6 +37,25 @@ const SUGGESTIONS = [
 
 export function Shwari() {
   const { isAdmin } = useSession();
+  // Shwari changes how the whole business is configured, so the server only
+  // answers owners and admins. Say so here rather than loading into a 403.
+  if (!isAdmin) {
+    return (
+      <>
+        <PageHeader title="Shwari" />
+        <EmptyState
+          icon={<Sparkles size={28} />}
+          title="Shwari is for owners and admins"
+          body="Shwari sets up and changes how the business runs, so only owners and admins can talk to it. Ask one of them if something needs changing."
+        />
+      </>
+    );
+  }
+  return <ShwariChat />;
+}
+
+function ShwariChat() {
+  const { isAdmin } = useSession();
   const toast = useToast();
 
   const status = useAsync(() => getShwariStatus(), []);

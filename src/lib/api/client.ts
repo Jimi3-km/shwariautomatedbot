@@ -90,9 +90,71 @@ let onAuthFailure: (() => void) | null = null;
 export function setAuthFailureHandler(fn: () => void) { onAuthFailure = fn; }
 
 /** The tenant chosen when a user belongs to more than one business. */
-let activeTenantId: string | null = null;
-export function setActiveTenant(id: string | null) { activeTenantId = id; }
+const TENANT_STORAGE_KEY = 'shwari-dashboard-active-tenant';
+
+function readStoredTenant(): string | null {
+  try { return localStorage.getItem(TENANT_STORAGE_KEY); } catch { return null; }
+}
+
+/**
+ * Persisted, because switching business does a full page reload: an in-memory
+ * value would be wiped by that reload and the server would fall back to the
+ * user's first membership. The server still verifies membership on every
+ * request, so a stale or tampered value can only ever produce a 403.
+ */
+let activeTenantId: string | null = readStoredTenant();
+export function setActiveTenant(id: string | null) {
+  activeTenantId = id;
+  try {
+    if (id) localStorage.setItem(TENANT_STORAGE_KEY, id);
+    else localStorage.removeItem(TENANT_STORAGE_KEY);
+  } catch { /* storage unavailable: the choice lasts for this page only */ }
+}
 export function getActiveTenant() { return activeTenantId; }
+
+/** The current session's bearer token, for the rare call that cannot use request(). */
+export async function getAccessToken(): Promise<string | null> {
+  const { data } = await getSupabase().auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+/**
+ * Downloads an authenticated file. A plain link or window.open cannot do this:
+ * the API authenticates with a bearer header, which a navigation never sends.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = await getAccessToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  if (activeTenantId) headers['x-tenant-id'] = activeTenantId;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, { headers });
+  } catch {
+    throw new NetworkError();
+  }
+  if (!res.ok) {
+    let message = defaultMessage(res.status);
+    try {
+      const j = (await res.json()) as { error?: unknown };
+      if (typeof j.error === 'string' && j.error.length < 300) message = j.error;
+    } catch { /* non-JSON error body */ }
+    if (res.status === 401) onAuthFailure?.();
+    throw new ApiError(message, res.status);
+  }
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const name = match ? decodeURIComponent(match[1]) : fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

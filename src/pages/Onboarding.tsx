@@ -74,9 +74,13 @@ export function Onboarding({ onFinished, onSignOut }: {
   const [timezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
 
   // Step 3
-  const [sells, setSells] = useState('');
+  // The server does not hand these two answers back, so a draft is kept in
+  // this browser: leaving to authorize a channel, or reloading, must not
+  // return the user to a blank required field.
+  const [sells, setSells] = useState(() => readDraft().sells ?? '');
   const [description, setDescription] = useState('');
-  const [tone, setTone] = useState<AgentTone>('friendly');
+  const [tone, setTone] = useState<AgentTone>(() => readDraft().tone ?? 'friendly');
+  useEffect(() => { writeDraft({ sells, tone }); }, [sells, tone]);
 
   /**
    * Resume from the server. Also runs after the OAuth callback bounces back,
@@ -85,11 +89,16 @@ export function Onboarding({ onFinished, onSignOut }: {
   const refreshState = useCallback(async () => {
     try {
       const state = await getOnboardingState();
-      if (state.complete) { onFinished(); return; }
+      if (state.complete) { clearDraft(); onFinished(); return; }
       if (state.business) {
         setBusinessName((v) => v || state.business!.business_name);
         setCategory((v) => v || state.business!.business_category || '');
         setDescription((v) => v || state.business!.business_description || '');
+        // Already answered on an earlier visit but no local draft (another
+        // device): fall back to the saved description so the step is not blank.
+        if (state.agent_configured) {
+          setSells((v) => v || state.business!.business_description || state.business!.business_category || '');
+        }
       }
       setStep(state.step === 'done' ? 'launch' : state.step);
       setBootError(null);
@@ -115,6 +124,12 @@ export function Onboarding({ onFinished, onSignOut }: {
       {bootError && (
         <div style={{ marginBottom: 14 }}>
           <InlineError message={bootError} onDismiss={() => setBootError(null)} />
+          <Button
+            size="sm" variant="outline" style={{ marginTop: 8 }}
+            onClick={() => { setBootError(null); void refreshState(); }}
+          >
+            Try again
+          </Button>
         </div>
       )}
 
@@ -591,12 +606,21 @@ function LaunchStep({ businessName, onBack, onFinished }: {
   const [result, setResult] = useState<LaunchResult | null>(null);
   const [testTarget, setTestTarget] = useState('');
   const [testSent, setTestSent] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
 
   const check = useCallback(async () => {
     setLoading(true);
+    setCheckError(null);
     try {
       const r = await getOnboardingChannels(true);
       setConnected(r.connected.filter((c) => c.status === 'active'));
+    } catch (err) {
+      // Without this a failed check looked identical to "nothing connected".
+      setCheckError(
+        err instanceof Error && err.message.length < 300
+          ? err.message
+          : "We couldn't check your connections. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -611,8 +635,12 @@ function LaunchStep({ businessName, onBack, onFinished }: {
     setTimeout(onFinished, 1400);
   });
 
+  // A test message needs somewhere to send it. Web chat has no address to
+  // message — the visitor starts that conversation — so it is never the target.
+  const testChannel = connected.find((c) => c.provider !== 'webchat') ?? null;
+
   const test = useMutation(async () => {
-    const channel = connected[0];
+    const channel = testChannel;
     if (!channel) return;
     await sendOnboardingTestMessage(channel.channel_id, testTarget.trim());
     setTestSent(true);
@@ -689,17 +717,21 @@ function LaunchStep({ businessName, onBack, onFinished }: {
             </div>
           ))}
 
-          {!loading && connected.length === 0 && (
+          {!loading && checkError && (
+            <InlineError message={checkError} onDismiss={() => setCheckError(null)} />
+          )}
+
+          {!loading && !checkError && connected.length === 0 && (
             <p style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
               No channels are connected yet. Go back a step to add one.
             </p>
           )}
         </div>
 
-        {connected.length > 0 && (
+        {testChannel && (
           <Field
             label="Send yourself a test message"
-            hint={`Optional — we'll message this ${connected[0].provider} contact so you can see it working.`}
+            hint={`Optional — we'll message this ${testChannel.provider} contact so you can see it working.`}
           >
             <div style={{ display: 'flex', gap: 8 }}>
               <Input
@@ -753,4 +785,31 @@ function SummaryRow({ label, value, tone }: { label: string; value: string; tone
         : <span style={{ fontSize: 13, fontWeight: 550 }}>{value}</span>}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Agent-step draft, kept in this browser only
+// ---------------------------------------------------------------------------
+
+const DRAFT_KEY = 'shwari-onboarding-agent-draft';
+const DRAFT_TONES: AgentTone[] = ['friendly', 'professional', 'concise', 'enthusiastic'];
+
+function readDraft(): { sells?: string; tone?: AgentTone } {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? '{}') as { sells?: unknown; tone?: unknown };
+    return {
+      sells: typeof raw.sells === 'string' ? raw.sells : undefined,
+      tone: DRAFT_TONES.includes(raw.tone as AgentTone) ? (raw.tone as AgentTone) : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeDraft(draft: { sells: string; tone: AgentTone }) {
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ }
+}
+
+function clearDraft() {
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* storage unavailable */ }
 }

@@ -13,7 +13,7 @@ import {
   Menu,
   X,
 } from 'lucide-react';
-import { AuthScreen } from './AuthScreen';
+import { AuthScreen, hasAuthCallback } from './AuthScreen';
 
 /* ───────────────────────────────────────────────────────────────────────
    Scroll-reveal: fade up on first intersection.
@@ -60,7 +60,9 @@ function useScrollUnlock() {
 interface LandingPageProps { onSignedIn: () => void; }
 
 export function LandingPage({ onSignedIn }: LandingPageProps) {
-  const [showAuth, setShowAuth] = React.useState(false);
+  // The Instagram OAuth callback lands signed-out users here. Go straight to
+  // the auth screen in that case: it finishes the sign-in or shows the error.
+  const [showAuth, setShowAuth] = React.useState(() => hasAuthCallback());
   const [menuOpen, setMenuOpen] = React.useState(false);
   useScrollUnlock();
 
@@ -75,7 +77,7 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
       {/* ── Nav ──────────────────────────────────────────────────── */}
       <nav className="lp-nav">
         <div className="lp-w lp-nav-row">
-          <a href="#" className="lp-brand"><Bot size={24} /><span>Shwari</span></a>
+          <a href="/" className="lp-brand" aria-label="Shwari home"><Bot size={24} /><span>Shwari</span></a>
           <div className="lp-nav-links">
             <a href="#features">Features</a>
             <a href="#channels">Channels</a>
@@ -124,7 +126,7 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
           </Reveal>
           <Reveal>
             <div className="lp-metrics">
-              <div><strong>100%</strong><span>AI handling rate</span></div>
+              <div><strong>4</strong><span>Messaging channels</span></div>
               <div><strong>5</strong><span>Specialized agents</span></div>
               <div><strong>24/7</strong><span>Always online</span></div>
             </div>

@@ -34,7 +34,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   // The OAuth callback returns here with a single-use token. Exchanging it
   // yields a genuine Supabase session, so auth.uid() and RLS keep working.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = readAuthCallbackParams();
     const authError = params.get('auth_error');
     if (authError) {
       setError(
@@ -47,8 +47,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
     }
 
     const token = params.get('ig_token');
-    const email = params.get('ig_email');
-    if (!token || !email) return;
+    if (!token) return;
 
     window.history.replaceState({}, '', window.location.pathname);
     setBusy(true);
@@ -74,7 +73,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
       const { error } = await getSupabase().auth.resend({
         type: 'signup',
         email,
-        options: { emailRedirectTo: 'https://shwariautomatedbot.vercel.app/' },
+        options: { emailRedirectTo: `${window.location.origin}/` },
       });
       if (error) throw error;
       setNotice('Sent again. Check your inbox and your spam folder.');
@@ -113,7 +112,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         const { data, error } = await sb.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: 'https://shwariautomatedbot.vercel.app/' },
+          options: { emailRedirectTo: `${window.location.origin}/` },
         });
         if (error) throw error;
         if (data.session) {
@@ -124,7 +123,7 @@ export function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         }
       } else {
         const { error } = await sb.auth.resetPasswordForEmail(email, {
-          redirectTo: 'https://shwariautomatedbot.vercel.app/',
+          redirectTo: `${window.location.origin}/`,
         });
         if (error) throw error;
         // Deliberately not confirming whether the address exists.
@@ -340,4 +339,25 @@ export function SetNewPassword({ onDone, onCancel }: {
       </div>
     </div>
   );
+}
+
+/**
+ * Parameters the Instagram OAuth callback hands back. They may arrive in the
+ * query string or in the URL fragment (the fragment keeps the single-use token
+ * out of server logs and Referer headers), so both are read.
+ */
+export function readAuthCallbackParams(): URLSearchParams {
+  const merged = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  for (const key of ['ig_token', 'ig_email', 'auth_error']) {
+    const v = hash.get(key);
+    if (v && !merged.has(key)) merged.set(key, v);
+  }
+  return merged;
+}
+
+/** True when the page was opened by the OAuth callback and sign-in must finish. */
+export function hasAuthCallback(): boolean {
+  const p = readAuthCallbackParams();
+  return p.has('ig_token') || p.has('auth_error');
 }

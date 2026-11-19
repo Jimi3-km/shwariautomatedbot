@@ -1,12 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router-dom';
 import { router } from './app/routes';
 import { SessionProvider, signOutOfSupabase } from './app/SessionContext';
-import { AuthScreen, SetNewPassword } from './pages/AuthScreen';
-import { LandingPage } from './pages/LandingPage';
-import { Onboarding } from './pages/Onboarding';
+import { SetNewPassword } from './pages/AuthScreen';
 import { ToastProvider, LoadingState, ErrorState } from './components/ui';
-import { ApiError, getMe, getSupabase, initSupabase, setAuthFailureHandler } from './lib/api';
+import {
+  ApiError, getActiveTenant, getMe, initSupabase, setActiveTenant, setAuthFailureHandler,
+} from './lib/api';
+
+// Signed-in users never need the marketing page, and a finished workspace
+// never needs the wizard, so neither is in the main bundle.
+const LandingPage = lazy(() => import('./pages/LandingPage').then((m) => ({ default: m.LandingPage })));
+const Onboarding = lazy(() => import('./pages/Onboarding').then((m) => ({ default: m.Onboarding })));
 import type { Me } from './types';
 
 type Status = 'booting' | 'signed-out' | 'recovery' | 'onboarding' | 'ready' | 'error';
@@ -31,11 +36,31 @@ export default function App() {
 
   const loadSession = useCallback(async () => {
     try {
-      const next = await getMe();
+      let next: Me;
+      try {
+        next = await getMe();
+      } catch (err) {
+        // A remembered business the user no longer belongs to (removed from
+        // the team, or a different account on this browser) must not lock
+        // them out: forget it and fall back to their default workspace.
+        if (getActiveTenant() && err instanceof ApiError && !err.isAuthError) {
+          setActiveTenant(null);
+          next = await getMe();
+        } else {
+          throw err;
+        }
+      }
+      const remembered = getActiveTenant();
+      if (remembered && !next.memberships.some((m) => m.tenant_id === remembered)) {
+        setActiveTenant(null);
+        next = await getMe();
+      }
       setMe(next);
-      // A workspace that has not finished the wizard goes back into it. The
-      // server owns that flag, so the dashboard cannot be reached half set up.
-      setStatus(next.tenant?.onboarding_completed_at ? 'ready' : 'onboarding');
+      // A workspace that has not finished the wizard goes back into it — but
+      // only for the people who can finish it. Completing setup is admin-only
+      // on the server, so sending a member or viewer there would trap them.
+      const canSetUp = !next.tenant || next.role === 'owner' || next.role === 'admin';
+      setStatus(next.tenant?.onboarding_completed_at || !canSetUp ? 'ready' : 'onboarding');
     } catch (err) {
       // No workspace yet: the wizard's first step creates one.
       if (err instanceof ApiError && err.code === 'NO_TENANT') setStatus('onboarding');
@@ -49,6 +74,7 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
     // Captured before supabase-js processes and clears the URL hash.
     const recovering = arrivedForPasswordReset();
 
@@ -65,11 +91,15 @@ export default function App() {
         // Register before reading the session so the recovery event is never
         // missed. A recovery session must land on "choose a new password",
         // never in the dashboard — it is only good for that one change.
-        sb.auth.onAuthStateChange((event, session) => {
+        const { data: listener } = sb.auth.onAuthStateChange((event, session) => {
           if (cancelled) return;
           if (event === 'PASSWORD_RECOVERY') { setStatus('recovery'); return; }
           if (!session) { setMe(null); setStatus('signed-out'); }
         });
+        // StrictMode runs this effect twice; without this the first listener
+        // would live for the whole session.
+        if (cancelled) listener.subscription.unsubscribe();
+        else unsubscribe = () => listener.subscription.unsubscribe();
 
         const { data } = await sb.auth.getSession();
         if (cancelled) return;
@@ -83,7 +113,7 @@ export default function App() {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; unsubscribe?.(); };
   }, [loadSession]);
 
   const signOut = useCallback(async () => {
@@ -120,7 +150,13 @@ export default function App() {
     );
   }
 
-  return <ToastProvider>{content}</ToastProvider>;
+  return (
+    <ToastProvider>
+      <Suspense fallback={<Centered><LoadingState label="Loading…" /></Centered>}>
+        {content}
+      </Suspense>
+    </ToastProvider>
+  );
 }
 
 function Centered({ children }: { children: React.ReactNode }) {

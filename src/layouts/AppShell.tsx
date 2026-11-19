@@ -1,27 +1,38 @@
-import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck,
+  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal,
 } from 'lucide-react';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
 import { useSession } from '../app/SessionContext';
 
-const NAV = [
+interface NavEntry {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  end?: boolean;
+  badge?: 'unread' | 'claims';
+  /** Shown only to owners and admins: the server rejects everyone else. */
+  adminOnly?: boolean;
+}
+
+const NAV: NavEntry[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/shwari', label: 'Shwari', icon: Sparkles },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'unread' as const },
+  { to: '/shwari', label: 'Shwari', icon: Sparkles, adminOnly: true },
+  { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'unread' },
   { to: '/leads', label: 'Leads', icon: Users },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/services', label: 'Services', icon: Wrench },
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
   { to: '/appointments', label: 'Appointments', icon: CalendarDays },
   { to: '/support', label: 'Support', icon: LifeBuoy },
-  { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'claims' as const },
+  { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'claims' },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/agents', label: 'AI team', icon: Bot },
+  { to: '/agent', label: 'AI agent settings', icon: SlidersHorizontal, adminOnly: true },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
@@ -29,6 +40,11 @@ const NAV = [
 export function AppShell() {
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const location = useLocation();
+
+  // Close the mobile drawer when navigation happens, rather than on any click
+  // inside it: a blanket click handler also swallowed the business switcher.
+  useEffect(() => { setDrawerOpen(false); }, [location.pathname, location.search]);
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
@@ -40,8 +56,7 @@ export function AppShell() {
 
       {isMobile && (
         <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
-               onClick={() => setDrawerOpen(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <SidebarContent />
           </div>
         </Drawer>
@@ -67,7 +82,7 @@ function SidebarContent() {
       </div>
 
       <nav className="scroll-y" style={{ flex: 1, padding: '0 8px 8px' }}>
-        {NAV.map(({ to, label, icon: Icon, end, badge }) => {
+        {NAV.filter((n) => !n.adminOnly || isAdmin).map(({ to, label, icon: Icon, end, badge }) => {
           const count = badge === 'unread' ? counts.unread : badge === 'claims' ? counts.paymentClaims : 0;
           return (
             <NavLink
@@ -122,16 +137,58 @@ function TenantSwitcher() {
   const { tenant, memberships, switchTenant } = useSession();
   const [open, setOpen] = useState(false);
   const multiple = memberships.length > 1;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Close on a click anywhere else, and on Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); buttonRef.current?.focus(); }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Arrow keys move between businesses once the list is open.
+  function onListKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'Home' ? 0
+      : e.key === 'End' ? items.length - 1
+      : e.key === 'ArrowDown' ? (i + 1) % items.length
+      : (i - 1 + items.length) % items.length;
+    items[next].focus();
+  }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={rootRef} style={{ position: 'relative' }}>
       <button
+        ref={buttonRef}
+        type="button"
         onClick={() => multiple && setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (multiple && e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); }
+        }}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 8px',
           borderRadius: 'var(--radius)', background: 'var(--surface-2)', cursor: multiple ? 'pointer' : 'default',
         }}
         aria-haspopup={multiple ? 'listbox' : undefined}
+        aria-expanded={multiple ? open : undefined}
+        aria-label={multiple ? `Switch business. Current: ${tenant?.business_name ?? 'Business'}` : undefined}
       >
         <Avatar name={tenant?.business_name} seed={tenant?.slug} size={26} />
         <span style={{
@@ -144,15 +201,19 @@ function TenantSwitcher() {
       </button>
 
       {open && multiple && (
-        <div role="listbox" style={{
+        <div role="listbox" aria-label="Your businesses" onKeyDown={onListKey} style={{
           position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 20,
           background: 'var(--surface-2)', border: '1px solid var(--border-2)',
           borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-md)', padding: 4,
         }}>
-          {memberships.map((m) => (
+          {memberships.map((m, i) => (
             <button
-              key={m.tenant_id} role="option" aria-selected={m.tenant_id === tenant?.id}
-              onClick={() => { setOpen(false); switchTenant(m.tenant_id); }}
+              key={m.tenant_id} type="button" role="option" aria-selected={m.tenant_id === tenant?.id}
+              autoFocus={m.tenant_id === tenant?.id || (i === 0 && !memberships.some((x) => x.tenant_id === tenant?.id))}
+              onClick={() => {
+                setOpen(false);
+                if (m.tenant_id !== tenant?.id) switchTenant(m.tenant_id);
+              }}
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px',
                 borderRadius: 'var(--radius-sm)', fontSize: 13, textAlign: 'left',

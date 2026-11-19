@@ -10,7 +10,8 @@ import { Button } from './ui';
  * is done when it is not.
  */
 export function OnboardingChecklist({ data }: { data: Onboarding }) {
-  if (data.dismissed) return null;
+  // Nothing left to do: get out of the way instead of showing a finished list.
+  if (data.dismissed || (data.total > 0 && data.completed >= data.total)) return null;
   const next = data.steps.find((s) => !s.done);
   const pct = Math.round((data.completed / data.total) * 100);
 

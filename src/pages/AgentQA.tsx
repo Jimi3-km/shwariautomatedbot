@@ -9,7 +9,7 @@ import {
 } from '../components/ui';
 import { useSession } from '../app/SessionContext';
 import {
-  getAgentTurns, labelAgentTurn, type AgentTurnItem, type AgentTurnFilters, type AgentTurnLabel,
+  getAgentTurns, labelAgentTurn, downloadFile, type AgentTurnItem, type AgentTurnFilters, type AgentTurnLabel,
 } from '../lib/api';
 
 const ROLES = [
@@ -191,13 +191,18 @@ export function AgentQA() {
     }
   };
 
-  const handleExportJsonl = () => {
+  const handleExportJsonl = async () => {
     const params = new URLSearchParams();
     if (role) params.set('role', role);
     if (labelFilter && labelFilter !== 'unlabeled') params.set('label', labelFilter);
     params.set('labeled_only', 'false');
 
-    window.open(`/api/admin/agent-turns/export?${params.toString()}`, '_blank');
+    // A plain link cannot carry the session token, so fetch and save instead.
+    try {
+      await downloadFile(`/admin/agent-turns/export?${params.toString()}`, 'agent-turns.jsonl');
+    } catch (err) {
+      toast.push('error', err instanceof Error ? err.message : 'Could not export just now.');
+    }
   };
 
   if (!isAdmin) {
