@@ -2,8 +2,9 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { serviceClient } from '../../supabase.js';
-import { claimEvent, persistInbound } from '../../services/inbound.js';
-import { dispatchInbound } from '../../services/dispatch.js';
+import { processInbound } from '../../services/pipeline.js';
+import { runInBackground } from '../../services/background.js';
+import { housekeeping } from '../../services/followUps.js';
 import type { InboundMedia, NormalizedInboundEvent } from '../../channels/meta/types.js';
 
 export const telegramWebhookRouter = Router();
@@ -18,26 +19,29 @@ export const telegramWebhookRouter = Router();
  * reached on the one channel every tenant already has.
  *
  * So Telegram now arrives here and follows exactly the path web chat and Meta
- * follow — resolve, claim, persist, dispatch. The n8n sales pipeline is still
- * what answers a customer; it is simply called from dispatch rather than being
- * the front door.
+ * follow — resolve, claim, persist, dispatch — and is answered by the
+ * in-process agent.
  *
  * Authentication is Telegram's secret header, matched against the channel's own
- * secret_token. That is what maps an update to one tenant, and it is the same
- * mechanism the n8n workflow used, so existing bots keep working.
+ * secret_token. That is what maps an update to one tenant.
  */
 telegramWebhookRouter.post('/webhooks/telegram', (req: Request, res: Response) => {
   const presented = req.headers['x-telegram-bot-api-secret-token'];
-  if (typeof presented !== 'string' || !presented) {
+  // The secrets we mint are 43 base64url characters. Anything that is not a
+  // plausible secret is refused before it costs a database lookup.
+  if (typeof presented !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(presented)) {
     return res.sendStatus(401);
   }
 
   // Ack first. Telegram retries anything that is not a prompt 200, and an AI
-  // turn takes far longer than it is willing to wait.
+  // turn takes far longer than it is willing to wait. The work is registered
+  // with the platform so a serverless function stays alive until it finishes.
   res.sendStatus(200);
 
-  void handleUpdate(presented, req.body).catch((e) => {
-    console.error('[webhooks/telegram] processing failed:', e instanceof Error ? e.message : e);
+  const body = req.body;
+  void runInBackground('webhooks/telegram', async () => {
+    await handleUpdate(presented, body);
+    await housekeeping();
   });
 });
 
@@ -51,21 +55,7 @@ async function handleUpdate(presentedSecret: string, body: unknown): Promise<voi
   const event = parseUpdate(body, channel.tenantId, channel.id);
   if (!event) return;
 
-  const claimed = await claimEvent('telegram', event.messageId, event.tenantId, event.channelId);
-  if (!claimed) {
-    console.log('[webhooks/telegram] duplicate delivery; already handled');
-    return;
-  }
-
-  const stored = await persistInbound(event);
-  if (!stored) return;
-
-  if (!stored.aiEnabled) {
-    console.log(`[webhooks/telegram] conversation ${stored.conversationId} is staff-handled; no AI reply`);
-    return;
-  }
-
-  await dispatchInbound(event, channel, stored.conversationId);
+  await processInbound(event, channel, 'webhooks/telegram');
 }
 
 /**

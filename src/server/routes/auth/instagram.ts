@@ -117,10 +117,13 @@ instagramAuthRouter.get(
       }
 
       // The SPA calls supabase.auth.verifyOtp() with this token to establish
-      // the session client-side. The token is single-use and short-lived.
+      // the session client-side. The token is single-use and short-lived, and
+      // it is all the SPA needs — the synthetic email address is not sent.
       const target = new URL(`${appOrigin(req)}/`);
       target.searchParams.set('ig_token', link.properties.hashed_token);
-      target.searchParams.set('ig_email', email);
+      // Keep the one-time token out of Referer headers and shared caches.
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('Cache-Control', 'no-store');
       console.log(`[auth/instagram] linked instagram ${profile.id} to auth user ${userId}`);
       return res.redirect(302, target.toString());
     } catch (err) {
@@ -173,9 +176,7 @@ async function linkOrCreateUser(
   // fall back to locating that user instead of erroring out.
   if (!userId) {
     if (createErr) console.warn('[auth/instagram] createUser fallback:', createErr.message);
-    const { data: list } = await serviceClient.auth.admin.listUsers();
-    const users = (list?.users ?? []) as Array<{ id: string; email?: string | null }>;
-    userId = users.find((u) => u.email === email)?.id;
+    userId = await findUserIdByEmail(email);
   }
   if (!userId) throw new Error('Could not create or locate the Supabase user');
 
@@ -197,11 +198,36 @@ async function linkOrCreateUser(
   return userId;
 }
 
+/**
+ * Find an auth user by email, walking every page.
+ *
+ * listUsers() returns one page (50 by default), so reading only the first one
+ * stops finding people as soon as the project has more users than that.
+ */
+async function findUserIdByEmail(email: string): Promise<string | undefined> {
+  const perPage = 200;
+  for (let page = 1; page <= 50; page++) {
+    const { data, error } = await serviceClient.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error('[auth/instagram] listUsers failed:', error.message);
+      return undefined;
+    }
+    const users = (data?.users ?? []) as Array<{ id: string; email?: string | null }>;
+    const hit = users.find((u) => (u.email ?? '').toLowerCase() === email.toLowerCase());
+    if (hit) return hit.id;
+    if (users.length < perPage) return undefined;
+  }
+  return undefined;
+}
+
 /** Lets the login screen show the button only when the server can honour it. */
 instagramAuthRouter.get(
   '/auth/instagram/available',
   handler(async (_req, res) => {
     const cfg = instagramOAuthConfigured();
-    res.json({ available: cfg.configured, missing: cfg.configured ? [] : cfg.missing });
+    // Which variables are missing is an operator detail; it is logged, not
+    // handed to anonymous visitors.
+    if (!cfg.configured) console.warn('[auth/instagram] unavailable, missing:', cfg.missing.join(', '));
+    res.json({ available: cfg.configured });
   })
 );

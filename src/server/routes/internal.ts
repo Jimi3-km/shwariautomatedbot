@@ -4,34 +4,70 @@ import type { NextFunction, Request, Response } from 'express';
 import { serviceClient } from '../supabase.js';
 import { handler } from '../auth.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
+import { dispatchDueFollowUps } from '../services/followUps.js';
+import { retryInterruptedEvents } from '../services/pipeline.js';
+import { refreshInstagramTokens, pruneWebhookEvents } from '../services/maintenance.js';
 
 export const internalRouter = Router();
 
 /**
- * Server-to-server endpoints for the automation pipeline.
+ * Server-to-server endpoints: the scheduler and any automation that needs to
+ * send through a channel without holding its credentials.
  *
- * The point of this router is that n8n does not need to know how any channel
- * works. It says "send this text to this customer on this channel" and the
- * provider registry decides whether that means the Telegram Bot API, the
- * WhatsApp Cloud API or the Instagram Graph API. Credentials stay here; the
- * pipeline never holds a bot token or a Meta access token.
+ * Two callers, two credentials, both compared in constant time:
+ *
+ *   x-internal-secret: $INTERNAL_API_SECRET    an automation you run
+ *   Authorization: Bearer $CRON_SECRET         Vercel Cron, which sends this
+ *                                              header on its own when
+ *                                              CRON_SECRET is set on the project
+ *
+ * With neither configured every call is refused.
  */
 
-/** Shared secret, compared in constant time. */
+function equalSecret(presented: string, expected: string): boolean {
+  // Hashing first makes the comparison constant-time whatever the lengths.
+  const a = crypto.createHash('sha256').update(presented).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+function internalSecretOk(req: Request): boolean {
+  const expected = (process.env.INTERNAL_API_SECRET || '').trim();
+  const provided = req.headers['x-internal-secret'];
+  return Boolean(expected) && typeof provided === 'string' && provided.length > 0 && equalSecret(provided, expected);
+}
+
+function cronSecretOk(req: Request): boolean {
+  const expected = (process.env.CRON_SECRET || '').trim();
+  const auth = req.headers.authorization;
+  if (!expected || typeof auth !== 'string' || !/^bearer\s+/i.test(auth)) return false;
+  return equalSecret(auth.replace(/^bearer\s+/i, '').trim(), expected);
+}
+
+/** Automation callers only. */
 function requireInternalSecret(req: Request, res: Response, next: NextFunction) {
-  const expected = process.env.INTERNAL_API_SECRET;
-  if (!expected) {
+  if (!(process.env.INTERNAL_API_SECRET || '').trim()) {
     console.error('[internal] INTERNAL_API_SECRET is not set; refusing every internal call');
     return res.status(503).json({ error: 'Internal API is not configured' });
   }
-
-  const provided = req.headers['x-internal-secret'];
-  if (typeof provided !== 'string' || provided.length !== expected.length) {
-    console.warn('[internal] rejected a call with a missing or malformed secret');
+  if (!internalSecretOk(req)) {
+    console.warn('[internal] rejected a call with a missing or incorrect secret');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (!crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
-    console.warn('[internal] rejected a call with an incorrect secret');
+  next();
+}
+
+/** The scheduler, or an automation holding the internal secret. */
+function requireScheduler(req: Request, res: Response, next: NextFunction) {
+  const anyConfigured =
+    Boolean((process.env.CRON_SECRET || '').trim()) ||
+    Boolean((process.env.INTERNAL_API_SECRET || '').trim());
+  if (!anyConfigured) {
+    console.error('[internal] neither CRON_SECRET nor INTERNAL_API_SECRET is set; refusing scheduled work');
+    return res.status(503).json({ error: 'Scheduled jobs are not configured' });
+  }
+  if (!cronSecretOk(req) && !internalSecretOk(req)) {
+    console.warn('[internal] rejected a scheduled call with a missing or incorrect secret');
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
@@ -43,6 +79,11 @@ function requireInternalSecret(req: Request, res: Response, next: NextFunction) 
  * The tenant is derived from the channel row, so a caller that guesses a
  * channel id can still only ever reach that channel's own tenant — there is no
  * tenant id in the request to get wrong.
+ *
+ * The message is written to the conversation's transcript as well as sent. For
+ * web chat that row is the delivery itself (the widget polls the transcript and
+ * has no outbound API); for every other channel it is what makes the Inbox
+ * show what the customer was told.
  */
 internalRouter.post(
   '/internal/send',
@@ -75,136 +116,112 @@ internalRouter.post(
       return res.status(400).json({ error: `No provider handles ${channel.channel_type}` });
     }
 
+    const { data: convo } = await serviceClient
+      .from('conversations')
+      .select('id')
+      .eq('tenant_id', channel.tenant_id)
+      .eq('channel_type', channel.channel_type)
+      .eq('customer_id', recipient)
+      .maybeSingle();
+
+    const record = async (): Promise<boolean> => {
+      if (!convo) return false;
+      const { error } = await serviceClient.from('conversation_messages').insert({
+        tenant_id: channel.tenant_id,
+        conversation_id: convo.id,
+        sender: 'agent',
+        body: text,
+        extracted: { source: 'internal_send' },
+      });
+      if (error) {
+        console.error('[internal] could not record the outbound message:', error.message);
+        return false;
+      }
+      await serviceClient
+        .from('conversations')
+        .update({ last_message_at: new Date().toISOString(), last_message_preview: text.slice(0, 160) })
+        .eq('id', convo.id)
+        .eq('tenant_id', channel.tenant_id);
+      return true;
+    };
+
+    if (channel.channel_type === 'webchat') {
+      // No conversation means no visitor session to deliver into.
+      if (!convo) return res.status(404).json({ error: 'That chat session does not exist' });
+      if (!(await record())) return res.status(500).json({ error: 'Could not save the message' });
+      return res.json({ sent: true, recorded: true });
+    }
+
     try {
       await provider.sendMessage(channel.id, recipient, text, {
         tenantId: channel.tenant_id,
         userId: 'system',
       });
-      res.json({ sent: true });
     } catch (e) {
       if (e instanceof ProviderError) {
         console.warn(`[internal] send failed on ${channel.channel_type} (${e.code}): ${e.message}`);
         return res.status(e.status).json({ error: e.userMessage, code: e.code });
       }
       console.error('[internal] send failed:', e);
-      res.status(502).json({ error: 'Could not send the message' });
+      return res.status(502).json({ error: 'Could not send the message' });
     }
+
+    res.json({ sent: true, recorded: await record() });
   })
 );
 
 /**
  * Send the follow-ups that have come due.
  *
- * An agent never sends a message to a customer. It writes a row in follow_ups,
- * which a person can read and cancel, and this endpoint is what turns the ones
- * still standing into real messages. Calling it is n8n's job — a schedule is
- * exactly the kind of deterministic work the pipeline is good at, and keeping
- * it there means this application needs no timer of its own.
- *
  * Safe to call as often as you like: a row is claimed before it is sent, so two
- * overlapping runs cannot message the same customer twice.
+ * overlapping runs cannot message the same customer twice. POST is kept for
+ * existing automations; the GET under /internal/cron is what Vercel Cron calls.
  */
 internalRouter.post(
   '/internal/follow-ups/dispatch',
-  requireInternalSecret,
+  requireScheduler,
   handler(async (_req, res) => {
-    const { data: due, error } = await serviceClient
-      .from('follow_ups')
-      .select('id, tenant_id, conversation_id, customer_id, channel_type, message')
-      .eq('status', 'pending')
-      .lte('due_at', new Date().toISOString())
-      .order('due_at')
-      .limit(50);
-
-    if (error) {
-      console.error('[internal] could not read due follow-ups:', error.message);
-      return res.status(500).json({ error: 'Could not read the queue' });
+    try {
+      res.json(await dispatchDueFollowUps());
+    } catch {
+      res.status(500).json({ error: 'Could not read the queue' });
     }
-
-    let sent = 0;
-    let failed = 0;
-
-    for (const row of due ?? []) {
-      // Claim first. The status filter makes this the point at which one runner
-      // wins the row, so a second run finds nothing to do rather than sending
-      // the same message again.
-      const { data: claimed } = await serviceClient
-        .from('follow_ups')
-        .update({ status: 'sent', sent_at: new Date().toISOString() })
-        .eq('id', row.id)
-        .eq('status', 'pending')
-        .select('id')
-        .maybeSingle();
-
-      if (!claimed) continue;
-
-      const { data: channel } = await serviceClient
-        .from('channels')
-        .select('id, status')
-        .eq('tenant_id', row.tenant_id)
-        .eq('channel_type', row.channel_type)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      const provider = getProvider(row.channel_type);
-
-      if (!channel || !provider) {
-        await markFailed(row.id, 'That channel is no longer connected.');
-        failed++;
-        continue;
-      }
-
-      /**
-       * Write it into the transcript first, for two reasons. The Inbox should
-       * show what was said to a customer whichever way it was sent. And web
-       * chat has no outbound API at all — its widget polls this transcript, so
-       * for that channel the row *is* the delivery, and provider.sendMessage is
-       * correctly a no-op.
-       */
-      if (row.conversation_id) {
-        await serviceClient.from('conversation_messages').insert({
-          tenant_id: row.tenant_id,
-          conversation_id: row.conversation_id,
-          sender: 'agent',
-          body: row.message,
-          extracted: { follow_up: true },
-        });
-        await serviceClient
-          .from('conversations')
-          .update({
-            last_message_at: new Date().toISOString(),
-            last_message_preview: row.message.slice(0, 160),
-          })
-          .eq('id', row.conversation_id)
-          .eq('tenant_id', row.tenant_id);
-      } else if (row.channel_type === 'webchat') {
-        // Nothing to write to and nothing to send through.
-        await markFailed(row.id, 'That chat session has ended.');
-        failed++;
-        continue;
-      }
-
-      try {
-        await provider.sendMessage(channel.id, row.customer_id, row.message, {
-          tenantId: row.tenant_id,
-          userId: '',
-        });
-        sent++;
-      } catch (e) {
-        const reason = e instanceof ProviderError ? e.userMessage : 'The message could not be delivered.';
-        console.error('[internal] follow-up delivery failed:', e instanceof Error ? e.message : e);
-        await markFailed(row.id, reason);
-        failed++;
-      }
-    }
-
-    res.json({ due: (due ?? []).length, sent, failed });
   })
 );
 
-async function markFailed(id: string, reason: string): Promise<void> {
-  await serviceClient
-    .from('follow_ups')
-    .update({ status: 'failed', failure_reason: reason, updated_at: new Date().toISOString() })
-    .eq('id', id);
-}
+/**
+ * Scheduled: due follow-ups, plus inbound messages whose AI turn was cut off.
+ *
+ * Vercel Cron issues a GET. On the Hobby plan a cron runs at most daily, so
+ * this is the backstop; the same work also runs in small slices after each
+ * inbound webhook (see services/followUps.ts → housekeeping).
+ */
+internalRouter.get(
+  '/internal/cron/dispatch',
+  requireScheduler,
+  handler(async (_req, res) => {
+    const events = await retryInterruptedEvents(10).catch((e) => {
+      console.error('[internal] event retry failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    const followUps = await dispatchDueFollowUps({ limit: 25, budgetMs: 35_000 }).catch((e) => {
+      console.error('[internal] follow-up dispatch failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    res.json({ ok: true, events, follow_ups: followUps });
+  })
+);
+
+/** Scheduled: keep Instagram tokens alive and trim the idempotency table. */
+internalRouter.get(
+  '/internal/cron/maintenance',
+  requireScheduler,
+  handler(async (_req, res) => {
+    const instagram = await refreshInstagramTokens().catch((e) => {
+      console.error('[internal] token refresh failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    const prune = await pruneWebhookEvents().catch(() => ({ pruned: false }));
+    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune });
+  })
+);

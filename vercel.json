@@ -1,4 +1,19 @@
 {
+    "functions": {
+        "api/index.ts": {
+            "maxDuration": 60
+        }
+    },
+    "crons": [
+        {
+            "path": "/api/internal/cron/dispatch",
+            "schedule": "0 5 * * *"
+        },
+        {
+            "path": "/api/internal/cron/maintenance",
+            "schedule": "30 2 * * *"
+        }
+    ],
     "rewrites": [
         {
             "source": "/api/(.*)",

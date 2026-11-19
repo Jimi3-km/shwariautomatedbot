@@ -47,6 +47,9 @@ export function createOAuthState(payload: OAuthStatePayload): string {
 
 /** Returns the payload only when the signature is valid and still fresh. */
 export function verifyOAuthState(state: string, maxAgeMs = MAX_AGE_MS): OAuthStatePayload | null {
+  // With no secret there is nothing to verify against; a known fallback key
+  // would let anyone mint a state for any tenant.
+  if (!metaConfig.appSecret && !metaConfig.instagram.clientSecret) return null;
   const dot = state?.lastIndexOf('.') ?? -1;
   if (dot <= 0) return null;
 

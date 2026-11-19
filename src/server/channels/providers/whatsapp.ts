@@ -10,10 +10,12 @@ import {
   subscribeApp,
   listSubscribedApps,
   sendWhatsAppMessage,
+  sendWhatsAppTemplate,
   readSignupReturn,
   WhatsAppError,
 } from '../../services/meta/whatsapp.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
+import { chunkText, withRetry, lastInboundAt, windowIsOpen, TEXT_LIMITS } from '../outbound.js';
 import {
   ProviderError,
   ProviderNotConfiguredError,
@@ -220,15 +222,40 @@ export const whatsappProvider: ChannelProvider = {
     }
   },
 
+  /**
+   * Free-form text is only allowed within 24 hours of the customer's last
+   * message. Outside that window Meta rejects everything except an approved
+   * template, so a late message goes out as the configured template or fails
+   * with a reason a person can act on, never as a send that is known to bounce.
+   */
   async sendMessage(_channelId, recipientId, text, ctx) {
     const token = await loadToken(ctx.tenantId, 'whatsapp');
     if (!token?.phoneNumberId) throw new ProviderError('WhatsApp is not connected.', { status: 409 });
+    const phoneNumberId = token.phoneNumberId;
+
+    const open = windowIsOpen(await lastInboundAt(ctx.tenantId, 'whatsapp', recipientId));
+
     try {
-      await sendWhatsAppMessage(token.accessToken, token.phoneNumberId, recipientId, text);
+      if (!open) {
+        const template = followUpTemplate();
+        if (!template) {
+          throw new ProviderError(
+            "WhatsApp only allows free-form messages within 24 hours of the customer's last message. This customer hasn't written in that time, so the message was not sent.",
+            { status: 409, code: 'OUTSIDE_24H_WINDOW' }
+          );
+        }
+        await withRetry(() =>
+          sendWhatsAppTemplate(token.accessToken, phoneNumberId, recipientId, template, text)
+        );
+        return;
+      }
+
+      for (const part of chunkText(text, TEXT_LIMITS.whatsapp)) {
+        await withRetry(() => sendWhatsAppMessage(token.accessToken, phoneNumberId, recipientId, part));
+      }
     } catch (e) {
-      throw new ProviderError("We couldn't send that message on WhatsApp. Please try again.", {
-        status: 502, detail: e instanceof Error ? e.message : undefined,
-      });
+      if (e instanceof ProviderError) throw e;
+      throw describeSendFailure(e);
     }
   },
 
@@ -240,3 +267,59 @@ export const whatsappProvider: ChannelProvider = {
     return data ? toAccount(data) : null;
   },
 };
+
+/** The approved template used once the 24-hour window has closed, if any. */
+function followUpTemplate(): { name: string; language: string } | null {
+  const name = (process.env.WHATSAPP_FOLLOWUP_TEMPLATE || '').trim();
+  if (!name) return null;
+  return { name, language: (process.env.WHATSAPP_FOLLOWUP_TEMPLATE_LANG || 'en').trim() || 'en' };
+}
+
+/** Meta's numeric error codes, turned into something a business owner can act on. */
+function describeSendFailure(e: unknown): ProviderError {
+  const detail = e instanceof Error ? e.message : undefined;
+  const code = e instanceof WhatsAppError ? e.metaCode : undefined;
+
+  switch (code) {
+    case '131047':
+      return new ProviderError(
+        "WhatsApp rejected the message because the customer hasn't written in the last 24 hours.",
+        { status: 409, code: 'OUTSIDE_24H_WINDOW', detail }
+      );
+    case '131026':
+      return new ProviderError(
+        "That number can't receive WhatsApp messages right now.",
+        { status: 422, code: 'WHATSAPP_UNDELIVERABLE', detail }
+      );
+    case '131030':
+      return new ProviderError(
+        'That number is not on the allowed list for this WhatsApp test number.',
+        { status: 422, code: 'WHATSAPP_RECIPIENT_NOT_ALLOWED', detail }
+      );
+    case '190':
+      return new ProviderError(
+        'WhatsApp authorization has expired. Reconnect WhatsApp in Integrations.',
+        { status: 409, code: 'WHATSAPP_REAUTH_REQUIRED', detail }
+      );
+    case '4':
+    case '80007':
+    case '130429':
+    case '131048':
+    case '131056':
+      return new ProviderError(
+        'WhatsApp is limiting how fast we can send right now. Please try again shortly.',
+        { status: 429, code: 'WHATSAPP_RATE_LIMITED', detail }
+      );
+    case '132000':
+    case '132001':
+    case '132012':
+      return new ProviderError(
+        'The WhatsApp follow-up template is missing or does not match. Check WHATSAPP_FOLLOWUP_TEMPLATE.',
+        { status: 502, code: 'WHATSAPP_TEMPLATE_INVALID', detail }
+      );
+    default:
+      return new ProviderError("We couldn't send that message on WhatsApp. Please try again.", {
+        status: 502, code: 'WHATSAPP_SEND_FAILED', detail,
+      });
+  }
+}

@@ -175,3 +175,31 @@ export async function deleteToken(tenantId: string, platform: MetaPlatform): Pro
     throw new Error('Could not remove the platform credential');
   }
 }
+
+/**
+ * Replace only the token and its expiry, leaving the account ids on the row
+ * untouched. Used when a long-lived token is refreshed in place.
+ */
+export async function rotateToken(
+  tenantId: string,
+  platform: MetaPlatform,
+  accessToken: string,
+  expiresAt: Date | null
+): Promise<void> {
+  const { error } = await serviceClient
+    .from('meta_tokens')
+    .update({
+      access_token_encrypted: encryptToken(accessToken),
+      token_expires_at: expiresAt ? expiresAt.toISOString() : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('tenant_id', tenantId)
+    .eq('platform', platform);
+
+  if (error) {
+    console.error(`[meta/tokens] rotate failed for tenant ${tenantId}/${platform}:`, {
+      code: error.code, message: error.message,
+    });
+    throw new Error('Could not store the refreshed credential');
+  }
+}

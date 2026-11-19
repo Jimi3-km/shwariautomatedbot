@@ -23,7 +23,14 @@ const SCOPES = [
 ] as const;
 
 export interface InstagramProfile {
+  /** App-scoped id. Stable identity for sign-in. */
   id: string;
+  /**
+   * The professional account id (`user_id`). This, not `id`, is what Meta
+   * puts in a webhook's entry.id and what the messages endpoint is addressed
+   * by, so it is what a channel must be keyed on.
+   */
+  professionalAccountId?: string;
   username: string;
   accountType?: string;
   profilePictureUrl?: string;
@@ -38,6 +45,9 @@ export interface InstagramToken {
 export class InstagramOAuthError extends Error {
   readonly status: number;
   readonly metaCode?: string;
+  /** The HTTP status Meta actually answered with (status is our own mapping). */
+  httpStatus?: number;
+  metaSubcode?: string;
   constructor(message: string, status = 502, metaCode?: string) {
     super(message);
     this.name = 'InstagramOAuthError';
@@ -63,6 +73,9 @@ export function createState(): string {
 }
 
 export function verifyState(state: string, maxAgeMs = 10 * 60 * 1000): boolean {
+  // With no secret there is nothing to verify against; a known fallback key
+  // would let anyone mint a state that passes.
+  if (!metaConfig.instagram.clientSecret) return false;
   const parts = state?.split('.') ?? [];
   if (parts.length !== 3) return false;
   const [nonce, issued, mac] = parts;
@@ -100,17 +113,22 @@ export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
 async function readMetaError(res: Response, fallback: string): Promise<never> {
   let detail = fallback;
   let code: string | undefined;
+  let subcode: string | undefined;
   try {
     const body = (await res.json()) as {
       error_message?: string;
-      error?: { message?: string; code?: number };
+      error?: { message?: string; code?: number; error_subcode?: number };
     };
     detail = body.error_message ?? body.error?.message ?? fallback;
     code = body.error?.code != null ? String(body.error.code) : undefined;
+    subcode = body.error?.error_subcode != null ? String(body.error.error_subcode) : undefined;
   } catch {
     /* non-JSON error body */
   }
-  throw new InstagramOAuthError(detail, res.status === 400 ? 400 : 502, code);
+  const err = new InstagramOAuthError(detail, res.status === 400 ? 400 : 502, code);
+  err.httpStatus = res.status;
+  err.metaSubcode = subcode;
+  throw err;
 }
 
 /** Step 1: short-lived token (valid ~1 hour). */
@@ -200,7 +218,7 @@ export async function refreshLongLivedToken(
 
 export async function fetchProfile(accessToken: string): Promise<InstagramProfile> {
   const params = new URLSearchParams({
-    fields: 'id,username,account_type,profile_picture_url',
+    fields: 'id,user_id,username,account_type,profile_picture_url',
     access_token: accessToken,
   });
   const res = await fetch(`${INSTAGRAM_GRAPH_URL}/me?${params}`);
@@ -208,12 +226,14 @@ export async function fetchProfile(accessToken: string): Promise<InstagramProfil
 
   const json = (await res.json()) as {
     id: string;
+    user_id?: string | number;
     username: string;
     account_type?: string;
     profile_picture_url?: string;
   };
   return {
     id: json.id,
+    professionalAccountId: json.user_id != null ? String(json.user_id) : undefined,
     username: json.username,
     accountType: json.account_type,
     profilePictureUrl: json.profile_picture_url,
@@ -234,6 +254,26 @@ export async function sendInstagramMessage(
       authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) await readMetaError(res, 'Instagram rejected the outbound message');
+}
+
+/**
+ * Subscribe the connected professional account to this app's webhooks.
+ *
+ * With Instagram Login, authorizing the app is not enough: until the account
+ * is subscribed to the `messages` field, Meta delivers no DMs to the webhook
+ * and the channel looks connected while staying silent.
+ */
+export async function subscribeToMessages(accessToken: string): Promise<void> {
+  const params = new URLSearchParams({
+    subscribed_fields: 'messages',
+    access_token: accessToken,
+  });
+  const res = await fetch(`${INSTAGRAM_GRAPH_URL}/me/subscribed_apps?${params}`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) await readMetaError(res, 'Could not subscribe the Instagram account to messages');
 }

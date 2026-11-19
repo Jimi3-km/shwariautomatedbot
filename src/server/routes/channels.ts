@@ -2,12 +2,11 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth, requireAdmin, handler } from '../auth.js';
 import { serviceClient } from '../supabase.js';
+import { getWebhookInfo } from '../channels/telegram.js';
 import {
-  getMe, setWebhook, deleteWebhook, getWebhookInfo, generateSecretToken,
-} from '../channels/telegram.js';
-import {
-  allProviders, getProvider, ProviderError,
+  allProviders, getProvider, ProviderError, telegramProvider,
 } from '../channels/providers/index.js';
+import { webhookUrl as telegramWebhookUrl } from '../channels/providers/telegram.js';
 import { verifyOAuthState } from '../services/meta/oauthState.js';
 
 export const channelsRouter = Router();
@@ -21,8 +20,6 @@ function sendProviderError(res: Response, e: unknown, fallback: string) {
   console.error('[channels] unexpected provider failure:', e);
   return res.status(500).json({ error: fallback });
 }
-
-const N8N_TELEGRAM_WEBHOOK_URL = process.env.N8N_TELEGRAM_WEBHOOK_URL || '';
 
 /**
  * List connected channels.
@@ -48,87 +45,41 @@ channelsRouter.get(
 /**
  * Connect a Telegram bot.
  *
- * 1. accept the token over an authenticated request
- * 2. validate it with getMe
- * 3. mint a fresh webhook secret
- * 4. register the webhook against the n8n inbound endpoint
- * 5. store the channel row
- * 6. return metadata only -- the token never travels back to the browser
+ * Kept at this path for the existing Integrations screen, but it is now only a
+ * thin wrapper over the Telegram provider — the same code path as
+ * POST /channels/telegram/credentials. The bot's webhook is registered against
+ * this application (/api/webhooks/telegram), never against an external
+ * pipeline, and the token never travels back to the browser.
  */
 channelsRouter.post(
   '/channels/telegram',
   requireAuth,
   requireAdmin,
   handler(async (req, res) => {
-    const ctx = req.ctx!;
     const botToken = String(req.body?.bot_token || '').trim();
-
     if (!botToken) return res.status(400).json({ error: 'bot_token is required' });
-    if (!/^\d+:[A-Za-z0-9_-]{30,}$/.test(botToken)) {
-      return res.status(400).json({ error: 'That does not look like a Telegram bot token' });
-    }
-    if (!N8N_TELEGRAM_WEBHOOK_URL) {
-      return res.status(503).json({
-        error: 'N8N_TELEGRAM_WEBHOOK_URL is not configured on the server, so the webhook cannot be registered',
-        code: 'WEBHOOK_URL_MISSING',
+
+    try {
+      const { account } = await telegramProvider.submitCredentials!({ bot_token: botToken }, req.ctx!);
+      res.status(201).json({
+        account,
+        // The shape this route has always returned.
+        channel: {
+          id: account.channel_id,
+          tenant_id: req.ctx!.tenantId,
+          channel_type: 'telegram',
+          channel_account_id: account.account_id,
+          display_name: account.display_name,
+          status: account.status,
+        },
+        bot: {
+          id: Number(account.account_id),
+          username: account.display_name?.startsWith('@') ? account.display_name.slice(1) : null,
+        },
       });
+    } catch (e) {
+      sendProviderError(res, e, "We couldn't connect that bot. Please try again.");
     }
-
-    let bot;
-    try {
-      bot = await getMe(botToken);
-    } catch (e: any) {
-      return res.status(400).json({ error: `Telegram rejected that token: ${e.message}` });
-    }
-
-    const accountId = String(bot.id);
-
-    // channels has UNIQUE (channel_type, channel_account_id), so the same bot
-    // cannot be claimed by two tenants. Check first to give a clear error, and
-    // to make sure we never hand another tenant's bot to this one.
-    const { data: existing } = await serviceClient
-      .from('channels')
-      .select('id, tenant_id')
-      .eq('channel_type', 'telegram')
-      .eq('channel_account_id', accountId)
-      .maybeSingle();
-
-    if (existing && existing.tenant_id !== ctx.tenantId) {
-      return res.status(409).json({ error: 'That Telegram bot is already connected to another business' });
-    }
-
-    const secretToken = generateSecretToken();
-
-    try {
-      await setWebhook(botToken, N8N_TELEGRAM_WEBHOOK_URL, secretToken);
-    } catch (e: any) {
-      return res.status(502).json({ error: `Could not register the webhook with Telegram: ${e.message}` });
-    }
-
-    const row = {
-      tenant_id: ctx.tenantId,
-      channel_type: 'telegram' as const,
-      channel_account_id: accountId,
-      display_name: bot.username ? `@${bot.username}` : bot.first_name,
-      bot_token: botToken,
-      secret_token: secretToken,
-      status: 'active' as const,
-    };
-
-    // Service client: secret_token and bot_token are not writable by the
-    // authenticated role by design.
-    const { data, error } = existing
-      ? await serviceClient.from('channels').update(row).eq('id', existing.id)
-          .select('id, tenant_id, channel_type, channel_account_id, display_name, status, created_at').single()
-      : await serviceClient.from('channels').insert(row)
-          .select('id, tenant_id, channel_type, channel_account_id, display_name, status, created_at').single();
-
-    if (error) {
-      console.error('[channels] telegram save failed', error);
-      return res.status(500).json({ error: 'Could not save the channel' });
-    }
-
-    res.status(201).json({ channel: data, bot: { id: bot.id, username: bot.username } });
   })
 );
 
@@ -152,13 +103,14 @@ channelsRouter.get(
         status: channel.status,
         webhook: {
           configured: Boolean(info.url),
-          matches_expected: info.url === N8N_TELEGRAM_WEBHOOK_URL,
+          matches_expected: Boolean(info.url) && info.url === telegramWebhookUrl(),
           pending_update_count: info.pending_update_count,
           last_error_message: info.last_error_message ?? null,
         },
       });
-    } catch (e: any) {
-      res.status(502).json({ error: e.message });
+    } catch (e) {
+      console.warn('[channels] getWebhookInfo failed:', e instanceof Error ? e.message : e);
+      res.status(502).json({ error: "We couldn't reach Telegram just now. Try again in a moment." });
     }
   })
 );
@@ -258,7 +210,10 @@ channelsRouter.post(
     if (!provider?.submitCredentials) {
       return res.status(404).json({ error: 'Unknown channel.' });
     }
-    const values = (req.body ?? {}) as Record<string, string>;
+    const values: Record<string, string> = {};
+    for (const [key, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+      if (typeof value === 'string' && key.length <= 64 && value.length <= 4096) values[key] = value;
+    }
     try {
       const { account } = await provider.submitCredentials(values, req.ctx!);
       res.status(201).json({ account });
@@ -268,77 +223,15 @@ channelsRouter.post(
   })
 );
 
-/** Meta Embedded Signup (WhatsApp) */
-channelsRouter.post(
-  '/channels/meta/whatsapp',
-  requireAuth,
-  requireAdmin,
-  handler(async (req, res) => {
-    const { code } = req.body;
-    if (!code) return res.status(400).json({ error: 'OAuth code is required' });
-    
-    const { exchangeWhatsAppCode } = await import('../services/meta/embedded-signup.js');
-    try {
-      const result = await exchangeWhatsAppCode(code, req.ctx!.tenantId);
-      
-      // Upsert channel (use serviceClient to bypass column-level privileges on secret_token)
-      const { data, error } = await serviceClient
-        .from('channels')
-        .upsert({
-          tenant_id: req.ctx!.tenantId,
-          channel_type: 'whatsapp',
-          channel_account_id: result.phoneNumberId,
-          display_name: result.displayPhoneNumber,
-          secret_token: result.accessToken,
-          status: 'active'
-        })
-        .select()
-        .single();
-        
-      if (error) throw error;
-      res.status(201).json({ channel: data });
-    } catch (e: any) {
-      console.error('WhatsApp Embedded Signup failed:', e);
-      res.status(500).json({ error: e.message || 'Failed to complete WhatsApp connection' });
-    }
-  })
-);
-
-/** Meta Facebook Login for Business (Instagram) */
-channelsRouter.post(
-  '/channels/meta/instagram',
-  requireAuth,
-  requireAdmin,
-  handler(async (req, res) => {
-    const { accessToken } = req.body;
-    if (!accessToken) return res.status(400).json({ error: 'Access token is required' });
-    
-    const { linkInstagramAccount } = await import('../services/meta/embedded-signup.js');
-    try {
-      const result = await linkInstagramAccount(accessToken, req.ctx!.tenantId);
-      
-      // Upsert channel (use serviceClient to bypass column-level privileges on bot_token)
-      const { data, error } = await serviceClient
-        .from('channels')
-        .upsert({
-          tenant_id: req.ctx!.tenantId,
-          channel_type: 'instagram',
-          channel_account_id: result.igAccountId,
-          display_name: result.igUsername || result.igName,
-          bot_token: result.pageAccessToken, // Store page token here
-          status: 'active'
-        })
-        .select()
-        .single();
-        
-      if (error) throw error;
-      res.status(201).json({ channel: data });
-    } catch (e: any) {
-      console.error('Instagram connection failed:', e);
-      res.status(500).json({ error: e.message || 'Failed to complete Instagram connection' });
-    }
-  })
-);
+/*
+ * The former POST /channels/meta/whatsapp and POST /channels/meta/instagram
+ * routes were removed. They accepted a code or access token from the browser,
+ * stored the resulting Meta token in plaintext on the channel row and returned
+ * that whole row — token included — to the browser. WhatsApp and Instagram now
+ * connect only through the provider flow: POST /channels/:provider/connect
+ * returns Meta's authorize URL, and the callback below stores the token
+ * encrypted in meta_tokens.
+ */
 
 /**
  * OAuth return leg.

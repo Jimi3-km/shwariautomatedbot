@@ -52,12 +52,34 @@ export function createApp() {
       },
     })
   );
-  app.use(
-    cors({
-      origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
-      credentials: false,
-    })
-  );
+  /**
+   * CORS, in two tiers.
+   *
+   * Web chat is embedded on our customers' own websites, so its routes must
+   * answer any origin. They carry no dashboard session: a visitor is
+   * authenticated by a signed token scoped to one conversation.
+   *
+   * Everything else is the dashboard API. It is served from the same origin as
+   * the SPA, so it needs no CORS at all; other origins are allowed only if
+   * listed in CORS_ORIGIN. In production an unset CORS_ORIGIN means "same
+   * origin only" rather than "reflect whoever asks". Development stays
+   * permissive so a separately-served frontend works without ceremony.
+   */
+  const openCors = cors({ origin: true, credentials: false });
+  const allowed = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  const production = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  const dashboardCors = cors({
+    origin: allowed.length ? allowed : production ? false : true,
+    credentials: false,
+  });
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/webchat/')) return openCors(req, res, next);
+    return dashboardCors(req, res, next);
+  });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

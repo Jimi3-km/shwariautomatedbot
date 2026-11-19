@@ -10,8 +10,10 @@ import type { ProviderId } from '../providers/types.js';
  */
 export interface NormalizedInboundEvent {
   tenantId: string;
-  channelId: string;
-  channelType: ProviderId;
+  /** Null only for email, which has no channels row. */
+  channelId: string | null;
+  /** 'email' is inbound mail via Brevo; every other value is a provider. */
+  channelType: ProviderId | 'email';
   /** The provider's id for the customer, unique within this channel. */
   customerId: string;
   customerName: string | null;

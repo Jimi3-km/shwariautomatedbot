@@ -17,10 +17,12 @@ import { META_GRAPH_URL, META_GRAPH_VERSION, metaConfig } from '../../config/met
 
 export class WhatsAppError extends Error {
   readonly metaCode?: string;
-  constructor(message: string, metaCode?: string) {
+  readonly httpStatus?: number;
+  constructor(message: string, metaCode?: string, httpStatus?: number) {
     super(message);
     this.name = 'WhatsAppError';
     this.metaCode = metaCode;
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -36,7 +38,7 @@ async function graph<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error body */
     }
-    throw new WhatsAppError(detail, code);
+    throw new WhatsAppError(detail, code, res.status);
   }
   return (await res.json()) as T;
 }
@@ -223,5 +225,43 @@ export async function sendWhatsAppMessage(
       type: 'text',
       text: { body: text },
     }),
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+
+/**
+ * A pre-approved template message — the only kind WhatsApp accepts once the
+ * 24-hour customer-service window has closed.
+ *
+ * The template is expected to have exactly one body variable, {{1}}, which
+ * carries the text. Template parameters may not contain newlines, tabs or runs
+ * of more than four spaces, and are capped at 1024 characters, so the text is
+ * flattened to fit.
+ */
+export async function sendWhatsAppTemplate(
+  accessToken: string,
+  phoneNumberId: string,
+  to: string,
+  template: { name: string; language: string },
+  bodyText: string
+): Promise<void> {
+  const param = bodyText.replace(/\s+/g, ' ').trim().slice(0, 1024);
+  await graph(`/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }],
+      },
+    }),
+    signal: AbortSignal.timeout(15_000),
   });
 }

@@ -9,7 +9,8 @@
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node src/server/channels/__tests__/run-all.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",

@@ -13,6 +13,26 @@
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
+/**
+ * Everything interpolated into an HTML email body goes through this. Customer
+ * names, notes, product names and the model's own reply are all text someone
+ * else chose; unescaped, any of them could inject markup or a phishing link
+ * into mail sent under the business's name.
+ */
+export function esc(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Header values must be a single line; a stray CR/LF would inject a header. */
+function headerSafe(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').trim().slice(0, 500);
+}
+
 export interface EmailRecipient {
   email: string;
   name?: string;
@@ -158,30 +178,30 @@ export async function sendAppointmentConfirmation(opts: {
 <body>
   <div class="card">
     <div class="header">
-      <h1>${bName}</h1>
+      <h1>${esc(bName)}</h1>
     </div>
     <div class="body">
       <div class="badge">&#10003; Appointment Scheduled</div>
-      <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.5;">Hi <strong>${cName}</strong>,</p>
+      <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.5;">Hi <strong>${esc(cName)}</strong>,</p>
       <p style="margin: 0 0 20px; font-size: 14px; color: #475569; line-height: 1.5;">Your appointment has been successfully booked with our team. Here are the details:</p>
       
       <div class="details">
         <div class="detail-row">
           <span class="label">Service</span>
-          <span class="value">${opts.serviceName}</span>
+          <span class="value">${esc(opts.serviceName)}</span>
         </div>
         <div class="detail-row">
           <span class="label">Date & Time</span>
-          <span class="value">${formattedDate}</span>
+          <span class="value">${esc(formattedDate)}</span>
         </div>
         <div class="detail-row">
           <span class="label">Duration</span>
-          <span class="value">${opts.durationMinutes} minutes</span>
+          <span class="value">${esc(opts.durationMinutes)} minutes</span>
         </div>
         ${opts.notes ? `
         <div class="detail-row">
           <span class="label">Notes</span>
-          <span class="value">${opts.notes}</span>
+          <span class="value">${esc(opts.notes)}</span>
         </div>` : ''}
       </div>
 
@@ -190,7 +210,7 @@ export async function sendAppointmentConfirmation(opts: {
       </p>
     </div>
     <div class="footer">
-      Powered by ${bName} &bull; Automated Assistant
+      Powered by ${esc(bName)} &bull; Automated Assistant
     </div>
   </div>
 </body>
@@ -231,7 +251,7 @@ export async function sendOrderReceipt(opts: {
     .map(
       (it) => `
     <tr style="border-bottom: 1px solid #f1f5f9;">
-      <td style="padding: 10px 0; font-size: 14px; color: #1e293b;">${it.name} &times; ${it.quantity}</td>
+      <td style="padding: 10px 0; font-size: 14px; color: #1e293b;">${esc(it.name)} &times; ${it.quantity}</td>
       <td style="padding: 10px 0; font-size: 14px; color: #0f172a; text-align: right; font-weight: 500;">
         ${it.unitPrice ? `${currency} ${(it.unitPrice * it.quantity).toLocaleString()}` : '—'}
       </td>
@@ -259,11 +279,11 @@ export async function sendOrderReceipt(opts: {
 <body>
   <div class="card">
     <div class="header">
-      <h1>${bName}</h1>
+      <h1>${esc(bName)}</h1>
     </div>
     <div class="body">
-      <div class="order-badge">Order ${orderRef}</div>
-      <p style="margin: 0 0 16px; font-size: 15px;">Hi <strong>${cName}</strong>,</p>
+      <div class="order-badge">Order ${esc(orderRef)}</div>
+      <p style="margin: 0 0 16px; font-size: 15px;">Hi <strong>${esc(cName)}</strong>,</p>
       <p style="margin: 0 0 20px; font-size: 14px; color: #475569;">Thank you for your order! Here is your purchase summary:</p>
 
       <table>
@@ -277,16 +297,16 @@ export async function sendOrderReceipt(opts: {
           ${itemsHtml}
           <tr class="total-row">
             <td>Total</td>
-            <td style="text-align: right;">${currency} ${opts.totalAmount.toLocaleString()}</td>
+            <td style="text-align: right;">${esc(currency)} ${opts.totalAmount.toLocaleString()}</td>
           </tr>
         </tbody>
       </table>
 
-      ${opts.paymentMethod ? `<p style="font-size: 13px; color: #64748b; margin: 12px 0 0;">Payment: <strong>${opts.paymentMethod}</strong></p>` : ''}
-      ${opts.notes ? `<p style="font-size: 13px; color: #64748b; margin: 6px 0 0;">Notes: ${opts.notes}</p>` : ''}
+      ${opts.paymentMethod ? `<p style="font-size: 13px; color: #64748b; margin: 12px 0 0;">Payment: <strong>${esc(opts.paymentMethod)}</strong></p>` : ''}
+      ${opts.notes ? `<p style="font-size: 13px; color: #64748b; margin: 6px 0 0;">Notes: ${esc(opts.notes)}</p>` : ''}
     </div>
     <div class="footer">
-      Thank you for doing business with ${bName}!
+      Thank you for doing business with ${esc(bName)}!
     </div>
   </div>
 </body>
@@ -316,18 +336,22 @@ export async function sendAgentEmailReply(opts: {
   const bName = opts.businessName || 'Shwari AI Assistant';
   const cName = opts.customerName || '';
 
-  const subject = opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`;
+  const cleanSubject = headerSafe(opts.subject).slice(0, 200) || 'Your message';
+  const subject = /^re:/i.test(cleanSubject) ? cleanSubject : `Re: ${cleanSubject}`;
 
-  const headers: Record<string, string> = {};
+  // Marks this as a machine reply, which is what well-behaved auto-responders
+  // check before answering — one half of not ending up in a mail loop.
+  const headers: Record<string, string> = { 'Auto-Submitted': 'auto-replied' };
   if (opts.inReplyToMessageId) {
-    headers['In-Reply-To'] = opts.inReplyToMessageId;
-    headers['References'] = opts.inReplyToMessageId;
+    const ref = headerSafe(opts.inReplyToMessageId);
+    headers['In-Reply-To'] = ref;
+    headers['References'] = ref;
   }
 
   // Format line breaks for HTML email
   const formattedHtml = opts.replyText
     .split('\n\n')
-    .map((p) => `<p style="margin: 0 0 14px 0; line-height: 1.6;">${p.replace(/\n/g, '<br/>')}</p>`)
+    .map((p) => `<p style="margin: 0 0 14px 0; line-height: 1.6;">${esc(p).replace(/\n/g, '<br/>')}</p>`)
     .join('');
 
   const html = `
@@ -345,7 +369,7 @@ export async function sendAgentEmailReply(opts: {
   <div class="content">
     ${formattedHtml}
     <div class="signature">
-      <strong>${bName}</strong><br/>
+      <strong>${esc(bName)}</strong><br/>
       Automated AI Assistant
     </div>
   </div>

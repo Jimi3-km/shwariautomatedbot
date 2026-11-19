@@ -12,7 +12,23 @@ import { metaConfig } from '../../config/meta.js';
 /** 'ok' means verified; every other value is a rejection reason. */
 export type SignatureResult = 'ok' | 'not_configured' | 'missing' | 'malformed' | 'mismatch';
 
+/**
+ * The secrets a delivery may legitimately be signed with.
+ *
+ * WhatsApp (and Messenger-era Instagram) deliveries are signed with the Meta
+ * app secret. Instagram accounts connected through Instagram Login belong to
+ * the app's Instagram product, which has its own secret — and Meta signs those
+ * webhooks with that one. Accepting either keeps both products working; each
+ * is a secret only Meta and this server hold, so this does not weaken the check.
+ */
+function signingSecrets(): string[] {
+  return Array.from(
+    new Set([metaConfig.appSecret, metaConfig.instagram.clientSecret].filter(Boolean))
+  );
+}
+
 export function verifyMetaSignature(rawBody: Buffer | undefined, header: unknown): SignatureResult {
+  // The app secret remains mandatory: without it the webhook is not configured.
   if (!metaConfig.appSecret) return 'not_configured';
   if (!rawBody || rawBody.length === 0) return 'missing';
   if (typeof header !== 'string' || !header) return 'missing';
@@ -23,16 +39,16 @@ export function verifyMetaSignature(rawBody: Buffer | undefined, header: unknown
   const provided = header.slice('sha256='.length);
   if (!/^[0-9a-f]{64}$/i.test(provided)) return 'malformed';
 
-  const expected = crypto
-    .createHmac('sha256', metaConfig.appSecret)
-    .update(rawBody)
-    .digest('hex');
-
   // Equal lengths are guaranteed by the regex above, so timingSafeEqual cannot
-  // throw and the comparison stays constant-time.
+  // throw and each comparison stays constant-time. Every candidate is checked
+  // (no early exit) so timing does not reveal which secret matched.
   const a = Buffer.from(provided.toLowerCase(), 'hex');
-  const b = Buffer.from(expected, 'hex');
-  return crypto.timingSafeEqual(a, b) ? 'ok' : 'mismatch';
+  let matched = false;
+  for (const secret of signingSecrets()) {
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest();
+    if (crypto.timingSafeEqual(a, expected)) matched = true;
+  }
+  return matched ? 'ok' : 'mismatch';
 }
 
 /**
