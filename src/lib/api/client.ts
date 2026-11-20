@@ -174,7 +174,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const { data } = await getSupabase().auth.getSession();
   const token = data.session?.access_token;
 
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  // A file upload is sent as a form: the browser writes the multipart
+  // content-type (with its boundary) itself, so none is set here. Everything
+  // else about the call - the session token, the selected tenant - is the same.
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers: Record<string, string> = isForm ? {} : { 'content-type': 'application/json' };
   if (token) headers.authorization = `Bearer ${token}`;
   if (activeTenantId) headers['x-tenant-id'] = activeTenantId;
 
@@ -183,7 +187,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     res = await fetch(`/api${path}`, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.body === undefined ? undefined : isForm ? (options.body as FormData) : JSON.stringify(options.body),
       signal: options.signal,
     });
   } catch (err) {
@@ -215,6 +219,7 @@ function defaultMessage(status: number): string {
     case 403: return 'You do not have permission to do that.';
     case 404: return 'That item could not be found.';
     case 409: return 'That action conflicts with the current state.';
+    case 413: return 'That file is too large to upload.';
     case 501: return 'That feature is not available yet.';
     case 502: return 'An upstream service rejected the request.';
     default: return status >= 500 ? 'Something went wrong on our side.' : 'The request failed.';

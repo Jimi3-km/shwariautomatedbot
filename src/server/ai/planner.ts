@@ -41,6 +41,9 @@ const NEVER_PLANNED = new Set([
   'delegate_to_agent',
   'teach_team', 'forget_lesson', 'hand_to_department',
   'remove_products', 'remove_services',
+  // What the public sees is never decided by a batch: approving, changing or
+  // resuming posts goes through the conversation, where the owner says yes.
+  'approve_posts', 'update_scheduled_post', 'set_posting_schedule', 'pause_posting',
 ]);
 
 /**

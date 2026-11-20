@@ -149,6 +149,8 @@ WhatsApp and Instagram flows. Request:
 - `whatsapp_business_messaging`
 - `instagram_business_basic`
 - `instagram_business_manage_messages`
+- `instagram_business_content_publish` (publishing posts from the Marketing
+  calendar; see `docs/MARKETING.md`)
 
 Web chat and Telegram are unaffected and work for real customers throughout.
 

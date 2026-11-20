@@ -9,7 +9,10 @@ import { serviceClient } from '../supabase.js';
  * failing to announce something must not undo the thing itself.
  */
 
-export type NotificationKind = 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human';
+export type NotificationKind =
+  | 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human'
+  // Marketing (migration 0024 widens the check constraint to allow these).
+  | 'posts_to_approve' | 'post_published' | 'post_failed';
 
 export interface NotifyInput {
   tenantId: string;
@@ -45,6 +48,9 @@ export async function notify(input: NotifyInput): Promise<boolean> {
     if (!error) return true;
     if (error.code === '23505') return false; // already announced
     if (missing(error)) { available = false; return false; }
+    // 23514: the kind is newer than the table's check constraint (migration
+    // 0024 not applied). The event still happened; it is just not announced.
+    if (error.code === '23514') return false;
     console.warn('[notify] could not record a notification:', error.message);
     return false;
   } catch (e) {

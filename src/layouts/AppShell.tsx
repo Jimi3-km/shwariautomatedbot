@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal,
+  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone,
 } from 'lucide-react';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
@@ -27,6 +27,7 @@ const NAV: NavEntry[] = [
   { to: '/leads', label: 'Leads', icon: Users },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/services', label: 'Services', icon: Wrench },
+  { to: '/marketing', label: 'Marketing', icon: Megaphone },
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
   { to: '/appointments', label: 'Appointments', icon: CalendarDays },
   { to: '/support', label: 'Support', icon: LifeBuoy },

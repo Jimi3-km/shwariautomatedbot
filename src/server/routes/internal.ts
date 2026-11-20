@@ -9,6 +9,7 @@ import { planNurture } from '../services/nurture.js';
 import { learnFromStaffReplies, learnFromOwnMistakes } from '../ai/learning.js';
 import { retryInterruptedEvents } from '../services/pipeline.js';
 import { refreshInstagramTokens, pruneWebhookEvents } from '../services/maintenance.js';
+import { publishDuePosts, planDueWeeks } from '../services/marketing.js';
 
 export const internalRouter = Router();
 
@@ -235,7 +236,18 @@ internalRouter.get(
       console.error('[internal] follow-up dispatch failed:', e instanceof Error ? e.message : e);
       return null;
     });
-    res.json({ ok: true, events, nurture, follow_ups: followUps });
+    // Marketing. Publishing only ever reads approved posts whose time has come,
+    // and claims each one before posting, so overlapping runs post once. The
+    // weekly plan only proposes; it publishes nothing.
+    const posts = await publishDuePosts({ limit: 5, budgetMs: 12_000 }).catch((e) => {
+      console.error('[internal] post publishing failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    const postPlans = await planDueWeeks({ limit: 5, budgetMs: 6_000 }).catch((e) => {
+      console.error('[internal] weekly post planning failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    res.json({ ok: true, events, nurture, follow_ups: followUps, posts, post_plans: postPlans });
   })
 );
 

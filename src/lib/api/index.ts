@@ -10,6 +10,7 @@ import type {
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
   AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
+  ContentItem, ContentStatus, ScheduledPost, PostingSettings, PostingStatus, WeekPlan,
 } from '../../types';
 
 export * from './client';
@@ -192,7 +193,8 @@ export const getOnboardingState = () => request<OnboardingState>('/onboarding/st
 
 export interface AppNotification {
   id: string;
-  kind: 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human';
+  kind: 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human'
+    | 'posts_to_approve' | 'post_published' | 'post_failed';
   title: string;
   body: string;
   link: string | null;
@@ -425,3 +427,49 @@ export const labelAgentTurn = (
     body,
   });
 
+
+// ---------------------------------------------------------------------------
+// Marketing: the content library and the posting calendar
+// ---------------------------------------------------------------------------
+export const getContent = () =>
+  request<{ items: ContentItem[]; available: boolean }>('/content');
+
+/** Upload one photo or video with its details. The file never leaves this origin's API. */
+export const uploadContent = (form: FormData) =>
+  request<ContentItem>('/content', { method: 'POST', body: form });
+
+export const updateContent = (
+  id: string,
+  body: {
+    caption?: string; about?: string | null; product_id?: string | null; service_id?: string | null;
+    max_uses?: number | null; status?: ContentStatus;
+  }
+) => request<ContentItem>(`/content/${id}`, { method: 'PATCH', body });
+
+export const deleteContent = (id: string) =>
+  request<{ deleted: boolean; archived: boolean }>(`/content/${id}`, { method: 'DELETE' });
+
+/** `from` and `to` are wall-clock times in the business's timezone, e.g. 2026-11-23T00:00. */
+export const getPosts = (from: string, to: string) =>
+  request<{ posts: ScheduledPost[]; available: boolean }>(`/posts${qs({ from, to })}`);
+
+export const planWeekPosts = (from?: string) =>
+  request<WeekPlan>('/posts/plan-week', { method: 'POST', body: from ? { from } : {} });
+
+export const approvePosts = (body: { ids?: string[]; week_start?: string }) =>
+  request<{ approved: ScheduledPost[]; skipped: Array<{ id: string; why: string }>; approved_count: number }>(
+    '/posts/approve', { method: 'POST', body }
+  );
+
+export const updatePost = (
+  id: string,
+  body: { caption?: string; scheduled_for?: string; status?: 'rejected' | 'cancelled'; content_item_id?: string }
+) => request<ScheduledPost>(`/posts/${id}`, { method: 'PATCH', body });
+
+export const publishPostNow = (id: string) =>
+  request<{ outcome: string; post: ScheduledPost; message: string }>(`/posts/${id}/publish-now`, { method: 'POST', body: {} });
+
+export const getPostingSettings = () => request<PostingStatus>('/posting-settings');
+
+export const savePostingSettings = (body: Partial<PostingSettings>) =>
+  request<{ settings: PostingSettings }>('/posting-settings', { method: 'PUT', body });

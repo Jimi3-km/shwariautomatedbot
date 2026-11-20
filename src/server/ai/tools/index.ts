@@ -31,6 +31,10 @@ import {
   leadPipeline, reviewAgentQuality, resendReceipt,
 } from './growth.js';
 import { saveProducts, saveServices, removeProducts, removeServices } from './bulk.js';
+import {
+  listContentLibrary, proposeWeekPosts, listScheduledPosts, approvePostsTool,
+  updateScheduledPost, setPostingSchedule, pausePosting,
+} from './marketing.js';
 
 /**
  * The tool catalogue.
@@ -60,6 +64,8 @@ const ALL: Tool[] = [
   getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
   leadPipeline, reviewAgentQuality, resendReceipt,
   saveProducts, saveServices, removeProducts, removeServices,
+  listContentLibrary, proposeWeekPosts, listScheduledPosts, approvePostsTool,
+  updateScheduledPost, setPostingSchedule, pausePosting,
 ];
 
 export const TOOLS: Map<string, Tool> = new Map(ALL.map((t) => [t.name, t]));

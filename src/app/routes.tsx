@@ -17,6 +17,7 @@ const Leads = lazyPage(() => import('../pages/Leads'), 'Leads');
 const LeadDetail = lazyPage(() => import('../pages/LeadDetail'), 'LeadDetail');
 const Products = lazyPage(() => import('../pages/Products'), 'Products');
 const Services = lazyPage(() => import('../pages/Services'), 'Services');
+const Marketing = lazyPage(() => import('../pages/Marketing'), 'Marketing');
 const Orders = lazyPage(() => import('../pages/Orders'), 'Orders');
 const Payments = lazyPage(() => import('../pages/Payments'), 'Payments');
 const Analytics = lazyPage(() => import('../pages/Analytics'), 'Analytics');
@@ -113,6 +114,7 @@ export const router = createBrowserRouter([
       { path: 'leads/:leadId', element: page(<LeadDetail />) },
       { path: 'products', element: page(<Products />) },
       { path: 'services', element: page(<Services />) },
+      { path: 'marketing', element: page(<Marketing />) },
       { path: 'orders', element: page(<Orders />) },
       { path: 'appointments', element: page(<Appointments />) },
       { path: 'support', element: page(<Tickets />) },

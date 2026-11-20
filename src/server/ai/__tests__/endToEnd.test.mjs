@@ -857,8 +857,11 @@ await t('an out-of-range memory window is refused before any write', async () =>
 console.log('\n--- the lines Shwari must not cross ---');
 
 await t('no tool can verify or reject a payment', () => {
+  // approve_posts approves posts on the marketing calendar, on the owner's
+  // word. It is the one name allowed through, and marketing.test.mjs checks it
+  // never touches a payment.
   for (const name of TOOLS.keys()) {
-    assert.ok(!/verify|reject|approve/.test(name) || name === 'setup_status',
+    assert.ok(!/verify|reject|approve/.test(name) || name === 'setup_status' || name === 'approve_posts',
       `${name} would let an agent decide a payment; only a person may`);
   }
 });

@@ -600,3 +600,73 @@ export interface ServiceInput {
   booking_mode?: BookingMode;
   active?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Marketing: the content library and the posting calendar
+// ---------------------------------------------------------------------------
+export type ContentStatus = 'draft' | 'approved' | 'archived';
+export type PostStatus =
+  | 'proposed' | 'approved' | 'publishing' | 'published' | 'failed' | 'rejected' | 'cancelled';
+export type ApprovalMode = 'week' | 'each' | 'autopilot';
+
+export interface ContentItem {
+  id: string;
+  media_url: string;
+  media_type: 'image' | 'video';
+  caption: string;
+  product_id: string | null;
+  service_id: string | null;
+  about: string | null;
+  platforms: string[];
+  status: ContentStatus;
+  max_uses: number | null;
+  times_used: number;
+  last_used_at: string | null;
+  created_at: string;
+  /** Why a person should read the caption before it is posted, if anything. */
+  review_reason?: string | null;
+  note?: string;
+}
+
+export interface ScheduledPost {
+  id: string;
+  content_item_id: string | null;
+  platform: string;
+  caption: string;
+  media_url: string;
+  media_type: 'image' | 'video';
+  about: string | null;
+  scheduled_for: string;
+  status: PostStatus;
+  needs_review_reason: string | null;
+  approved_at: string | null;
+  published_at: string | null;
+  external_permalink: string | null;
+  failure_reason: string | null;
+  week_start: string | null;
+}
+
+export interface PostingSlot { day: number; time: string }
+
+export interface PostingSettings {
+  approval_mode: ApprovalMode;
+  paused: boolean;
+  slots: PostingSlot[];
+}
+
+export interface PostingStatus {
+  settings: PostingSettings;
+  instagram: { connected: boolean; username: string | null; can_publish: boolean | null; expired: boolean };
+  timezone: string | null;
+}
+
+export interface WeekPlan {
+  week_start: string;
+  mode: ApprovalMode;
+  paused: boolean;
+  proposed: ScheduledPost[];
+  already_planned: number;
+  unfilled: Array<{ scheduled_for: string; when: string; why: string }>;
+  library: { approved: number; usable: number };
+  note?: string;
+}

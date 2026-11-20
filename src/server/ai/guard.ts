@@ -52,7 +52,15 @@ const ACTION_CLAIMS: Array<{ pattern: RegExp; backedBy: string[]; what: string }
   {
     what: 'a booking',
     pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|gone ahead and\s+)?(?:booked|scheduled|reserved|pencilled|rescheduled|moved your (?:appointment|booking))\b|\b(?:your|the|an?|this) (?:appointment|booking|consultation|slot|session)\b[^.!?\n]{0,40}?\b(?:is|has been|was|have been) (?:now\s+|successfully\s+)?(?:booked|confirmed|scheduled|reserved|set|moved|rescheduled)\b|\byou(?:'re| are) (?:all\s+)?(?:booked|booked in|confirmed|set) for\b|\bnimeku(?:wekea|book)\w*/i,
-    backedBy: ['book_appointment', 'reschedule_appointment', 'list_appointments', 'get_customer_history', 'delegate_to_agent'],
+    // "I've scheduled the post for Friday" reads like a booking; the posting
+    // tools back it just as the diary tools back a real one.
+    backedBy: ['book_appointment', 'reschedule_appointment', 'list_appointments', 'get_customer_history', 'delegate_to_agent',
+      'propose_week_posts', 'update_scheduled_post', 'approve_posts', 'list_scheduled_posts'],
+  },
+  {
+    what: 'a post being approved, changed or published',
+    pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|gone ahead and\s+)?(?:approved|posted|published|proposed|paused|resumed|rejected)\b[^.!?\n]{0,60}\b(?:posts?|posting|captions?|calendar|instagram|week)\b|\b(?:posts?|week|calendar)\b[^.!?\n]{0,40}\b(?:is|are|has been|have been|was|were) (?:now\s+|all\s+|successfully\s+)?(?:approved|posted|published|live)\b|\bposting (?:is|has been) (?:now\s+)?(?:paused|resumed)\b/i,
+    backedBy: ['propose_week_posts', 'approve_posts', 'update_scheduled_post', 'list_scheduled_posts', 'pause_posting', 'set_posting_schedule'],
   },
   {
     what: 'a cancellation',

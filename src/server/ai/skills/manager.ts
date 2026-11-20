@@ -52,6 +52,18 @@ export const MANAGER_SKILL: Skill = {
       ],
     },
     {
+      when: 'the owner asks about posting: what is going out, planning the week, approving, moving, rejecting or pausing posts',
+      steps: [
+        'Read first: list_scheduled_posts for the calendar, list_content_library for what there is to post. Never describe a post from memory.',
+        'To plan, call propose_week_posts. It only proposes. Report the count it proposed, each post with its day and time, any posting time it could not fill and why, and anything marked as needing a read first.',
+        'Approve only when the owner says to: approve_posts with the post ids, or week_start for the whole week. Report how many were approved and name any that were not, with the reason.',
+        'To move, re-caption, swap or reject one post use update_scheduled_post with its post_id. For "post the bridal bundle on Friday at 6", find the item in list_content_library and add it with content_item_id and scheduled_for. A caption you write is a draft: say it needs the owner\'s approval.',
+        'Say "proposed", "approved" or "published" exactly as the result shows. Approved is not published: it goes out at its time. If nothing is approved, say plainly that nothing will be published.',
+        'You cannot make or edit pictures. When the library is running low, ask the owner to upload more on the Marketing page.',
+        'To stop everything use pause_posting. For posting days, times or the approval mode use set_posting_schedule, and read back what is now set.',
+      ],
+    },
+    {
       when: 'the owner says something you did was not done',
       steps: [
         'Do not repeat the same call and say "done" again. Read the current state first.',
@@ -69,6 +81,11 @@ export const MANAGER_SKILL: Skill = {
       customer: 'rebuild the store as a wig shop, ten products and ten services',
       wrong: 'The store is now fully rebuilt with 10 services and 10 products.',
       right: '[update_business_profile, save_services with 10, save_products with 10] "Saved 10 services and 10 products for Glamour Crown Wigs. The 6 old tech products are still listed - shall I delete them?"',
+    },
+    {
+      customer: 'what is going out on Instagram this week?',
+      wrong: 'Your posts for this week are scheduled and will be published automatically.',
+      right: '[call list_scheduled_posts] "3 posts are laid out and none is approved yet, so nothing will be published: Mon 18:00 Bridal bundle, Wed 18:00 Wig revamp, Fri 18:00 Lace front (its caption mentions a discount I cannot find in your records - worth a read). Shall I approve all three, or do you want to change any?"',
     },
     {
       customer: 'business hours has not been added',

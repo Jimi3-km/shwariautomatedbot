@@ -84,8 +84,10 @@ export const instagramProvider: ChannelProvider = {
 
     let profile;
     let longLived;
+    let granted: string[] | null = null;
     try {
       const shortLived = await exchangeCodeForToken(code, metaConfig.instagram.connectRedirectUri);
+      granted = shortLived.permissions ?? null;
       longLived = await exchangeForLongLivedToken(shortLived.accessToken);
       profile = await fetchProfile(longLived.accessToken);
     } catch (e) {
@@ -139,6 +141,8 @@ export const instagramProvider: ChannelProvider = {
       expiresAt: longLived.expiresAt,
       instagramUserId: accountId,
       instagramUsername: profile.username,
+      // What was granted, so the Marketing page can say whether posting is allowed.
+      scopes: granted,
     });
 
     const row = {

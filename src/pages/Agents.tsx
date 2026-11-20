@@ -106,6 +106,13 @@ const CAPABILITY_LABELS: Record<string, string> = {
   remove_products: 'Delete products',
   remove_services: 'Stop offering several services',
   resend_receipt: 'Send a receipt again',
+  list_content_library: 'See the photos and videos you uploaded for posting',
+  propose_week_posts: 'Lay out a week of posts for you to approve',
+  list_scheduled_posts: 'Read the posting calendar',
+  approve_posts: 'Approve posts when you say so',
+  update_scheduled_post: 'Edit, move, swap or reject a post',
+  set_posting_schedule: 'Set your posting days and approval mode',
+  pause_posting: 'Pause or resume posting',
 };
 
 export function Agents() {

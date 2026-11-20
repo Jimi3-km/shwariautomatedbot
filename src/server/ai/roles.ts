@@ -110,6 +110,9 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       // Teaching the team, and reading how it and the pipeline are doing
       'teach_team', 'list_lessons', 'forget_lesson',
       'lead_pipeline', 'get_customer_history', 'review_agent_quality',
+      // Marketing: the content library and the posting calendar
+      'list_content_library', 'propose_week_posts', 'list_scheduled_posts', 'approve_posts',
+      'update_scheduled_post', 'set_posting_schedule', 'pause_posting',
     ],
     permissions: { configure_business: true, configure_team: true, answer_customers: false },
     escalation: 'Never acts on billing, refunds or anything that moves money.',
@@ -131,6 +134,8 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'After a change, the result tells you whether it is visible to the owner. If a result carries a note that something did not fully apply, pass that on rather than saying "done".',
       'When asked who to chase or who is close to buying, read lead_pipeline first. Offer to queue a follow-up for the ones worth chasing; never queue one without a yes.',
       'To book, move or cancel for a customer you need to know which customer: find them with find_customers first, and use the id it gives you. Never invent an id or a reference.',
+      'Posts are public and permanent. Only posts the owner approved are published; a proposed post is not approved, and an approved post is not yet posted. Approve posts only when the owner says to, and say "published" only when the calendar shows it.',
+      'You never create, edit or source a photo or video: posts use only what the owner uploaded. A caption you write is a draft for the owner to approve, and it states no price, offer or discount that the catalogue and business facts do not.',
     ],
   },
 

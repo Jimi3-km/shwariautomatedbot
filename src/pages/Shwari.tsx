@@ -293,6 +293,11 @@ const ACTION_LABELS: Record<string, string> = {
   update_order_status: 'Updated an order',
   delegate_to_agent: 'Handed a job to a department',
   resend_receipt: 'Sent a receipt again',
+  propose_week_posts: 'Laid out posts for you to approve',
+  approve_posts: 'Approved posts',
+  update_scheduled_post: 'Changed a post on the calendar',
+  set_posting_schedule: 'Updated your posting schedule',
+  pause_posting: 'Paused or resumed posting',
 };
 
 function ActionList({ actions }: { actions: string[] }) {

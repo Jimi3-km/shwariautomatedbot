@@ -16,10 +16,19 @@ import {
  * return Meta's own error verbatim until the app is reviewed.
  */
 
-/** Scopes for reading the profile and handling DMs. */
+/** The scope that lets the app publish posts. Needs App Review for non-test users. */
+export const INSTAGRAM_PUBLISH_SCOPE = 'instagram_business_content_publish';
+
+/**
+ * Scopes for reading the profile, handling DMs and publishing posts.
+ *
+ * An account connected before the publish scope was added has to be
+ * reconnected once to grant it: a token never gains a scope after the fact.
+ */
 const SCOPES = [
   'instagram_business_basic',
   'instagram_business_manage_messages',
+  INSTAGRAM_PUBLISH_SCOPE,
 ] as const;
 
 export interface InstagramProfile {
@@ -40,6 +49,8 @@ export interface InstagramToken {
   accessToken: string;
   userId: string;
   expiresAt: Date | null;
+  /** What the person actually granted, when Meta says. Null when it did not. */
+  permissions?: string[] | null;
 }
 
 export class InstagramOAuthError extends Error {
@@ -161,9 +172,10 @@ export async function exchangeCodeForToken(
    * reading only the flat one silently yields an undefined token.
    */
   const json = (await res.json()) as {
-    data?: Array<{ access_token?: string; user_id?: number | string; permissions?: string }>;
+    data?: Array<{ access_token?: string; user_id?: number | string; permissions?: string | string[] }>;
     access_token?: string;
     user_id?: number | string;
+    permissions?: string | string[];
   };
 
   const grant = json.data?.[0] ?? json;
@@ -174,7 +186,16 @@ export async function exchangeCodeForToken(
     accessToken: grant.access_token,
     userId: String(grant.user_id ?? ''),
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    permissions: readPermissions(grant.permissions),
   };
+}
+
+/** Meta sends the granted permissions as a list or as one comma-separated string. */
+function readPermissions(raw: unknown): string[] | null {
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : null;
+  if (!list) return null;
+  const clean = list.map((p) => String(p).trim()).filter(Boolean);
+  return clean.length ? clean : null;
 }
 
 /** Step 2: upgrade to a ~60-day long-lived token. */
