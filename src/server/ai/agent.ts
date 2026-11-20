@@ -10,7 +10,7 @@ import type { Role } from '../auth.js';
 import { isComplexCommand, createAndExecutePlan } from './planner.js';
 import { logAgentTurn } from '../security/eval.js';
 import { checkReply, correctionMessage, honestHoldingReply, humanizeReply } from './guard.js';
-import { recordSignals, signalsBlock } from './signals.js';
+import { recordSignals, signalsBlock, detectIntent, type Intent } from './signals.js';
 import { loadLessons } from './learning.js';
 
 /**
@@ -302,6 +302,32 @@ async function orientation(tenantId: string, role: AgentRole): Promise<Orientati
   );
 
   return { text: lines.join('\n'), timezone };
+}
+
+/**
+ * What to read before the model is asked anything.
+ *
+ * In production the model answered twenty customer messages and called a tool
+ * for three of them: prices, free times and "we don't offer that" all came
+ * from memory. Telling it to look things up was not enough, so the lookup is
+ * no longer its decision. What the customer is asking about decides which
+ * records are read, the runtime reads them, and the model starts the turn with
+ * the facts already in front of it.
+ */
+const PREREAD: Record<Intent, string[]> = {
+  pricing: ['list_products', 'list_services'],
+  buying: ['list_products', 'list_services', 'get_customer_history'],
+  booking: ['list_services', 'list_appointments', 'get_opening_hours', 'get_customer_history'],
+  cancelling: ['get_customer_history'],
+  paying: ['get_payment_instructions', 'get_customer_history'],
+  order_status: ['get_customer_history'],
+  complaint: ['get_customer_history'],
+  question: ['list_services', 'list_products', 'get_opening_hours'],
+  greeting: [],
+};
+
+export function prereadFor(intent: Intent, allowed: string[]): string[] {
+  return (PREREAD[intent] ?? []).filter((name) => allowed.includes(name) && TOOLS.has(name));
 }
 
 /**
@@ -655,9 +681,26 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const actions: string[] = [];
   /** Every tool that succeeded, reads included: what a claim in the reply can rest on. */
   const okTools: string[] = [];
+  /** The subset the agent chose to call itself, as opposed to records read for it up front. */
+  const actedTools: string[] = [];
   const toolNames = [...TOOLS.keys()];
-  let corrected = false;
+  let corrections = 0;
+  /** Set when the last draft announced or claimed work: the next call must be a tool call. */
+  let forceTool = false;
   let warnedOutOfSteps = false;
+
+  if (customerFacing && input.conversationId) {
+    const wanted = prereadFor(signals?.intent ?? detectIntent(input.text), ctx.allowedTools);
+    if (wanted.length) {
+      const calls = wanted.map((name, i) => ({ id: `pre_${i}`, name, argumentsJson: '{}' }));
+      const results = await Promise.all(calls.map((c) => runTool(TOOLS, c.name, c.argumentsJson, ctx)));
+      messages.push({ role: 'assistant', content: null, toolCalls: calls });
+      calls.forEach((c, i) => {
+        if (results[i].ok) okTools.push(c.name);
+        messages.push({ role: 'tool', toolCallId: c.id, content: fitToolResult(results[i].payload, 3500) });
+      });
+    }
+  }
   const maxRounds = role === 'manager' ? MANAGER_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
   const profile: ModelProfile = (role === 'booking' || role === 'orders') ? 'fast' : 'primary';
   const model = settings?.model ?? undefined;
@@ -690,6 +733,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       result = await complete({
         messages,
         tools: lastRound ? undefined : definitions,
+        ...(forceTool && !lastRound ? { toolChoice: 'required' as const } : {}),
         // Warm rather than clinical. Low enough that it does not improvise
         // facts, high enough that it does not answer the same way every time.
         temperature: customerFacing ? 0.5 : 0.4,
@@ -710,6 +754,8 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       throw e;
     }
 
+    forceTool = false;
+
     if (!result.toolCalls.length) {
       const draft = result.text?.trim();
       if (!draft) {
@@ -721,20 +767,25 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       // The behaviour check: nothing goes out claiming work that was not done,
       // confirming a payment, or exposing how the system works.
       const check = checkReply({
-        reply: draft, okTools, toolNames, customerFacing,
+        reply: draft, okTools, actedTools, toolNames, customerFacing,
         // Only the manager is held to "you were asked to do something".
         ...(role === 'manager' ? { request: input.text } : {}),
       });
       if (!check.ok) {
-        const canRetry = !corrected && !lastRound && deadlineAt - Date.now() > FINAL_ANSWER_RESERVE_MS;
+        // Two chances. The second time the model is not asked nicely: if it
+        // announced or claimed work, its next output has to be a tool call.
+        const canRetry = corrections < 2 && !lastRound && deadlineAt - Date.now() > FINAL_ANSWER_RESERVE_MS;
         if (canRetry) {
-          corrected = true;
-          flags.push('self_corrected', ...check.issues);
+          corrections++;
+          forceTool = check.issues.some((i) =>
+            i === 'stalling' || i === 'unbacked_action' || i === 'no_work_done' || i === 'ungrounded' || i === 'unverified_state');
+          if (!flags.includes('self_corrected')) flags.push('self_corrected');
+          for (const issue of check.issues) if (!flags.includes(issue)) flags.push(issue);
           messages.push({ role: 'assistant', content: draft });
           messages.push({ role: 'user', content: correctionMessage(check) });
           continue;
         }
-        const serious = ['unbacked_action', 'confirms_payment', 'raw_data', 'no_work_done', 'unverified_state'] as const;
+        const serious = ['unbacked_action', 'confirms_payment', 'raw_data', 'no_work_done', 'unverified_state', 'stalling', 'ungrounded'] as const;
         // Out of steps is not a false claim: the progress report stands.
         const outOfSteps = warnedOutOfSteps && !check.issues.some((i) => i === 'unbacked_action' || i === 'confirms_payment' || i === 'raw_data');
         if (!outOfSteps && check.issues.some((i) => (serious as readonly string[]).includes(i))) {
@@ -757,7 +808,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       const repeated = Boolean(
         outcome.payload && typeof outcome.payload === 'object' && (outcome.payload as any).already_done
       );
-      if (outcome.ok) okTools.push(call.name);
+      if (outcome.ok) { okTools.push(call.name); actedTools.push(call.name); }
       if (outcome.ok && !repeated && TOOLS.get(call.name)?.mutates) actions.push(call.name);
       messages.push({
         role: 'tool',

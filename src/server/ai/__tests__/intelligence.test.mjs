@@ -317,16 +317,17 @@ await t('a reply claiming a booking is held back and the agent is made to do it'
 await t('if the second draft still claims it, an honest line is sent instead', async () => {
   reset();
   rows = baseRows('booking');
-  script = [says("I've booked you in for 10am."), says('Your appointment is confirmed for 10am.')];
+  script = [says("I've booked you in for 10am."), says('Your appointment is confirmed for 10am.'), says("You're booked in for 10am.")];
   const out = await runAgentTurn({ tenantId: 't1', role: 'booking', userId: null, conversationId: 'c1', text: 'yes' });
   assert.ok(!/booked|confirmed for/i.test(out.reply), out.reply);
+  assert.equal(requests[1].tool_choice, 'required', 'after a false claim the next step must be a tool call');
 });
 
 await t('the lead is scored on every customer turn', async () => {
   reset();
   rows = baseRows('sales');
   rows['GET conversation_messages'] = [msg('customer', 'how much is the facial? I need it today')];
-  script = [says('Let me check that for you.')];
+  script = [says('Which facial are you after?')];
   await runAgentTurn({ tenantId: 't1', role: 'sales', userId: null, conversationId: 'c1', text: 'how much is the facial? I need it today' });
   const write = db.find((r) => r.table === 'leads' && r.method === 'PATCH');
   assert.ok(write, 'the lead was not updated');
@@ -511,6 +512,7 @@ await t('a claim about the catalogue with nothing read is not sent', async () =>
   script = [
     says('The store is now fully rebuilt with 10 services and 10 products.'),
     says('Everything is in place: 10 services and 10 products.'),
+    says('All 10 services and 10 products are there.'),
   ];
   const out = await runAgentTurn({ ...OWNER, text: 'ok thanks, looks good?' });
   assert.ok(!/10 (services|products)/.test(out.reply), out.reply);
@@ -633,6 +635,117 @@ await t('a months-old conversation is not replayed, and the greeting is not sent
 
 await t('"the appointment has been booked" with no booking made is caught', () => {
   assert.ok(check('The appointment has been booked for Friday at 4pm with the Calendar Management Agent.').issues.includes('unbacked_action'));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- acting instead of announcing ---');
+
+const { skillBlock, SKILLS } = await import('../skills/index.js');
+const { prereadFor } = await import('../agent.js');
+const { learnFromOwnMistakes } = await import('../learning.js');
+
+await t('announcing work is caught; asking, offering and waiting on them are not', () => {
+  for (const stall of [
+    'I need to check the calendar for Saturday at 2:00 PM availability first. Let me look.',
+    "I'll check available times for the Wig Revamp service. Let me look at the calendar.",
+    'I need to use the reschedule tool to move your appointment. Let me do that now.',
+    "Saturday at 2:00 PM is available. I'll reschedule your appointment to Saturday at 2:00 PM.",
+    'One moment please.',
+    'Ngoja kidogo, wacha nicheki.',
+  ]) {
+    assert.ok(check(stall, ['list_appointments']).issues.includes('stalling'), stall);
+  }
+  for (const fine of [
+    'I can do Friday at 10am or 2pm. Which suits you?',
+    "Once you confirm the time, I'll book it.",
+    'Would you like me to book that for you?',
+    "To place the order I'll need your phone number and delivery location.",
+    'What new time would you prefer?',
+  ]) {
+    assert.ok(!check(fine, ['list_appointments']).issues.includes('stalling'), fine);
+  }
+  assert.ok(!check("I've moved it - let me know if Saturday still works.", ['reschedule_appointment']).issues.includes('stalling'), 'not a stall once the work is done');
+});
+
+await t('a price, a time or "we don\'t offer that" with nothing read is caught', () => {
+  assert.ok(check('The Brazilian wig is KES 30,000.').issues.includes('ungrounded'));
+  assert.ok(check("We don't have a wig cleaning service listed.").issues.includes('ungrounded'));
+  assert.ok(check('I have availability on Friday at 10am.').issues.includes('ungrounded'));
+  assert.ok(check('The Brazilian wig is KES 30,000.', ['list_products']).ok);
+  assert.ok(check('Hi Jane! How can I help today?').ok);
+});
+
+await t('the records a message needs are read before the model is asked', async () => {
+  assert.deepEqual(prereadFor('booking', AGENT_BLUEPRINTS.booking.tools),
+    ['list_services', 'list_appointments', 'get_opening_hours', 'get_customer_history']);
+  assert.deepEqual(prereadFor('greeting', AGENT_BLUEPRINTS.booking.tools), []);
+  assert.ok(!prereadFor('paying', ['list_services']).length, 'only tools this agent holds');
+
+  reset();
+  rows = baseRows('sales');
+  rows['GET products'] = [{ id: 'p1', name: 'Brazilian Wig - Body Wave', price: 28000, currency: 'KES', in_stock: true }];
+  script = [says('The Brazilian Body Wave is KES 28,000. Want me to put one aside?')];
+  const out = await runAgentTurn({ tenantId: 't1', role: 'sales', userId: null, conversationId: 'c1', text: 'how much is the brazilian wig' });
+  assert.match(out.reply, /28,000/);
+  assert.equal(requests.length, 1, 'no extra model round was needed');
+  const sent = requests[0].messages;
+  const pre = sent.find((m) => m.role === 'assistant' && m.tool_calls);
+  assert.ok(pre && pre.tool_calls.some((c) => c.function.name === 'list_products'), 'the catalogue was not read up front');
+  assert.ok(sent.some((m) => m.role === 'tool' && String(m.content).includes('Body Wave')), 'the result was not handed to the model');
+});
+
+await t('a stalled reschedule is forced into action in the same turn', async () => {
+  reset();
+  rows = baseRows('booking');
+  rows['GET appointments'] = [{ id: 'a1', lead_id: 7, customer_id: 'tg-1', service_name: 'Wig Revamp', starts_at: new Date(Date.now() + 86_400_000).toISOString(), duration_minutes: 60, status: 'scheduled' }];
+  rows['PATCH appointments'] = [{ id: 'a1', service_name: 'Wig Revamp', starts_at: new Date(Date.now() + 2 * 86_400_000).toISOString(), status: 'scheduled' }];
+  script = [
+    says('I need to use the reschedule tool to move your appointment. Let me do that now.'),
+    toolCall('list_appointments', {}),
+    says('I looked at the diary and Saturday at 2pm is free. What would you like to do?'),
+  ];
+  const out = await runAgentTurn({ tenantId: 't1', role: 'booking', userId: null, conversationId: 'c1', text: 'reschedule to saturday 2pm' });
+  assert.ok(!/let me|reschedule tool/i.test(out.reply), out.reply);
+  assert.equal(requests[1].tool_choice, 'required', 'the retry must demand a tool call');
+  assert.match(requests[1].messages.at(-1).content, /about to check or do something/);
+});
+
+await t('if it still only announces, the customer is not left with a promise', async () => {
+  reset();
+  rows = baseRows('booking');
+  script = [says('Let me check the calendar.'), says("I'll look at the diary now."), says('One moment, checking.')];
+  const out = await runAgentTurn({ tenantId: 't1', role: 'booking', userId: null, conversationId: 'c1', text: 'reschedule to saturday 2pm' });
+  assert.ok(!/let me|i'll look|one moment/i.test(out.reply), out.reply);
+  assert.match(out.reply, /send that once more/);
+});
+
+await t('every agent has a skill file, and it reaches the briefing', () => {
+  for (const role of ['manager', ...DEPARTMENTS]) {
+    const skill = SKILLS[role];
+    assert.ok(skill.procedures.length >= 4, `${role} needs real procedures`);
+    assert.ok(skill.examples.length >= 2, `${role} needs worked examples`);
+    const block = skillBlock(role);
+    assert.match(block, /ACT, DO NOT ANNOUNCE/);
+    // Every tool a skill names must be one that agent actually holds.
+    const named = new Set(block.match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? []);
+    for (const name of named) {
+      if (TOOLS.has(name)) assert.ok(AGENT_BLUEPRINTS[role].tools.includes(name), `${role}'s skill uses ${name}, which it does not hold`);
+    }
+    const prompt = buildSystemPrompt({ role, name: 'X' }, 'Business: X', true, role === 'manager' ? null : 'Customer: Jane');
+    assert.ok(prompt.includes('YOUR PLAYBOOK'), `${role}'s briefing has no playbook`);
+  }
+});
+
+await t('a mistake repeated three times in a week becomes a standing lesson', async () => {
+  reset();
+  const turn = (flags) => ({ tenant_id: 't1', agent_role: 'booking', details: { flags } });
+  rows['GET audit_events'] = [turn(['self_corrected', 'stalling']), turn(['stalling']), turn(['held_back', 'stalling']), turn(['ungrounded']), turn([])];
+  const summary = await learnFromOwnMistakes();
+  const saved = db.filter((r) => r.table === 'agent_lessons' && r.method === 'POST');
+  assert.equal(saved.length, 1, 'only the mistake made three times is taught');
+  assert.equal(saved[0].body.role, 'booking');
+  assert.match(saved[0].body.lesson, /Never announce/);
+  assert.equal(summary.lessons, 1);
 });
 
 // ---------------------------------------------------------------------------

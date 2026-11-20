@@ -21,7 +21,7 @@
 
 export type ReplyIssue =
   | 'unbacked_action' | 'confirms_payment' | 'leaks_internals' | 'raw_data'
-  | 'no_work_done' | 'unverified_state';
+  | 'no_work_done' | 'unverified_state' | 'stalling' | 'ungrounded';
 
 export interface ReplyCheckInput {
   reply: string;
@@ -32,6 +32,12 @@ export interface ReplyCheckInput {
   customerFacing: boolean;
   /** What the person asked for, so "asked for work, did none" can be caught. */
   request?: string;
+  /**
+   * Tools the agent itself chose to call. A claim such as "I've booked you in"
+   * has to rest on these: records read for it before the turn started prove
+   * nothing about what it did. Defaults to okTools.
+   */
+  actedTools?: string[];
 }
 
 export interface ReplyCheck {
@@ -77,11 +83,27 @@ const PAYMENT_CONFIRMED =
 const NOT_A_CONFIRMATION =
   /\b(?:will|once|after|when|until|not yet|hasn'?t|haven'?t|isn'?t|aren'?t|cannot|can'?t|n't|shortly|soon|a colleague|someone|our team|the team|accounts|verify|verifies|to be|if)\b|\?/i;
 
-const INTERNAL_WORDS = /\b(?:lead_id|customer_id|tenant_id|conversation_id|tool call|tool_call|function call|JSON|system prompt|my instructions|database (?:table|row|column)|schema)\b/i;
+const INTERNAL_WORDS = /\b(?:(?:reschedul\w*|booking|calendar|order|lookup|search|cancel\w*) tool|use (?:a|the|my) tool|lead_id|customer_id|tenant_id|conversation_id|tool call|tool_call|function call|JSON|system prompt|my instructions|database (?:table|row|column)|schema)\b/i;
 
 function sentences(text: string): string[] {
   return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 }
+
+/**
+ * Announcing work instead of doing it: "Let me check the calendar", "I'll
+ * reschedule that now", "I need to use the reschedule tool". The turn ends
+ * there, nothing happens, and the customer waits for a message that never
+ * comes.
+ */
+const ANNOUNCES =
+  /\b(?:let me|lemme|i'?ll|i will|i'?m going to|i am going to|i need to|i have to|allow me to|i'?m (?:just )?(?:checking|looking|going)|i am (?:just )?(?:checking|looking)|nita|wacha ni|ngoja ni)\s*(?:just\s+|quickly\s+|now\s+|go ahead and\s+|first\s+)?(?:check|look|see|verify|confirm|find out|pull up|search|review|reschedul\w*|book|move|cancel|update|record|place|process|do that|do it|use|get (?:that|this|it)|sort|arrange|angalia|cheki)\b|\b(?:one moment|just a (?:moment|sec|second|minute)|give me a (?:moment|sec|second|minute)|hold on|bear with me|please wait|subiri kidogo|ngoja kidogo)\b/i;
+
+/** A promise that properly waits on the customer is not a stall. */
+const WAITS_ON_THEM = /\b(?:once|after|when|if|as soon as|unless)\s+(?:you|we|i (?:have|get|receive)|that|it|your)\b|\bwould you like\b|\bshall i\b|\bdo you want\b/i;
+
+/** Facts that can only come from the business's records. */
+const STATES_BUSINESS_FACTS =
+  /\b(?:kes|ksh|kshs|sh|shillings?|usd|\$)\s?\d|\b\d{1,3}(?:,\d{3})+\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b(?:available|availability|free slot|in stock|out of stock)\b|\bwe (?:have|sell|offer|stock|do|provide)\b|\bwe (?:don'?t|do not) (?:have|sell|offer|stock|do|provide)\b|\b(?:is|are) (?:not )?(?:listed|offered)\b|\bwe(?:'re| are) open\b|\b(?:tuna|tuko na|hatuna)\b/i;
 
 /** An instruction to change or look something up, as opposed to chat. */
 const ASKS_FOR_WORK =
@@ -97,7 +119,30 @@ export function checkReply(input: ReplyCheckInput): ReplyCheck {
   const { reply, okTools, toolNames, customerFacing } = input;
   const issues: ReplyIssue[] = [];
   const notes: string[] = [];
-  const did = new Set(okTools);
+  const did = new Set(input.actedTools ?? okTools);
+
+  // Announcing instead of acting. A read does not excuse it: with the diary
+  // already in hand, "let me check the diary" is still a customer left waiting.
+  const wrote = okTools.some((t) => WRITES.test(t) || t === 'hand_to_department');
+  const stalled = sentences(reply).some((s) => ANNOUNCES.test(s) && !WAITS_ON_THEM.test(s));
+  if (stalled && !wrote) {
+    issues.push('stalling');
+    notes.push(
+      'Your draft tells them you are about to check or do something, and then stops. They cannot see you working and nothing will happen after this message. ' +
+      'Do it NOW with a tool call, in this turn, and reply with the result. If the information is already in the results above, use it and answer. ' +
+      'If you truly cannot act without something from them, ask for that one thing instead. Never write "let me", "I\'ll check" or "one moment".'
+    );
+  }
+
+  // A price, a time, or what is and is not offered, stated to a customer with
+  // nothing read from the business's records in this turn.
+  if (customerFacing && !okTools.length && STATES_BUSINESS_FACTS.test(reply)) {
+    issues.push('ungrounded');
+    notes.push(
+      'Your draft states prices, times, availability or what the business offers, but you read nothing from its records in this turn - so it comes from memory or from earlier messages and may be wrong. ' +
+      'Read it now with the right tool (the products, the services, the diary, the opening hours) and answer from what comes back.'
+    );
+  }
 
   // The owner asked for something and the reply talks as if it happened, yet
   // nothing was looked up or changed in this turn.
@@ -181,7 +226,10 @@ export function honestHoldingReply(issues: ReplyIssue[], customerFacing: boolean
   if (issues.includes('confirms_payment')) {
     return "Thanks - I've noted that. A colleague checks every payment and will confirm it with you shortly.";
   }
-  if (issues.includes('no_work_done') || issues.includes('unverified_state')) {
+  if (customerFacing && (issues.includes('stalling') || issues.includes('ungrounded'))) {
+    return "Sorry, I couldn't get that done on my side just now. Could you send that once more? I'll sort it out straight away.";
+  }
+  if (issues.includes('no_work_done') || issues.includes('unverified_state') || issues.includes('stalling')) {
     return "I haven't been able to confirm that yet, so I won't tell you it's done. Ask me once more and I'll check what is actually saved and finish whatever is left.";
   }
   return customerFacing

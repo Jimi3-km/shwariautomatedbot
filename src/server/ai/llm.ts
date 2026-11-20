@@ -147,6 +147,11 @@ function toWire(m: ChatMessage): Record<string, unknown> {
 }
 
 export interface CompleteOptions {
+  /**
+   * 'required' makes the model return a tool call rather than prose. Used when
+   * it has just announced an action instead of taking it.
+   */
+  toolChoice?: 'auto' | 'required';
   messages: ChatMessage[];
   tools?: ToolDefinition[];
   temperature?: number;
@@ -177,6 +182,11 @@ export async function complete(opts: CompleteOptions): Promise<Completion> {
   try {
     return await executeCompletion(opts, model);
   } catch (err) {
+    // Not every hosted model accepts a forced tool call. One that refuses the
+    // request is asked again the ordinary way rather than failing the turn.
+    if (opts.toolChoice === 'required' && err instanceof LlmError && (err.status === 400 || err.status === 422)) {
+      return complete({ ...opts, toolChoice: undefined });
+    }
     // The provider retires hosted models: the id that worked last month starts
     // answering 404 or 410, and every turn fails until someone edits the
     // environment. Rather than go dark, move to a model that is still served
@@ -410,7 +420,7 @@ async function executeCompletion(opts: CompleteOptions, model: string): Promise<
                   parameters: t.parameters,
                 },
               })),
-              tool_choice: 'auto',
+              tool_choice: opts.toolChoice ?? 'auto',
             }
           : {}),
       }),

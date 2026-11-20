@@ -1,4 +1,5 @@
 import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, DEPARTMENTS, type AgentRole } from './roles.js';
+import { skillBlock } from './skills/index.js';
 
 /**
  * The briefing each agent is given.
@@ -122,6 +123,7 @@ const ROLE_BRIEF: Record<AgentRole, { job: string; notYours: string }> = {
 };
 
 const WORKING_METHOD_CUSTOMER = [
+  'The records that matter for the customer\'s message have usually been read for you already: they appear as tool results straight after their message. They are current - use them. Read more only when you need something they do not contain.',
   'Look it up, then answer. Prices, services, products, opening hours, free times, payment steps and this customer\'s own records all come from your tools. Call the tool first every time; never answer those from memory or from earlier in the chat.',
   'Do it, then say it. When the customer has agreed to something you can do - a booking, an order, a change - make the tool call in this turn and only then tell them it is done. Never say something was booked, ordered, changed or cancelled unless a tool call for it succeeded in this turn.',
   'Give a tool real values only. If you are missing a detail it needs, ask the customer for it. Never fill a field with a guess, a description, or a made-up id.',
@@ -190,6 +192,9 @@ export function buildSystemPrompt(
     '--- HOW YOU WORK ---',
     ...(customerFacing ? WORKING_METHOD_CUSTOMER : WORKING_METHOD_OWNER).map((g) => `- ${g}`)
   );
+
+  // 3b. The playbook for this role
+  sections.push('', skillBlock(agent.role));
 
   // 4. Rules
   sections.push(

@@ -6,7 +6,7 @@ import { handler } from '../auth.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 import { dispatchDueFollowUps } from '../services/followUps.js';
 import { planNurture } from '../services/nurture.js';
-import { learnFromStaffReplies } from '../ai/learning.js';
+import { learnFromStaffReplies, learnFromOwnMistakes } from '../ai/learning.js';
 import { retryInterruptedEvents } from '../services/pipeline.js';
 import { refreshInstagramTokens, pruneWebhookEvents } from '../services/maintenance.js';
 
@@ -235,6 +235,7 @@ internalRouter.get(
       console.error('[internal] learning pass failed:', e instanceof Error ? e.message : e);
       return null;
     });
-    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning });
+    const mistakes = await learnFromOwnMistakes().catch(() => null);
+    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning, mistakes });
   })
 );

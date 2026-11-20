@@ -2,7 +2,7 @@ import { serviceClient } from '../supabase.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 import { retryInterruptedEvents } from './pipeline.js';
 import { planNurture } from './nurture.js';
-import { learnFromStaffReplies } from '../ai/learning.js';
+import { learnFromStaffReplies, learnFromOwnMistakes } from '../ai/learning.js';
 
 /**
  * Sending the follow-ups that have come due.
@@ -256,6 +256,9 @@ async function record(row: DueRow, extra: Record<string, unknown>): Promise<bool
 // Opportunistic housekeeping
 // ---------------------------------------------------------------------------
 
+let lastMistakeReview = 0;
+const MISTAKE_REVIEW_INTERVAL_MS = 30 * 60_000;
+
 let lastHousekeeping = 0;
 const HOUSEKEEPING_INTERVAL_MS = 60_000;
 
@@ -293,5 +296,14 @@ export async function housekeeping(): Promise<void> {
     await learnFromStaffReplies({ limit: 1, budgetMs: 6_000 });
   } catch (e) {
     console.warn('[housekeeping] learning pass failed:', e instanceof Error ? e.message : e);
+  }
+  // Cheap (one query, no model), but there is no need to recount every minute.
+  if (now - lastMistakeReview > MISTAKE_REVIEW_INTERVAL_MS) {
+    lastMistakeReview = now;
+    try {
+      await learnFromOwnMistakes();
+    } catch (e) {
+      console.warn('[housekeeping] mistake review failed:', e instanceof Error ? e.message : e);
+    }
   }
 }

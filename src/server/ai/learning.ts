@@ -281,3 +281,86 @@ function parseJson(text: string | null): any {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Learning from its own mistakes
+// ---------------------------------------------------------------------------
+
+/**
+ * What an agent is told once the behaviour check has caught it making the same
+ * mistake repeatedly. Written as the rule it broke, in the words it will read.
+ */
+const MISTAKE_LESSONS: Record<string, string> = {
+  stalling:
+    'You have repeatedly told people you were about to check or do something and then stopped. Never announce: make the tool call first, then reply with the result.',
+  ungrounded:
+    'You have repeatedly stated prices, times or what is offered without reading them first. Read the products, services, diary or opening hours in the same turn before stating any of them.',
+  unbacked_action:
+    'You have repeatedly said something was booked, ordered, moved or cancelled when no action had been taken. Only say it after the tool call for it succeeded in the same turn.',
+  confirms_payment:
+    'You have repeatedly told customers a payment had arrived. You cannot know that: say it is noted and a colleague will verify it.',
+  leaks_internals:
+    'You have repeatedly mentioned tools, ids or how the system works. Speak only in everyday language.',
+  no_work_done:
+    'You have repeatedly answered a request for work without using any tool. Read first, make the change, then report what the result shows.',
+  unverified_state:
+    'You have repeatedly stated counts or what exists without checking. List it and report what the result shows.',
+  ran_out_of_steps:
+    'You have repeatedly run out of steps on large requests. Send whole lists in one call (save_products, save_services, remove_products, remove_services) instead of one item at a time.',
+};
+
+/** How many times in a week before a mistake becomes a standing lesson. */
+const REPEAT_THRESHOLD = 3;
+
+export interface MistakeLearningSummary {
+  turns: number;
+  lessons: number;
+}
+
+/**
+ * Turn mistakes the behaviour check keeps catching into standing lessons.
+ *
+ * No model is involved: the check already recorded what went wrong on each
+ * turn, so this only counts. A department that trips the same check three
+ * times in a week is told so in its briefing from then on. The unique index
+ * on lessons makes this safe to run as often as you like.
+ */
+export async function learnFromOwnMistakes(): Promise<MistakeLearningSummary> {
+  const summary: MistakeLearningSummary = { turns: 0, lessons: 0 };
+  if (!lessonsTable) return summary;
+
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const { data, error } = await serviceClient
+    .from('audit_events')
+    .select('tenant_id, agent_role, details')
+    .eq('action', 'agent.turn')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1000);
+  if (error || !Array.isArray(data)) return summary;
+
+  const counts = new Map<string, number>();
+  for (const row of data as any[]) {
+    const flags: unknown = row?.details?.flags;
+    if (!row?.tenant_id || !Array.isArray(flags) || !flags.length) continue;
+    summary.turns++;
+    for (const flag of new Set(flags as string[])) {
+      if (!MISTAKE_LESSONS[flag]) continue;
+      const key = `${row.tenant_id}|${row.agent_role}|${flag}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const [key, n] of counts) {
+    if (n < REPEAT_THRESHOLD) continue;
+    const [tenantId, role, flag] = key.split('|');
+    const result = await saveLesson({
+      tenantId,
+      role: ALL_ROLES.includes(role as AgentRole) ? (role as AgentRole) : null,
+      lesson: MISTAKE_LESSONS[flag],
+      source: 'qa_label',
+    });
+    if (result.saved && !result.duplicate) summary.lessons++;
+  }
+  return summary;
+}
