@@ -210,6 +210,19 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
         const rightUrl = sub?.callback_url === expected.webhook_callback_url;
         const hasMessages = fields.includes('messages');
         const ok = Boolean(sub) && rightUrl && hasMessages && sub?.active !== false;
+        // Instagram accounts connected with Instagram sign-in get their webhook
+        // from the Instagram product page, which Meta does not list here. Its
+        // absence is therefore not a fault: say it cannot be seen, not that it
+        // is missing.
+        if (object === 'instagram' && subs.ok && !sub) {
+          add({
+            id: `webhook.${object}`, area: 'webhook', label: `${product} messages are delivered to this site`,
+            ok: null,
+            detail: 'The Instagram webhook is set under Instagram > API setup with Instagram login > Configure webhooks, which cannot be read from here. If Instagram messages reach the inbox, it is working.',
+            copy: expected.webhook_callback_url,
+          });
+          return;
+        }
         add({
           id: `webhook.${object}`, area: 'webhook', label: `${product} messages are delivered to this site`,
           ok: subs.ok ? ok : null,
