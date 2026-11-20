@@ -76,15 +76,13 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
 
 export function Select({ options, placeholder, className = '', ...rest }: SelectProps) {
   return (
-    <div style={{ position: 'relative' }}>
+    // The arrow is drawn by the stylesheet (select.field), so every select in
+    // the app has exactly one, whether or not it goes through this component.
+    <div style={{ position: 'relative', minWidth: 0 }}>
       <select className={`field ${className}`} {...rest}>
         {placeholder && <option value="">{placeholder}</option>}
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <span aria-hidden style={{
-        position: 'absolute', right: 11, top: '50%', transform: 'translateY(-50%)',
-        pointerEvents: 'none', color: 'var(--text-3)', fontSize: 10,
-      }}>▼</span>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Search } from 'lucide-react';
+import { Users, Search, Columns3, List, Flame } from 'lucide-react';
 import { getLeads, getLeadStages, updateLead } from '../lib/api';
 import type { Lead, LeadStage } from '../types';
 import { useAsync, useDebounced, useIsMobile } from '../hooks';
@@ -16,10 +16,145 @@ const STAGE_TONE: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'ne
   lost: 'danger', quoted: 'info', interested: 'info',
 };
 
+type LeadsView = 'board' | 'list';
+const VIEW_KEY = 'shwari-leads-view';
+
+function readView(): LeadsView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'board';
+  } catch {
+    return 'board';
+  }
+}
+
+/** Stages only a verified payment may set; a card cannot be dragged into them. */
+const LOCKED_STAGES = new Set(['payment_verified', 'won']);
+
+const TEMPERATURE_TONE: Record<string, 'danger' | 'warning' | 'neutral'> = {
+  hot: 'danger', warm: 'warning', cold: 'neutral',
+};
+
+/**
+ * The pipeline as a board: one column per stage, a card per customer.
+ *
+ * Cards move by dragging on a desktop and by the stage menu on each card
+ * everywhere, so the board works by touch and by keyboard too. A move the
+ * server refuses snaps back, exactly as it does in the list.
+ */
+function LeadsBoard({ leads, stages, canWrite, currency, onOpen, onMove }: {
+  leads: Lead[]; stages: string[]; canWrite: boolean; currency: string;
+  onOpen: (lead: Lead) => void; onMove: (lead: Lead, stage: string) => void;
+}) {
+  const [dragging, setDragging] = useState<Lead['id'] | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+
+  // A lead whose stage the backend no longer lists still needs a column.
+  const columns = [...stages];
+  for (const l of leads) {
+    const s = l.stage ?? 'new';
+    if (!columns.includes(s)) columns.push(s);
+  }
+
+  return (
+    <div className="board board-fill" role="list" aria-label="Leads by stage">
+      {columns.map((stage) => {
+        const cards = leads.filter((l) => (l.stage ?? 'new') === stage);
+        const total = cards.reduce((sum, l) => sum + (Number(l.product_price) || 0), 0);
+        const locked = LOCKED_STAGES.has(stage);
+        const droppable = canWrite && !locked && dragging !== null;
+        return (
+          <section
+            key={stage}
+            role="listitem"
+            aria-label={`${humanize(stage)}, ${cards.length} lead${cards.length === 1 ? '' : 's'}`}
+            className={`board-column ${over === stage && droppable ? 'is-over' : ''}`}
+            onDragOver={(e) => { if (droppable) { e.preventDefault(); setOver(stage); } }}
+            onDragLeave={() => setOver((cur) => (cur === stage ? null : cur))}
+            onDrop={(e) => {
+              e.preventDefault();
+              const lead = leads.find((l) => String(l.id) === String(dragging));
+              setOver(null); setDragging(null);
+              if (lead && droppable && (lead.stage ?? 'new') !== stage) onMove(lead, stage);
+            }}
+          >
+            <header className="board-column-head">
+              <Pill tone={STAGE_TONE[stage] ?? 'neutral'} dot>{humanize(stage)}</Pill>
+              <span className="board-count">{cards.length}</span>
+              <span style={{ flex: 1 }} />
+              {total > 0 && <span className="board-total">{formatMoney(total, currency)}</span>}
+            </header>
+
+            <div className="scroll-y board-cards">
+              {cards.length === 0 && (
+                <div className="board-empty">{locked ? 'Set when a payment is verified' : 'No one here'}</div>
+              )}
+              {cards.map((l) => {
+                const temperature = (l as any).temperature as string | undefined;
+                const score = (l as any).score as number | undefined;
+                return (
+                  <article
+                    key={l.id}
+                    className={`board-card ${String(dragging) === String(l.id) ? 'is-dragging' : ''}`}
+                    draggable={canWrite}
+                    onDragStart={(e) => { setDragging(l.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(l.id)); }}
+                    onDragEnd={() => { setDragging(null); setOver(null); }}
+                  >
+                    <button type="button" className="board-card-main" onClick={() => onOpen(l)}>
+                      <Avatar name={l.customer_name ?? l.customer_id} seed={l.customer_id} size={28} />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span className="board-card-name">{l.customer_name || l.customer_id}</span>
+                        <span className="board-card-sub">
+                          {[l.product_model, l.product_storage].filter(Boolean).join(' ') || humanize((l as any).intent ?? '') || 'No product yet'}
+                        </span>
+                      </span>
+                    </button>
+
+                    <div className="board-card-meta">
+                      <Pill tone="neutral">{l.channel_type}</Pill>
+                      {temperature && (
+                        <Pill tone={TEMPERATURE_TONE[temperature] ?? 'neutral'}>
+                          {temperature === 'hot' && <Flame size={10} />} {temperature}{typeof score === 'number' ? ` ${score}` : ''}
+                        </Pill>
+                      )}
+                      <span style={{ flex: 1 }} />
+                      {l.product_price != null && (
+                        <span className="board-card-price">{formatMoney(l.product_price, currency)}</span>
+                      )}
+                    </div>
+
+                    <div className="board-card-foot">
+                      <span>{relativeTime(l.last_contact)}</span>
+                      {canWrite && stages.length > 0 && (
+                        <Select
+                          aria-label={`Move ${l.customer_name ?? l.customer_id} to another stage`}
+                          value={l.stage ?? 'new'}
+                          onChange={(e) => onMove(l, e.target.value)}
+                          options={stages.map((s) => ({ value: s, label: humanize(s) }))}
+                          className="board-move"
+                        />
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Leads() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { canWrite, currency } = useSession();
+
+  const [view, setViewState] = useState<LeadsView>(readView);
+  const setView = (next: LeadsView) => {
+    setViewState(next);
+    try { localStorage.setItem(VIEW_KEY, next); } catch { /* storage unavailable */ }
+  };
 
   const [search, setSearch] = useState('');
   const [stage, setStage] = useState<LeadStage | ''>('');
@@ -62,7 +197,20 @@ export function Leads() {
 
   return (
     <>
-      <PageHeader title="Leads" subtitle="Every customer your AI agent has spoken to." />
+      <PageHeader
+        title="Leads"
+        subtitle="Every customer your AI agent has spoken to."
+        actions={
+          <div className="segmented" role="group" aria-label="View">
+            <button type="button" aria-pressed={view === 'board'} onClick={() => { setView('board'); setStage(''); }}>
+              <Columns3 size={14} /> Board
+            </button>
+            <button type="button" aria-pressed={view === 'list'} onClick={() => setView('list')}>
+              <List size={14} /> List
+            </button>
+          </div>
+        }
+      />
 
       <div style={{ padding: '14px 20px 0', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 320 }}>
@@ -90,17 +238,29 @@ export function Leads() {
         />
       </div>
 
-      <div style={{ padding: '10px 20px 0', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-        <FilterChip active={stage === ''} onClick={() => setStage('')}>All</FilterChip>
-        {stages.map((s) => (
-          <FilterChip key={s} active={stage === s} onClick={() => setStage(stage === s ? '' : s)}>
-            {humanize(s)}
-          </FilterChip>
-        ))}
-      </div>
+      {/* The board already shows every stage side by side. */}
+      {view === 'list' && (
+        <div style={{ padding: '10px 20px 0', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          <FilterChip active={stage === ''} onClick={() => setStage('')}>All</FilterChip>
+          {stages.map((s) => (
+            <FilterChip key={s} active={stage === s} onClick={() => setStage(stage === s ? '' : s)}>
+              {humanize(s)}
+            </FilterChip>
+          ))}
+        </div>
+      )}
 
       <InlineError message={error} onDismiss={() => setError(null)} />
 
+      {view === 'board' && state.data && !state.error && leads.length > 0 ? (
+        <div className="board-wrap">
+          <LeadsBoard
+            leads={leads} stages={stages} canWrite={canWrite} currency={currency}
+            onOpen={(l) => navigate(`/leads/${l.id}`)}
+            onMove={changeStage}
+          />
+        </div>
+      ) : (
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         {state.loading && !state.data ? (
           <LoadingState rows={6} />
@@ -199,6 +359,7 @@ export function Leads() {
           </TableWrap>
         )}
       </div>
+      )}
     </>
   );
 }
