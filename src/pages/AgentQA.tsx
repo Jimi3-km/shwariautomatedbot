@@ -218,16 +218,15 @@ export function AgentQA() {
   }
 
   return (
-    <div className="scroll-y" style={{ flex: 1, padding: '24px 28px' }}>
+    <div className="scroll-y qa-page" style={{ flex: 1 }}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4" style={{ marginBottom: 20 }}>
         <div>
           <div className="flex items-center gap-2">
-            <h1 style={{ fontSize: 22, fontWeight: 700 }}>Agent QA & Evaluation</h1>
-            <span className="pill pill-accent" style={{ fontSize: 11 }}>NVIDIA NIM Telemetry</span>
+            <h1 style={{ fontSize: 22, fontWeight: 700 }}>Agent QA</h1>
           </div>
           <p style={{ color: 'var(--text-3)', fontSize: 13.5, marginTop: 4 }}>
-            Monitor live LLM agent turns, inspect prompt & tool traces, label quality benchmarks, and export regression datasets.
+            Every message your agents answered: what was said, what they replied, what they did, and how it was judged.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -243,25 +242,25 @@ export function AgentQA() {
       {/* Metrics Summary Strip */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', marginBottom: 20 }}>
         <Card padded style={{ padding: '12px 16px' }}>
-          <div style={{ color: 'var(--text-3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Turns Retrieved</div>
+          <div style={{ color: 'var(--text-3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Replies shown</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>{metrics.total}</div>
         </Card>
         <Card padded style={{ padding: '12px 16px' }}>
-          <div style={{ color: 'var(--text-3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Labeled Turns</div>
+          <div style={{ color: 'var(--text-3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Reviewed</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: 'var(--accent)' }}>
             {metrics.labeled} <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-3)' }}>({metrics.total ? Math.round((metrics.labeled / metrics.total) * 100) : 0}%)</span>
           </div>
         </Card>
         <Card padded style={{ padding: '12px 16px' }}>
-          <div style={{ color: 'var(--success)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Pass (OK)</div>
+          <div style={{ color: 'var(--success)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Pass</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: 'var(--success)' }}>{metrics.ok}</div>
         </Card>
         <Card padded style={{ padding: '12px 16px' }}>
-          <div style={{ color: 'var(--warning)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Needs Improvement</div>
+          <div style={{ color: 'var(--warning)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Needs work</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: 'var(--warning)' }}>{metrics.needsImprovement}</div>
         </Card>
         <Card padded style={{ padding: '12px 16px' }}>
-          <div style={{ color: 'var(--danger)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Bugs / Failures</div>
+          <div style={{ color: 'var(--danger)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Bugs</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: 'var(--danger)' }}>{metrics.bug}</div>
         </Card>
       </div>
@@ -270,7 +269,7 @@ export function AgentQA() {
       <Card padded style={{ padding: '14px 18px', marginBottom: 20 }}>
         <div className="flex items-center gap-2" style={{ marginBottom: 12, color: 'var(--text-2)', fontSize: 13, fontWeight: 600 }}>
           <Filter size={15} />
-          <span>Filters & Search</span>
+          <span>Filter</span>
         </div>
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))' }}>
           <Select value={role} onChange={(e) => setRole(e.target.value)} options={ROLES} />
@@ -279,7 +278,7 @@ export function AgentQA() {
           <Select value={status} onChange={(e) => setStatus(e.target.value)} options={STATUSES} />
           <Select value={labelFilter} onChange={(e) => setLabelFilter(e.target.value)} options={LABELS} />
           <Input
-            placeholder="Filter by tool (e.g. list_services)..."
+            placeholder="Filter by action, e.g. book appointment"
             value={toolSearch}
             onChange={(e) => setToolSearch(e.target.value)}
           />
@@ -300,108 +299,83 @@ export function AgentQA() {
           body="No agent turns match your filter criteria. When customer or internal turns occur, their telemetry will stream here."
         />
       ) : (
-        <div className="card" style={{ overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', color: 'var(--text-3)', fontSize: 11.5 }}>
-                  <th style={{ padding: '10px 14px' }}>Time</th>
-                  <th style={{ padding: '10px 14px' }}>Role</th>
-                  <th style={{ padding: '10px 14px' }}>Channel</th>
-                  <th style={{ padding: '10px 14px' }}>Profile / Latency</th>
-                  <th style={{ padding: '10px 14px' }}>Tools Called</th>
-                  <th style={{ padding: '10px 14px', maxWidth: 220 }}>Input Preview</th>
-                  <th style={{ padding: '10px 14px', maxWidth: 220 }}>Reply Preview</th>
-                  <th style={{ padding: '10px 14px' }}>QA Label</th>
-                  <th style={{ padding: '10px 14px', textAlign: 'right' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {turns.map((turn) => {
-                  const label = turn.label;
-                  const tools = turn.details?.tools_invoked || [];
-                  const duration = turn.details?.duration_ms;
-                  const channel = turn.details?.channel_type || 'dashboard';
+        <div className="qa-list">
+          {turns.map((turn, index) => {
+            const label = turn.label;
+            const tools: string[] = turn.details?.tools_invoked || [];
+            const duration = turn.details?.duration_ms;
+            const channel = turn.details?.channel_type || 'dashboard';
+            const flags: string[] = ((turn.details as any)?.flags ?? []).filter((f: string) => f !== 'self_corrected' || true);
+            const failed = turn.details?.status === 'error';
+            const day = new Date(turn.created_at).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+            const previousDay = index > 0
+              ? new Date(turns[index - 1].created_at).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
+              : null;
+            const verdict = label
+              ? (label.label === 'ok' ? 'Pass' : label.label === 'needs_improvement' ? 'Needs work' : 'Bug')
+              : 'Not reviewed';
+            const tone = label
+              ? (label.label === 'ok' ? 'success' : label.label === 'needs_improvement' ? 'warning' : 'danger')
+              : 'neutral';
 
-                  return (
-                    <tr
-                      key={turn.id}
-                      style={{ borderBottom: '1px solid var(--border)', verticalAlign: 'middle' }}
-                      className="hover:bg-slate-50/5"
-                    >
-                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', color: 'var(--text-3)', fontSize: 12 }}>
-                        {new Date(turn.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </td>
-                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                        <Pill tone={turn.agent_role === 'manager' ? 'accent' : 'neutral'}>
-                          {turn.agent_role}
-                        </Pill>
-                      </td>
-                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', color: 'var(--text-2)' }}>
-                        {channel}
-                      </td>
-                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                        <div className="flex items-center gap-1.5">
-                          <span style={{ fontSize: 11.5, fontWeight: 600 }}>{turn.details?.model_profile || 'primary'}</span>
-                          {duration ? (
-                            <span style={{ color: 'var(--text-4)', fontSize: 11 }}>({duration}ms)</span>
-                          ) : null}
+            return (
+              <React.Fragment key={turn.id}>
+                {day !== previousDay && <div className="qa-day">{day}</div>}
+                <article className={`qa-record qa-${tone}`}>
+                  <header className="qa-record-head">
+                    <span className="qa-time">
+                      {new Date(turn.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <Pill tone={turn.agent_role === 'manager' ? 'accent' : 'neutral'}>{turn.agent_role}</Pill>
+                    <span className="qa-meta">{channel}</span>
+                    {duration ? <span className="qa-meta">{(duration / 1000).toFixed(1)}s</span> : null}
+                    <span style={{ flex: 1 }} />
+                    <Pill tone={tone as any} dot>{verdict}</Pill>
+                    <Button variant="subtle" size="sm" icon={<Eye size={13} />} onClick={() => openReviewModal(turn)}>
+                      Review
+                    </Button>
+                  </header>
+
+                  <div className="qa-exchange">
+                    <div className="qa-side">
+                      <div className="qa-label">{turn.agent_role === 'manager' ? 'Owner said' : 'Customer said'}</div>
+                      <p className="qa-text">{turn.details?.input_preview || '—'}</p>
+                    </div>
+                    <div className="qa-side">
+                      <div className="qa-label">Agent replied</div>
+                      <p className={`qa-text ${failed ? 'is-error' : ''}`}>
+                        {turn.details?.reply_preview || (failed ? `No reply: ${turn.details?.error ?? 'the turn failed.'}` : '—')}
+                      </p>
+                    </div>
+                  </div>
+
+                  {(tools.length > 0 || flags.length > 0 || (label?.notes ?? '').trim()) && (
+                    <footer className="qa-record-foot">
+                      {tools.length > 0 && (
+                        <div className="qa-chips">
+                          <span className="qa-label">Did</span>
+                          {[...new Set(tools)].map((t) => (
+                            <span key={t} className="qa-chip">
+                              {t.replace(/_/g, ' ')}{tools.filter((x) => x === t).length > 1 ? ` ×${tools.filter((x) => x === t).length}` : ''}
+                            </span>
+                          ))}
                         </div>
-                      </td>
-                      <td style={{ padding: '12px 14px', maxWidth: 160 }}>
-                        {tools.length === 0 ? (
-                          <span style={{ color: 'var(--text-4)', fontSize: 11.5 }}>None (Conversational)</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {tools.map((t, idx) => (
-                              <span
-                                key={idx}
-                                style={{
-                                  padding: '2px 6px', borderRadius: 4, background: 'var(--surface-3)',
-                                  fontSize: 10.5, fontFamily: 'monospace',
-                                }}
-                              >
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px 14px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
-                        {turn.details?.input_preview || '—'}
-                      </td>
-                      <td style={{ padding: '12px 14px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-2)' }}>
-                        {turn.details?.reply_preview || (turn.details?.status === 'error' ? '⚠️ Execution Error' : '—')}
-                      </td>
-                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                        {label ? (
-                          <Pill
-                            tone={
-                              label.label === 'ok' ? 'success' : label.label === 'needs_improvement' ? 'warning' : 'danger'
-                            }
-                          >
-                            {label.label === 'ok' ? 'Pass' : label.label === 'needs_improvement' ? 'Needs Work' : 'Bug'}
-                          </Pill>
-                        ) : (
-                          <span style={{ color: 'var(--text-4)', fontSize: 11.5 }}>Unlabeled</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <Button
-                          variant="subtle"
-                          size="sm"
-                          icon={<Eye size={13} />}
-                          onClick={() => openReviewModal(turn)}
-                        >
-                          Review
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      )}
+                      {flags.length > 0 && (
+                        <div className="qa-chips">
+                          <span className="qa-label">Check</span>
+                          {[...new Set(flags)].map((f) => (
+                            <span key={f} className="qa-chip qa-chip-flag">{f.replace(/_/g, ' ')}</span>
+                          ))}
+                        </div>
+                      )}
+                      {(label?.notes ?? '').trim() && <p className="qa-note">{label!.notes}</p>}
+                    </footer>
+                  )}
+                </article>
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
 
