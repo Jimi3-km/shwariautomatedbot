@@ -62,16 +62,14 @@ export async function dispatchInbound(
   }
 
   // --- 2. Shwari ------------------------------------------------------------
-  const admin = await findAdmin(event.channelType, event.customerId);
+  // Is this sender the owner of THIS business? Someone who administers one
+  // business by chat is an ordinary customer when they message another
+  // business's bot. Treating the mismatch as suspicious and staying silent
+  // meant an owner testing a second business got no reply at all, which read
+  // as "the agents only work on one account". They are never given the other
+  // business's manager; they simply get its customer-facing team.
+  const admin = await findAdmin(event.channelType, event.customerId, event.tenantId);
   if (admin) {
-    // The link is keyed on the chat identity, but the message arrived on a
-    // channel belonging to some tenant. If those disagree, something is wrong
-    // and the safe move is to do nothing rather than administer the wrong
-    // business.
-    if (admin.tenantId !== event.tenantId) {
-      console.warn(`[dispatch] admin identity on ${event.channelType} belongs to another business; ignoring`);
-      return { handledBy: 'none', reason: 'admin_tenant_mismatch' };
-    }
 
     try {
       const turn = await runAgentTurn({

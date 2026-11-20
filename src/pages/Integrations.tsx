@@ -64,7 +64,7 @@ export function Integrations() {
   /** OAuth providers hand back a URL for the browser to follow. */
   const beginOAuth = useMutation(async (provider: ProviderId) => {
     const result = await startChannelConnect(provider);
-    if (result.mode === 'oauth') window.location.href = result.authorize_url;
+    if (result.mode === 'oauth') window.location.href = `/api/go?to=${encodeURIComponent(result.authorize_url)}`;
   });
 
   const providerInfo = (id: ProviderId): ChannelProviderInfo | undefined =>

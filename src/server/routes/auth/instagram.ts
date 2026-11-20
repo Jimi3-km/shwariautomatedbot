@@ -1,3 +1,4 @@
+import { hopPage } from '../go.js';
 import { stateReturnOrigin } from '../../services/meta/instagram.js';
 import { safeReturnOrigin, requestOrigin } from '../../config/origins.js';
 import { Router } from 'express';
@@ -63,6 +64,14 @@ instagramAuthRouter.get(
     console.log('[auth/instagram] redirecting to Meta consent screen');
     // State is carried in the URL and verified by HMAC on return, so no
     // server-side session store is required.
+    //
+    // A phone hands a redirect to instagram.com straight to the Instagram app,
+    // which opens on its home screen and never shows the sign-in page. Phones
+    // get a page of ours that moves on by itself instead; see routes/go.ts.
+    if (/Android|iPhone|iPad|iPod|Mobile/i.test(String(req.headers['user-agent'] ?? ''))) {
+      res.setHeader('cache-control', 'no-store');
+      return res.status(200).type('html').send(hopPage(url, 'Instagram'));
+    }
     res.redirect(302, url);
   })
 );

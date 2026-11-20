@@ -340,7 +340,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     const result = await startChannelConnect(provider);
 
     if (result.mode === 'oauth') {
-      window.location.href = result.authorize_url;
+      window.location.href = `/api/go?to=${encodeURIComponent(result.authorize_url)}`;
       return;
     }
     if (result.mode === 'instant') {

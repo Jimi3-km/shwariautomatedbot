@@ -1119,5 +1119,31 @@ await t('Instagram sign-in returns to the address it started from', () => {
   assert.equal(igAuth.stateReturnOrigin(plain), null);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- one person, several businesses ---');
+
+const { findAdmin } = await import('../admins.js');
+const { safeMetaUrl, hopPage } = await import('../../routes/go.js');
+
+await t('being the owner of one business does not make you the owner of another', async () => {
+  reset();
+  rows = { 'GET shwari_admins': (path) => (path.includes('tenant_id=eq.tenant-a') ? [{ tenant_id: 'tenant-a', user_id: 'u1' }] : []) };
+  assert.deepEqual(await findAdmin('telegram', '7270087282', 'tenant-a'), { tenantId: 'tenant-a', userId: 'u1' });
+  assert.equal(await findAdmin('telegram', '7270087282', 'tenant-b'), null, 'on another business they are a customer');
+  assert.ok(db.every((r) => r.path.includes('tenant_id=eq.')), 'the lookup must name the business');
+});
+
+await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
+  assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
+  assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));
+  assert.equal(safeMetaUrl('https://evil.example/oauth'), null);
+  assert.equal(safeMetaUrl('http://www.instagram.com/oauth/authorize'), null);
+  assert.equal(safeMetaUrl('javascript:alert(1)'), null);
+  const page = hopPage('https://www.instagram.com/oauth/authorize?a=1&b="x"', 'Instagram');
+  assert.match(page, /window\.location\.replace\(/);
+  assert.match(page, /http-equiv="refresh"/);
+  assert.ok(!page.includes('b="x"'), 'the address must be escaped in the markup');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
