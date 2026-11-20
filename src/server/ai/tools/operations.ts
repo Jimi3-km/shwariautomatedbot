@@ -1,3 +1,4 @@
+import { notify } from '../../services/notify.js';
 import { findInCatalogue } from './bulk.js';
 import { serviceClient } from '../../supabase.js';
 import {
@@ -645,6 +646,15 @@ export const recordOrder: Tool = {
 
     if (error) throw new Error(error.message);
 
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'new_order',
+      title: `New order ${data.order_ref}`,
+      body: `${customer.customerName || 'A customer'} ordered ${items.map((i: any) => `${i.qty > 1 ? `${i.qty} x ` : ''}${i.name}`).join(', ')}${data.total !== null && data.total !== undefined ? ` - ${data.currency} ${Number(data.total).toLocaleString('en-US')}` : ''}. Unpaid.`,
+      link: '/orders',
+      refId: data.id,
+    });
+
     // Look up customer email if available to send receipt
     let orderCustomerEmail = str(args, 'customer_email', { max: 200 });
     if (!orderCustomerEmail && customer.leadId) {
@@ -868,6 +878,15 @@ export const escalateToHuman: Tool = {
       })
       .select('id')
       .single();
+
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'needs_human',
+      title: `${conversation.customer_name || 'A customer'} needs a person`,
+      body: reason,
+      link: `/inbox/${ctx.conversationId}`,
+      refId: ticket?.id ?? null,
+    });
 
     return {
       handed_over: true,
@@ -1206,6 +1225,14 @@ export const recordPaymentClaim: Tool = {
         priority: 'high',
         opened_by_agent: ctx.agentRole,
       });
+      await notify({
+        tenantId: ctx.tenantId,
+        kind: 'needs_human',
+        title: 'Payment reference used twice',
+        body: `${customer?.customerName || 'A customer'} sent ref ${code}, which is already recorded for another payment. Check before releasing anything.`,
+        link: ctx.conversationId ? `/inbox/${ctx.conversationId}` : '/support',
+        refId: `${code}:${ctx.conversationId ?? ''}`,
+      });
       return {
         recorded: false,
         reference_already_used: true,
@@ -1238,6 +1265,15 @@ export const recordPaymentClaim: Tool = {
       .single();
 
     if (error) throw new Error(error.message);
+
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'payment_claim',
+      title: 'Payment to verify',
+      body: `${customer?.customerName || 'A customer'} says they paid${amount !== null ? ` ${data.currency} ${amount.toLocaleString('en-US')}` : ''}${orderRef ? ` for ${orderRef}` : ''} (ref ${code}).`,
+      link: '/payments',
+      refId: data.id,
+    });
 
     return {
       recorded: true,

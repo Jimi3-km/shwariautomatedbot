@@ -1,3 +1,4 @@
+import { NotificationsBell } from '../components/NotificationsBell';
 import React, { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -64,7 +65,9 @@ export function AppShell() {
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <TopBar onMenu={() => setDrawerOpen(true)} showMenu={isMobile} />
-        <main style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Pages with their own scrolling region fill this exactly; a page
+            without one scrolls here instead of being cut off at the fold. */}
+        <main className="app-main" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <Outlet />
         </main>
         {isMobile && <BottomNav onMore={() => setDrawerOpen(true)} />}
@@ -328,19 +331,7 @@ function TopBar({ onMenu, showMenu }: { onMenu: () => void; showMenu: boolean })
 
       <div style={{ flex: 1 }} />
 
-      <button
-        onClick={() => navigate('/inbox?unread=true')}
-        aria-label={`${counts.unread} unread conversations`}
-        style={{ position: 'relative', color: 'var(--text-2)', padding: 6 }}
-      >
-        <Bell size={17} />
-        {counts.unread > 0 && (
-          <span style={{
-            position: 'absolute', top: 2, right: 2, width: 7, height: 7,
-            borderRadius: 999, background: 'var(--accent)',
-          }} />
-        )}
-      </button>
+      <NotificationsBell />
     </header>
   );
 }

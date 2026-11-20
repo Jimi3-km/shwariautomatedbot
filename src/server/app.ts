@@ -8,6 +8,7 @@ import { inboxRouter } from './routes/inbox.js';
 import { commerceRouter } from './routes/commerce.js';
 import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
+import { notificationsRouter } from './routes/notifications.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { setupRouter } from './routes/setup.js';
@@ -130,6 +131,7 @@ export function createApp() {
   app.use('/api', commerceRouter);
   app.use('/api', channelsRouter);
   app.use('/api', receiptsRouter);
+  app.use('/api', notificationsRouter);
   app.use('/api', analyticsRouter);
   app.use('/api', onboardingRouter);
   app.use('/api', setupRouter);

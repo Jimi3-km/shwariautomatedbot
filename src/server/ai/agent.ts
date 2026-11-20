@@ -1,3 +1,4 @@
+import { isIdentityLabel } from '../services/identity.js';
 import { serviceClient } from '../supabase.js';
 import {
   complete, LlmNotConfiguredError, allowedModel, type ChatMessage, type ToolDefinition, type ModelProfile,
@@ -483,7 +484,9 @@ async function customerContext(tenantId: string, conversationId: string | null):
   }
 
   const known: string[] = [];
-  const name = lead?.customer_name || conv.customer_name;
+  // A handle, a phone number or a visitor code identifies the conversation;
+  // it is not something to greet a person by.
+  const name = lead?.customer_name || (isIdentityLabel(conv.customer_name) ? null : conv.customer_name);
   if (name) known.push(`name: ${name}`);
   if (lead?.email) known.push(`email: ${lead.email}`);
   if (lead?.phone) known.push(`phone: ${lead.phone}`);

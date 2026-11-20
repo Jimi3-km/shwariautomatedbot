@@ -1,3 +1,4 @@
+import { logReceipt } from '../services/notify.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, handler } from '../auth.js';
 
@@ -124,6 +125,18 @@ receiptsRouter.post(
       : { data: null as any };
 
     const html = renderReceiptHtml({ business, payment, order, lead });
+
+    await logReceipt({
+      tenantId: ctx.tenantId,
+      paymentId: payment.id,
+      orderId: payment.order_id ?? null,
+      leadId: payment.lead_id ?? null,
+      orderRef: order?.order_ref ?? null,
+      amount: payment.amount,
+      currency: payment.currency || business?.currency || null,
+      htmlBody: html,
+      issuedBy: ctx.userId,
+    });
 
     await ctx.db.from('payments')
       .update({ receipt_sent_at: new Date().toISOString() })

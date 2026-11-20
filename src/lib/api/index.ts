@@ -190,6 +190,22 @@ export const getChannelHealth = (channelId: string) =>
 // ---------------------------------------------------------------------------
 export const getOnboardingState = () => request<OnboardingState>('/onboarding/state');
 
+export interface AppNotification {
+  id: string;
+  kind: 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human';
+  title: string;
+  body: string;
+  link: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export const getNotifications = () =>
+  request<{ notifications: AppNotification[]; unread: number }>('/notifications');
+
+export const markNotificationsRead = (ids?: string[]) =>
+  request<{ ok: boolean }>('/notifications/read', { method: 'POST', body: ids ? { ids } : {} });
+
 /** Operator readiness. Admin-only; 403 for anyone else. */
 export const getSetupStatus = () => request<SetupStatus>('/setup/status');
 

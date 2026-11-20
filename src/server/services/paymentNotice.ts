@@ -1,3 +1,4 @@
+import { notify, logReceipt } from './notify.js';
 import { serviceClient } from '../supabase.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 import { isBrevoConfigured, sendBrevoEmail } from './brevo.js';
@@ -139,7 +140,36 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
 
     // --- the confirmation and receipt in the conversation --------------------
     const chat = await sendInChat(input, payment, business, order, lead);
-    Object.assign(result, chat);
+    Object.assign(result, { notified: chat.notified, channel: chat.channel, reason: chat.reason });
+
+    // --- keep the receipt, and tell the team ---------------------------------
+    const firstTime = chat.reason !== 'The customer was already told about this payment.';
+    if (firstTime) {
+      await logReceipt({
+        tenantId: input.tenantId,
+        paymentId: input.paymentId,
+        orderId: payment.order_id ?? null,
+        leadId: payment.lead_id ?? null,
+        orderRef: (order as any)?.order_ref ?? null,
+        amount: payment.amount,
+        currency: payment.currency || (business as any)?.currency || null,
+        textBody: chat.text ?? '',
+        htmlBody: business ? renderReceiptHtml({ business, payment, order: order ?? null, lead: lead ?? null }) : null,
+        sentInChat: chat.notified,
+        sentByEmail: result.receipt_emailed,
+        recipientEmail: result.receipt_emailed ? email : null,
+        issuedBy: payment.verified_by ?? null,
+      });
+      const sum = money(payment.amount, payment.currency || (business as any)?.currency);
+      await notify({
+        tenantId: input.tenantId,
+        kind: 'payment_verified',
+        title: `Payment verified${(order as any)?.order_ref ? ` - ${(order as any).order_ref}` : ''}`,
+        body: `${sum ?? 'A payment'} from ${(lead as any)?.customer_name || 'a customer'} was verified. ${chat.notified ? 'The receipt was sent in the chat' : 'The customer was not messaged'}${result.receipt_emailed ? ' and by email' : ''}.`,
+        link: '/payments',
+        refId: input.paymentId,
+      });
+    }
 
     if (result.notified || result.receipt_emailed) {
       await serviceClient.from('payments')
@@ -155,7 +185,7 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
 
 async function sendInChat(
   input: PaymentNoticeInput, payment: any, business: any, order: any, lead: any
-): Promise<Pick<PaymentNoticeResult, 'notified' | 'channel' | 'reason'>> {
+): Promise<Pick<PaymentNoticeResult, 'notified' | 'channel' | 'reason'> & { text?: string }> {
   // The conversation the claim was made in, or else the customer's latest.
   let conv: any = null;
   if (payment.conversation_id) {
@@ -220,23 +250,23 @@ async function sendInChat(
     .eq('id', conv.id).eq('tenant_id', input.tenantId);
 
   // Web chat reads the transcript; the row above is the delivery.
-  if (conv.channel_type === 'webchat') return { notified: true, channel: 'webchat' };
+  if (conv.channel_type === 'webchat') return { notified: true, channel: 'webchat', text };
 
   const provider = getProvider(conv.channel_type);
   const channelId = conv.channel_id ?? (await activeChannel(input.tenantId, conv.channel_type));
   if (!provider || !channelId) {
     await markFailed(input.tenantId, (row as any)?.id, extracted, 'That channel is no longer connected.');
-    return { notified: false, reason: 'That channel is no longer connected.' };
+    return { notified: false, reason: 'That channel is no longer connected.', text };
   }
 
   try {
     await provider.sendMessage(channelId, conv.customer_id, text, { tenantId: input.tenantId, userId: '' });
-    return { notified: true, channel: conv.channel_type };
+    return { notified: true, channel: conv.channel_type, text };
   } catch (e) {
     const reason = e instanceof ProviderError ? e.userMessage : 'The message could not be delivered.';
     console.error('[payment-notice] delivery failed:', e instanceof Error ? e.message : e);
     await markFailed(input.tenantId, (row as any)?.id, extracted, reason);
-    return { notified: false, reason };
+    return { notified: false, reason, text };
   }
 }
 

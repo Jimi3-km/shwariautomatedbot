@@ -1,3 +1,4 @@
+import { identityLabel } from './identity.js';
 import { serviceClient } from '../supabase.js';
 import type { NormalizedInboundEvent, ParsedEvent } from '../channels/meta/types.js';
 import type { ProviderId } from '../channels/providers/types.js';
@@ -190,6 +191,19 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
   let conversationId: string;
   let aiEnabled: boolean;
 
+  // What the Inbox calls this customer until they give a name: the Instagram
+  // @username, the WhatsApp number, or a visitor code for web chat. Looked up
+  // only when the conversation has no name yet.
+  let label: string | null = event.customerName ?? null;
+  if (!existing?.customer_name) {
+    label = (await identityLabel({
+      tenantId: event.tenantId,
+      channelType: event.channelType,
+      customerId: event.customerId,
+      profileName: event.customerName,
+    }).catch(() => null)) ?? label;
+  }
+
   if (existing) {
     conversationId = existing.id;
     aiEnabled = existing.ai_enabled;
@@ -202,9 +216,9 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
         last_message_preview: preview,
         status: 'open',
         // Only fill a name in; never overwrite one staff may have corrected.
-        ...(existing.customer_name || !event.customerName
+        ...(existing.customer_name || !label
           ? {}
-          : { customer_name: event.customerName }),
+          : { customer_name: label }),
       })
       .eq('id', conversationId)
       .eq('tenant_id', event.tenantId);
@@ -221,7 +235,7 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
         channel_id: event.channelId,
         channel_type: event.channelType,
         customer_id: event.customerId,
-        customer_name: event.customerName,
+        customer_name: label,
         status: 'open',
         unread_count: 1,
         last_message_at: event.timestamp,
