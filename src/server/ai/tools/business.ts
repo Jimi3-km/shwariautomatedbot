@@ -578,7 +578,15 @@ function asDetails(value: unknown): Record<string, string> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const key = String(k).trim().slice(0, 60);
-      const val = v === null || v === undefined ? '' : String(v).trim().slice(0, 2000);
+      // Older settings hold nested values (a till with a name and number, a
+      // list of methods). Flatten them to readable text rather than
+      // "[object Object]".
+      const flat = (x: unknown): string =>
+        x === null || x === undefined ? ''
+          : Array.isArray(x) ? x.map(flat).filter(Boolean).join(', ')
+          : typeof x === 'object' ? Object.entries(x as Record<string, unknown>).map(([a, b]) => `${a}: ${flat(b)}`).join('; ')
+          : String(x);
+      const val = flat(v).trim().slice(0, 2000);
       if (key && val) out[key] = val;
     }
   }
