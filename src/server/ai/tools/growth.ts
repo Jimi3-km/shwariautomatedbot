@@ -411,3 +411,72 @@ export const reviewAgentQuality: Tool = {
     };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Sending a receipt again
+// ---------------------------------------------------------------------------
+
+export const resendReceipt: Tool = {
+  name: 'resend_receipt',
+  description:
+    "Send a customer their receipt again: in the chat (as text and as a photo) and to the email address on file. Only works for a payment a person has already verified. In a customer's own conversation it always resends that customer's most recent verified payment. It cannot send to an address given in the message: if the customer wants it at a different email, save the new address with save_customer_details first, then call this.",
+  parameters: {
+    type: 'object',
+    properties: {
+      lead_id: { type: 'number', description: 'Which customer, when you are helping staff. Ignored in a customer conversation.' },
+    },
+    additionalProperties: false,
+  },
+  mutates: true,
+
+  async run(args, ctx) {
+    let leadId: number | null;
+    let customerId: string | null = null;
+    if (isCustomerTurn(ctx)) {
+      const scope = await customerScope(ctx);
+      leadId = scope.leadId;
+      customerId = scope.customerId;
+    } else {
+      leadId = num(args, 'lead_id');
+      if (leadId === null) throw new ToolInputError('Say which customer by passing lead_id. Use find_customers to get it.');
+    }
+    if (leadId === null && !customerId) {
+      return { resent: false, note: 'This customer has no verified payment on file, so there is no receipt to send.' };
+    }
+
+    let q = serviceClient
+      .from('payments').select('id, verified_at')
+      .eq('tenant_id', ctx.tenantId).eq('verification_status', 'verified')
+      .order('verified_at', { ascending: false }).limit(1);
+    q = leadId !== null ? q.eq('lead_id', leadId) : q.eq('customer_id', customerId);
+    const { data: payments, error } = await q;
+    if (error) throw new Error(error.message);
+    const payment = Array.isArray(payments) ? payments[0] : null;
+    if (!payment) {
+      return {
+        resent: false,
+        note: 'There is no verified payment for this customer yet, so there is no receipt to send. If they have paid, a colleague still has to verify it.',
+      };
+    }
+
+    const { notifyPaymentVerified } = await import('../../services/paymentNotice.js');
+    const out = await notifyPaymentVerified({ tenantId: ctx.tenantId, paymentId: payment.id, resend: true });
+
+    let emailOnFile: string | null = null;
+    if (leadId !== null) {
+      const { data: lead } = await serviceClient
+        .from('leads').select('email').eq('tenant_id', ctx.tenantId).eq('id', leadId).maybeSingle();
+      emailOnFile = (lead as any)?.email ?? null;
+    }
+
+    return {
+      resent: out.notified || out.receipt_emailed,
+      in_chat: out.notified,
+      as_photo: out.receipt_image,
+      emailed: out.receipt_emailed,
+      email_on_file: emailOnFile,
+      ...(out.notified || out.receipt_emailed ? {} : { reason: out.reason ?? 'It could not be sent.' }),
+      note: 'Tell the customer exactly where it went, using these fields. Only say it was emailed if emailed is true, and only to the address in email_on_file.',
+    };
+  },
+};

@@ -119,6 +119,7 @@ commerceRouter.post(
         ? {
             customer_notified: notice.notified,
             receipt_emailed: notice.receipt_emailed,
+            receipt_image: notice.receipt_image,
             ...(notice.notified ? { customer_notice_channel: notice.channel } : { customer_notice_reason: notice.reason }),
           }
         : {}),

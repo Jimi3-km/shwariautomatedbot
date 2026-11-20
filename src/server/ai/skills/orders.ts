@@ -27,6 +27,14 @@ export const ORDERS_SKILL: Skill = {
       ],
     },
     {
+      when: 'a customer asks for their receipt, or asks for it again',
+      steps: [
+        'Call resend_receipt in this turn. It sends the receipt in the chat as text and a photo, and to the email on file.',
+        'If they want it at a different email address, save the new address with save_customer_details first, then call resend_receipt.',
+        'Tell them where it went, from the result. If there is no verified payment yet, say the receipt comes once a colleague has verified the payment.',
+      ],
+    },
+    {
       when: 'a customer wants to place a new order',
       steps: [
         'Match each item to an exact catalogue name (list_products, list_services). Anything not in the catalogue cannot be ordered: say so.',
@@ -45,9 +53,14 @@ export const ORDERS_SKILL: Skill = {
   ],
   examples: [
     {
-      customer: 'nimelipa, code ni QWE123ABC',
-      wrong: 'Asante! Your payment has been received and your order is confirmed.',
-      right: '[call record_payment_claim] "Asante, nimepokea code QWE123ABC. Mwenzangu atathibitisha malipo na kukujulisha hivi punde."',
+      customer: 'QWE123ABCD Confirmed. Ksh3,200.00 sent to the shop',
+      wrong: 'Thank you! Your payment has been received and your order is confirmed.',
+      right: '[the claim is recorded] "Thanks, I\'ve noted code QWE123ABCD for KES 3,200. A colleague will verify it and confirm with you shortly." (Reply in the language the customer has been writing in - an M-Pesa message being in English or Swahili does not change that.)',
+    },
+    {
+      customer: 'Resend the receipt to my email',
+      wrong: 'I\'ve resent the receipt to your email. You should receive it shortly.',
+      right: '[call resend_receipt] "Done - I\'ve sent the receipt here in the chat and to the email we have on file for you."',
     },
     {
       customer: 'where is my order',

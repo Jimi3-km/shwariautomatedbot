@@ -94,7 +94,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'find_customers', 'update_customer', 'save_customer_details',
       'set_payment_instructions', 'get_payment_instructions',
       'list_appointments', 'book_appointment', 'reschedule_appointment', 'cancel_appointment',
-      'list_orders', 'record_order', 'update_order_status',
+      'list_orders', 'record_order', 'update_order_status', 'resend_receipt',
       'list_tickets', 'open_ticket', 'update_ticket',
       'message_customer', 'set_conversation_handling',
       'schedule_follow_up', 'list_follow_ups', 'cancel_follow_up',
@@ -185,7 +185,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
     ],
     tools: [
       ...CUSTOMER_BASICS,
-      'open_ticket', 'list_tickets', 'update_ticket',
+      'open_ticket', 'list_tickets', 'update_ticket', 'resend_receipt',
       'cancel_appointment', 'reschedule_appointment',
       'list_orders',
       'save_customer_details', 'update_customer', 'schedule_follow_up',
@@ -254,7 +254,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
     ],
     tools: [
       ...CUSTOMER_BASICS,
-      'list_orders', 'record_order', 'update_order_status',
+      'list_orders', 'record_order', 'update_order_status', 'resend_receipt',
       'record_payment_claim',
       'save_customer_details', 'update_customer', 'schedule_follow_up',
     ],

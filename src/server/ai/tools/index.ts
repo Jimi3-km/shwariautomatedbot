@@ -28,7 +28,7 @@ import {
 } from './dashboard.js';
 import {
   getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
-  leadPipeline, reviewAgentQuality,
+  leadPipeline, reviewAgentQuality, resendReceipt,
 } from './growth.js';
 import { saveProducts, saveServices, removeProducts, removeServices } from './bulk.js';
 
@@ -58,7 +58,7 @@ const ALL: Tool[] = [
   getBusinessSettings, listChannels, listConversations, readConversation,
   listPaymentClaims, getAgentSettings, updateAgentSettings,
   getCustomerHistory, handToDepartment, teachTeam, listLessons, forgetLesson,
-  leadPipeline, reviewAgentQuality,
+  leadPipeline, reviewAgentQuality, resendReceipt,
   saveProducts, saveServices, removeProducts, removeServices,
 ];
 

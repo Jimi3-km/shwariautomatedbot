@@ -292,6 +292,7 @@ const ACTION_LABELS: Record<string, string> = {
   set_conversation_handling: 'Changed who handles a conversation',
   update_order_status: 'Updated an order',
   delegate_to_agent: 'Handed a job to a department',
+  resend_receipt: 'Sent a receipt again',
 };
 
 function ActionList({ actions }: { actions: string[] }) {

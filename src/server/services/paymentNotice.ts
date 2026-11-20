@@ -1,3 +1,5 @@
+import { receiptImageUrl } from './receiptImage.js';
+import { sendImageToCustomer } from '../channels/media.js';
 import { notify, logReceipt } from './notify.js';
 import { serviceClient } from '../supabase.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
@@ -23,6 +25,11 @@ import { renderReceiptHtml } from '../routes/receipts.js';
 export interface PaymentNoticeInput {
   tenantId: string;
   paymentId: string;
+  /**
+   * Send it again on request. Skips the once-per-payment check and the team
+   * notification: the customer asked for another copy, nothing new happened.
+   */
+  resend?: boolean;
 }
 
 export interface PaymentNoticeResult {
@@ -31,6 +38,8 @@ export interface PaymentNoticeResult {
   channel?: string;
   /** The receipt was emailed as well. */
   receipt_emailed: boolean;
+  /** The receipt went out as a photo in the chat. */
+  receipt_image: boolean;
   /** Why the customer was not reached, when they were not. */
   reason?: string;
 }
@@ -107,7 +116,7 @@ export function paymentConfirmationText(opts: {
  * which happened.
  */
 export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<PaymentNoticeResult> {
-  const result: PaymentNoticeResult = { notified: false, receipt_emailed: false };
+  const result: PaymentNoticeResult = { notified: false, receipt_emailed: false, receipt_image: false };
   try {
     const { data: payment } = await serviceClient
       .from('payments').select('*')
@@ -128,7 +137,7 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
 
     // --- the receipt by email, when there is an address ---------------------
     const email = String(payment.customer_email || (lead as any)?.email || '').trim();
-    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && isBrevoConfigured() && business && !payment.receipt_sent_at) {
+    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && isBrevoConfigured() && business && (input.resend || !payment.receipt_sent_at)) {
       const sent = await sendBrevoEmail({
         to: [{ email, name: (lead as any)?.customer_name || undefined }],
         subject: `Your receipt from ${(business as any).business_name || 'us'}${(order as any)?.order_ref ? ` - ${(order as any).order_ref}` : ''}`,
@@ -140,11 +149,21 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
 
     // --- the confirmation and receipt in the conversation --------------------
     const chat = await sendInChat(input, payment, business, order, lead);
-    Object.assign(result, { notified: chat.notified, channel: chat.channel, reason: chat.reason });
+    Object.assign(result, { notified: chat.notified, channel: chat.channel, reason: chat.reason, receipt_image: Boolean(chat.image) });
 
     // --- keep the receipt, and tell the team ---------------------------------
     const firstTime = chat.reason !== 'The customer was already told about this payment.';
-    if (firstTime) {
+    if (firstTime && input.resend) {
+      await logReceipt({
+        tenantId: input.tenantId, paymentId: input.paymentId,
+        orderId: payment.order_id ?? null, leadId: payment.lead_id ?? null,
+        orderRef: (order as any)?.order_ref ?? null, amount: payment.amount,
+        currency: payment.currency || (business as any)?.currency || null,
+        textBody: `[Resent on request]\n${chat.text ?? ''}`,
+        sentInChat: chat.notified, sentByEmail: result.receipt_emailed,
+        recipientEmail: result.receipt_emailed ? email : null,
+      });
+    } else if (firstTime) {
       await logReceipt({
         tenantId: input.tenantId,
         paymentId: input.paymentId,
@@ -185,7 +204,7 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
 
 async function sendInChat(
   input: PaymentNoticeInput, payment: any, business: any, order: any, lead: any
-): Promise<Pick<PaymentNoticeResult, 'notified' | 'channel' | 'reason'> & { text?: string }> {
+): Promise<Pick<PaymentNoticeResult, 'notified' | 'channel' | 'reason'> & { text?: string; image?: boolean }> {
   // The conversation the claim was made in, or else the customer's latest.
   let conv: any = null;
   if (payment.conversation_id) {
@@ -213,7 +232,7 @@ async function sendInChat(
   // An earlier attempt that never reached the customer does not count.
   const delivered = (Array.isArray(already) ? already : [])
     .filter((m: any) => m?.extracted?.delivery?.status !== 'failed');
-  if (delivered.length) {
+  if (delivered.length && !input.resend) {
     return { notified: false, reason: 'The customer was already told about this payment.' };
   }
 
@@ -231,9 +250,14 @@ async function sendInChat(
     timezone: business?.timezone ?? null,
   });
 
-  const extracted = {
+  // The receipt as a picture, fetched by the chat platform from a signed
+  // address. Kept on the transcript row too, so web chat and the Inbox have it.
+  const imageUrl = receiptImageUrl(input.paymentId);
+  const extracted: Record<string, unknown> = {
     agent: 'shwari', department: 'orders',
     payment_confirmation: true, receipt: true, payment_id: input.paymentId,
+    ...(imageUrl ? { image_url: imageUrl } : {}),
+    ...(input.resend ? { resent: true } : {}),
   };
   const { data: row, error: insertErr } = await serviceClient
     .from('conversation_messages')
@@ -250,7 +274,7 @@ async function sendInChat(
     .eq('id', conv.id).eq('tenant_id', input.tenantId);
 
   // Web chat reads the transcript; the row above is the delivery.
-  if (conv.channel_type === 'webchat') return { notified: true, channel: 'webchat', text };
+  if (conv.channel_type === 'webchat') return { notified: true, channel: 'webchat', text, image: Boolean(imageUrl) };
 
   const provider = getProvider(conv.channel_type);
   const channelId = conv.channel_id ?? (await activeChannel(input.tenantId, conv.channel_type));
@@ -261,7 +285,20 @@ async function sendInChat(
 
   try {
     await provider.sendMessage(channelId, conv.customer_id, text, { tenantId: input.tenantId, userId: '' });
-    return { notified: true, channel: conv.channel_type, text };
+
+    // Then the same receipt as a photo they can save and forward. The text
+    // has already arrived, so a photo that fails costs nothing.
+    let image = false;
+    if (imageUrl) {
+      const photo = await sendImageToCustomer({
+        tenantId: input.tenantId, channelType: conv.channel_type, channelId,
+        customerId: conv.customer_id, imageUrl,
+        caption: order?.order_ref ? `Receipt ${order.order_ref}` : 'Receipt',
+      });
+      image = photo.sent;
+      if (!photo.sent) console.warn('[payment-notice] receipt photo not sent:', photo.reason);
+    }
+    return { notified: true, channel: conv.channel_type, text, image };
   } catch (e) {
     const reason = e instanceof ProviderError ? e.userMessage : 'The message could not be delivered.';
     console.error('[payment-notice] delivery failed:', e instanceof Error ? e.message : e);

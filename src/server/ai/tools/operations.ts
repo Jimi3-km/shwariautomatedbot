@@ -312,7 +312,9 @@ export const bookAppointment: Tool = {
         .eq('id', ctx.tenantId)
         .maybeSingle();
 
-      void sendAppointmentConfirmation({
+      // Awaited: on a serverless function an email left running in the
+      // background can be cut off when the reply goes out.
+      await sendAppointmentConfirmation({
         customerEmail,
         customerName: finalCustomerName,
         serviceName: service?.name ?? serviceName,
@@ -668,7 +670,7 @@ export const recordOrder: Tool = {
     }
 
     if (orderCustomerEmail) {
-      void sendOrderReceipt({
+      await sendOrderReceipt({
         customerEmail: orderCustomerEmail,
         customerName: customer.customerName || 'Valued Customer',
         orderId: data.order_ref || data.id,

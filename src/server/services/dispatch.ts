@@ -101,6 +101,13 @@ export async function dispatchInbound(
   // is configured, or no department is live, it falls through to the plain
   // acknowledgement below.
   if (llmConfigured().configured) {
+    // A photo sent with a message arrives as two events at the same moment.
+    // Each used to get its own turn, so the customer got two answers, often
+    // from two departments. The one with words is the one to answer.
+    if (await coveredByTextMessage(event, conversationId)) {
+      return { handledBy: 'none', reason: 'attachment_answered_with_its_text' };
+    }
+
     const routed = await chooseDepartment(event.tenantId, text, conversationId);
 
     if (routed) {
@@ -140,6 +147,43 @@ export async function dispatchInbound(
       (acknowledged ? 'sent a holding reply' : 'holding reply already sent recently')
   );
   return { handledBy: 'none', reason: 'no_route' };
+}
+
+/** How close together a photo and its message have to be to count as one. */
+const SAME_MESSAGE_WINDOW_MS = 10_000;
+
+/**
+ * Is this an attachment with no words, sent alongside a text message?
+ *
+ * The check waits a moment first: the two events race, and the text one may
+ * not have been written yet when the attachment arrives.
+ */
+export async function coveredByTextMessage(
+  event: NormalizedInboundEvent,
+  conversationId: string,
+  waitMs = 1500
+): Promise<boolean> {
+  if ((event.text ?? '').trim()) return false;
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+
+  const at = Date.parse(event.timestamp);
+  const centre = Number.isFinite(at) ? at : Date.now();
+  const { data } = await serviceClient
+    .from('conversation_messages')
+    .select('body, created_at, extracted')
+    .eq('tenant_id', event.tenantId)
+    .eq('conversation_id', conversationId)
+    .eq('sender', 'customer')
+    .gte('created_at', new Date(centre - SAME_MESSAGE_WINDOW_MS).toISOString())
+    .lte('created_at', new Date(centre + SAME_MESSAGE_WINDOW_MS).toISOString())
+    .limit(10);
+
+  return (Array.isArray(data) ? data : []).some((m: any) => {
+    const body = typeof m.body === 'string' ? m.body.trim() : '';
+    const own = m.extracted?.provider_message_id && m.extracted.provider_message_id === event.messageId;
+    // A real message: has words, and is not this attachment's own placeholder row.
+    return !own && body.length > 0 && !/^\((?:the customer sent|image|photo|attachment|video|audio|voice|document|sticker)/i.test(body) && !/^\[[^\]]*\]$/.test(body);
+  });
 }
 
 const HOLDING_REPLY =

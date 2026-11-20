@@ -998,5 +998,83 @@ await t('agents quote exactly what the Settings page shows', async () => {
   assert.equal(none.payload.instructions, null);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- receipts as a photo, resending, one reply per message ---');
+
+process.env.INTERNAL_API_SECRET = 'test-internal-secret';
+process.env.PUBLIC_API_URL = 'https://example.test';
+const { receiptSvg, renderReceiptPng, signReceipt, receiptSignatureOk, receiptImageUrl } = await import('../../services/receiptImage.js');
+const { coveredByTextMessage } = await import('../../services/dispatch.js');
+
+const RECEIPT = {
+  businessName: 'Glamour Crown Wigs', orderRef: 'KRY-MWOL7LGD', customerName: 'Jensen <b>',
+  items: [{ name: 'Brazilian Human Hair Wig - Body Wave', qty: 1, price: 28000 }],
+  amount: 28000, currency: 'KES', method: 'M-Pesa', transactionCode: 'UJJ66AH7ZG',
+  deliveryLocation: 'Westlands Pride', date: '20 Nov 2026',
+};
+
+await t('the receipt image carries the verified figures and escapes what customers typed', async () => {
+  const svg = receiptSvg(RECEIPT);
+  for (const expected of ['Glamour Crown Wigs', 'KRY-MWOL7LGD', 'KES 28,000', 'UJJ66AH7ZG', 'Westlands Pride', 'Payment verified']) {
+    assert.ok(svg.includes(expected), `missing ${expected}`);
+  }
+  assert.ok(!svg.includes('<b>') && svg.includes('Jensen &lt;b&gt;'), 'customer text must be escaped');
+  const png = await renderReceiptPng(RECEIPT);
+  assert.ok(png && png.length > 5000, 'the receipt did not render to an image');
+  assert.equal(png.subarray(1, 4).toString(), 'PNG');
+});
+
+await t('the image address only works for the payment it was signed for', () => {
+  const id = '99fd3fb2-2f8d-4b38-b859-c9ae3baf9bfb';
+  const other = '617b30fb-f98f-4abe-98ef-955d61b7723f';
+  assert.equal(receiptSignatureOk(id, signReceipt(id)), true);
+  assert.equal(receiptSignatureOk(other, signReceipt(id)), false);
+  assert.equal(receiptSignatureOk(id, ''), false);
+  assert.equal(receiptSignatureOk(id, undefined), false);
+  assert.match(receiptImageUrl(id), /^https:\/\/example\.test\/api\/receipts\/image\/99fd3fb2-[0-9a-f-]+\.png\?sig=[\w-]{32}$/);
+});
+
+await t('a customer can only have their own receipt resent, and never to a typed address', async () => {
+  reset();
+  rows = baseRows('orders');
+  rows['GET payments'] = [];
+  const ctx = { tenantId: 't1', userId: null, agentRole: 'orders', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.orders.tools, turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'resend_receipt', JSON.stringify({ lead_id: 999, customer_email: 'someone@else.example', email: 'x@y.z' }), ctx);
+  assert.equal(out.ok, true, JSON.stringify(out.payload));
+  assert.equal(out.payload.resent, false);
+  const lookups = db.filter((r) => r.table === 'payments' && r.method === 'GET');
+  assert.ok(lookups.length > 0 && lookups.every((r) => r.path.includes('lead_id=eq.7')), 'the lookup must be pinned to the conversation\'s customer');
+  assert.ok(!lookups.some((r) => r.path.includes('999')));
+  assert.ok(!AGENT_BLUEPRINTS.orders.tools.includes('resend_receipt') === false && AGENT_BLUEPRINTS.support.tools.includes('resend_receipt'));
+  assert.ok(!AGENT_BLUEPRINTS.sales.tools.includes('resend_receipt') && !AGENT_BLUEPRINTS.booking.tools.includes('resend_receipt'));
+});
+
+await t('"I\'ve resent the receipt" with nothing sent is caught', () => {
+  assert.ok(check("I've resent the receipt to jameskoikai04@gmail.com. You should receive it shortly.", ['get_customer_history']).issues.includes('unbacked_action'));
+  assert.ok(check('The receipt has been emailed to you.', []).issues.includes('unbacked_action'));
+  assert.ok(check("Done - I've sent the receipt here in the chat and to the email on file.", ['resend_receipt']).ok);
+  assert.ok(!check('Would you like me to send the receipt again?', []).issues.includes('unbacked_action'));
+});
+
+await t('a photo sent with a message gets one reply, not two', async () => {
+  const now = new Date().toISOString();
+  const photo = { tenantId: 't1', text: null, media: { kind: 'image' }, timestamp: now, messageId: 'm-photo' };
+
+  reset();
+  rows = { 'GET conversation_messages': [
+    { body: '[image]', created_at: now, extracted: { provider_message_id: 'm-photo' } },
+    { body: 'Jackie, 0718495640, deliver to Western Heights', created_at: now, extracted: { provider_message_id: 'm-text' } },
+  ] };
+  assert.equal(await coveredByTextMessage(photo, 'c1', 0), true, 'the text message answers for both');
+
+  reset();
+  rows = { 'GET conversation_messages': [{ body: '[image]', created_at: now, extracted: { provider_message_id: 'm-photo' } }] };
+  assert.equal(await coveredByTextMessage(photo, 'c1', 0), false, 'a photo on its own still gets a reply');
+
+  reset();
+  rows = { 'GET conversation_messages': [{ body: 'hello', created_at: now, extracted: {} }] };
+  assert.equal(await coveredByTextMessage({ ...photo, text: 'here is my payment' }, 'c1', 0), false, 'a message with words is never skipped');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

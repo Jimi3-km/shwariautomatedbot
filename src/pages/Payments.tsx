@@ -47,9 +47,11 @@ export function Payments() {
     if (decision !== 'verified') {
       toast.push('success', 'Payment claim rejected.');
     } else if (result.customer_notified) {
-      toast.push('success', result.receipt_emailed
-        ? 'Payment verified. The receipt was sent in the chat and by email.'
-        : 'Payment verified. The confirmation and receipt were sent in the chat.');
+      const how = [
+        result.receipt_image ? 'as a photo in the chat' : 'in the chat',
+        ...(result.receipt_emailed ? ['by email'] : []),
+      ].join(' and ');
+      toast.push('success', `Payment verified. The receipt was sent ${how}.`);
     } else if (result.receipt_emailed) {
       toast.push('info', `Payment verified. The receipt was emailed, but the chat message was not sent: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
     } else {

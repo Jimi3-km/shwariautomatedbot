@@ -1,3 +1,4 @@
+import { receiptSignatureOk, renderReceiptPng, receiptDataFrom } from '../services/receiptImage.js';
 import { Router } from 'express';
 import { requireAuth, handler } from '../auth.js';
 import { serviceClient } from '../supabase.js';
@@ -75,5 +76,72 @@ notificationsRouter.get(
       .limit(Math.min(Math.max(Number(req.query.limit) || 50, 1), 200));
     if (error) return res.json({ receipts: [] });
     res.json({ receipts: data ?? [] });
+  })
+);
+
+/**
+ * The receipt as a picture.
+ *
+ * Public on purpose: Telegram, Instagram and WhatsApp fetch a photo from its
+ * address and cannot sign in. What protects it is the signature in the
+ * address, which is only ever issued for one verified payment and cannot be
+ * guessed for another.
+ */
+notificationsRouter.get(
+  '/receipts/image/:file',
+  handler(async (req, res) => {
+    const paymentId = String(req.params.file || '').replace(/\.png$/i, '');
+    if (!/^[0-9a-f-]{36}$/i.test(paymentId) || !receiptSignatureOk(paymentId, req.query.sig)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const { data: payment } = await serviceClient
+      .from('payments').select('*').eq('id', paymentId).maybeSingle();
+    if (!payment || payment.verification_status !== 'verified') {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const [{ data: business }, { data: order }, { data: lead }] = await Promise.all([
+      serviceClient.from('tenants')
+        .select('business_name, address, currency, branding, contact_info, timezone')
+        .eq('id', payment.tenant_id).maybeSingle(),
+      payment.order_id
+        ? serviceClient.from('orders').select('order_ref, items, delivery_location').eq('tenant_id', payment.tenant_id).eq('id', payment.order_id).maybeSingle()
+        : Promise.resolve({ data: null } as any),
+      payment.lead_id !== null && payment.lead_id !== undefined
+        ? serviceClient.from('leads').select('customer_name').eq('tenant_id', payment.tenant_id).eq('id', payment.lead_id).maybeSingle()
+        : Promise.resolve({ data: null } as any),
+    ]);
+
+    const png = await renderReceiptPng(receiptDataFrom(business, payment, order, lead));
+    if (!png) return res.status(503).json({ error: 'The receipt image could not be produced' });
+
+    res.setHeader('content-type', 'image/png');
+    res.setHeader('cache-control', 'public, max-age=86400, immutable');
+    res.send(png);
+  })
+);
+
+/** A made-up receipt, for checking that images render on this deployment. */
+notificationsRouter.get(
+  '/receipts/sample.png',
+  handler(async (_req, res) => {
+    const png = await renderReceiptPng({
+      businessName: 'Sample Business',
+      businessLine: '123 Example Road · +254 700 000000',
+      orderRef: 'SMP-EXAMPLE1',
+      customerName: 'Sample Customer',
+      items: [{ name: 'Example item', qty: 2, price: 1500 }, { name: 'Delivery', qty: 1, price: 300 }],
+      amount: 3300,
+      currency: 'KES',
+      method: 'M-Pesa',
+      transactionCode: 'ABC123XYZ9',
+      deliveryLocation: 'Westlands, Nairobi',
+      date: '20 Nov 2026',
+    });
+    if (!png) return res.status(503).json({ error: 'The receipt image could not be produced' });
+    res.setHeader('content-type', 'image/png');
+    res.setHeader('cache-control', 'no-store');
+    res.send(png);
   })
 );

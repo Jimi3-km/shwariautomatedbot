@@ -105,6 +105,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   save_services: 'Add or change several services',
   remove_products: 'Delete products',
   remove_services: 'Stop offering several services',
+  resend_receipt: 'Send a receipt again',
 };
 
 export function Agents() {

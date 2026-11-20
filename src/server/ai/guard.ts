@@ -70,6 +70,11 @@ const ACTION_CLAIMS: Array<{ pattern: RegExp; backedBy: string[]; what: string }
     backedBy: ['record_payment_claim', 'delegate_to_agent'],
   },
   {
+    what: 'a receipt being sent',
+    pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|also\s+)?(?:re-?sent|sent|emailed|forwarded|shared|re-?issued)\b[^.!?\n]{0,40}\b(?:receipt|invoice)\b|\b(?:receipt|invoice)\b[^.!?\n]{0,30}\b(?:has been|was|is) (?:now\s+)?(?:re-?sent|sent|emailed|forwarded)\b/i,
+    backedBy: ['resend_receipt', 'delegate_to_agent'],
+  },
+  {
     what: 'handing over to a person',
     pattern: /\b(?:i(?:'ve| have)|i just|i)\s+(?:now\s+|just\s+)?(?:escalated|handed (?:this|you|it) over|passed (?:this|you|it) (?:on|over) to|opened a ticket|raised a ticket|flagged (?:this|it) (?:to|for))\b/i,
     backedBy: ['escalate_to_human', 'open_ticket', 'list_tickets', 'update_ticket', 'delegate_to_agent'],
