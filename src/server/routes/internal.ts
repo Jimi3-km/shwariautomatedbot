@@ -59,20 +59,39 @@ function requireInternalSecret(req: Request, res: Response, next: NextFunction) 
   next();
 }
 
+/**
+ * The database's own scheduler.
+ *
+ * It sends a token that the database generated and keeps in its vault; this
+ * server never holds a copy. The token is checked by asking the database
+ * whether it is the right one, through a function only the service role may
+ * call. That removes the one step that kept failing in practice: a person
+ * copying the same secret into two systems by hand.
+ */
+async function databaseSchedulerOk(req: Request): Promise<boolean> {
+  const token = req.headers['x-scheduler-token'];
+  if (typeof token !== 'string' || token.length < 32 || token.length > 200) return false;
+  try {
+    const { data, error } = await serviceClient.rpc('verify_scheduler_token', { token });
+    return !error && data === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The scheduler, or an automation holding the internal secret. */
-function requireScheduler(req: Request, res: Response, next: NextFunction) {
+async function requireScheduler(req: Request, res: Response, next: NextFunction) {
+  if (cronSecretOk(req) || internalSecretOk(req) || (await databaseSchedulerOk(req))) return next();
+
   const anyConfigured =
     Boolean((process.env.CRON_SECRET || '').trim()) ||
     Boolean((process.env.INTERNAL_API_SECRET || '').trim());
-  if (!anyConfigured) {
+  if (!anyConfigured && !req.headers['x-scheduler-token']) {
     console.error('[internal] neither CRON_SECRET nor INTERNAL_API_SECRET is set; refusing scheduled work');
     return res.status(503).json({ error: 'Scheduled jobs are not configured' });
   }
-  if (!cronSecretOk(req) && !internalSecretOk(req)) {
-    console.warn('[internal] rejected a scheduled call with a missing or incorrect secret');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
+  console.warn('[internal] rejected a scheduled call with a missing or incorrect secret');
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 /**
