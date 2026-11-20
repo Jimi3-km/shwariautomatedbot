@@ -84,14 +84,29 @@ export function llmConfigured(): { configured: boolean; missing: string[] } {
 
 export type ModelProfile = 'primary' | 'fast' | 'fallback';
 
+/**
+ * Is the operator allowed to point the agents at a different model?
+ *
+ * Off by default. Every agent runs on Nemotron: the model variables in the
+ * environment had drifted to an id the provider retired, the agents fell back
+ * to whatever substitute answered, and the quality of their tool use fell with
+ * it. A stale variable can no longer do that. To run another model on purpose,
+ * set SHWARI_ALLOW_MODEL_OVERRIDE=on alongside the model variable.
+ */
+function modelOverrideAllowed(): boolean {
+  return /^(1|on|true|yes)$/i.test(process.env.SHWARI_ALLOW_MODEL_OVERRIDE ?? '');
+}
+
 export function resolveModel(profile: ModelProfile = 'primary'): string {
+  if (!modelOverrideAllowed()) return DEFAULT_MODEL;
+  const env = (name: string) => (process.env[name] ?? '').trim();
   if (profile === 'fast') {
-    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+    return env('SHWARI_FAST_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
   }
   if (profile === 'fallback') {
-    return process.env.SHWARI_FALLBACK_MODEL || process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+    return env('SHWARI_FALLBACK_MODEL') || env('SHWARI_PRIMARY_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
   }
-  return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
+  return env('SHWARI_PRIMARY_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
 }
 
 export function llmModel(profile: ModelProfile = 'primary'): string {
@@ -243,8 +258,10 @@ const retiredModels = new Map<string, string>();
  */
 function substituteModels(): string[] {
   return [
-    process.env.SHWARI_FALLBACK_MODEL,
+    // Nemotron first: a retired override should land on the model the agents
+    // are built and tested against, not on whatever else happens to answer.
     DEFAULT_MODEL,
+    modelOverrideAllowed() ? process.env.SHWARI_FALLBACK_MODEL : '',
     'moonshotai/kimi-k3.1-pro',
     'nvidia/nemotron-3.5-lightning-30b-a3b',
   ]
