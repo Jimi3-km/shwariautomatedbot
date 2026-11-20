@@ -94,6 +94,20 @@ function activationHint(detail: string): string {
   return 'WhatsApp did not activate this number. Open WhatsApp Manager to see what it needs, then reconnect.';
 }
 
+/** Run one step of the signup, naming it in the log when Meta refuses it. */
+async function step<T>(name: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof WhatsAppError) {
+      console.error(
+        `[providers/whatsapp] could not ${name} (code ${e.metaCode ?? 'n/a'}, HTTP ${e.httpStatus ?? 'n/a'}): ${e.message}`
+      );
+    }
+    throw e;
+  }
+}
+
 export const whatsappProvider: ChannelProvider = {
   id: 'whatsapp',
   label: 'WhatsApp',
@@ -132,7 +146,7 @@ export const whatsappProvider: ChannelProvider = {
       // debug_token lookup is the documented fallback when it does not.
       wabaId = signup.wabaId ?? (await discoverWabaId(accessToken));
 
-      const numbers = await listPhoneNumbers(wabaId, accessToken);
+      const numbers = await step('list the numbers', () => listPhoneNumbers(wabaId, accessToken));
       phone = signup.phoneNumberId
         ? numbers.find((n) => n.id === signup.phoneNumberId) ?? numbers[0]
         : numbers[0];
@@ -145,7 +159,13 @@ export const whatsappProvider: ChannelProvider = {
       }
 
       // Inbound messages only arrive once the app is subscribed to the WABA.
-      await subscribeApp(wabaId, accessToken);
+      // A refusal here does not undo the connection: the number is saved and
+      // the status check reports that messages are not being delivered yet.
+      try {
+        await step('subscribe to messages', () => subscribeApp(wabaId, accessToken));
+      } catch (e) {
+        if (!(e instanceof WhatsAppError)) throw e;
+      }
 
       // And the number only exists on WhatsApp once it is registered. Without
       // this the dashboard said "connected" for a number nobody could message.

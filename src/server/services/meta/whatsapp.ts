@@ -321,18 +321,21 @@ export async function listPhoneNumbers(
   wabaId: string,
   accessToken: string
 ): Promise<WhatsAppPhoneNumber[]> {
-  const params = new URLSearchParams({
-    fields: 'id,display_phone_number,verified_name,quality_rating',
-    access_token: accessToken,
-  });
-  const json = await graph<{
-    data?: Array<{
-      id: string;
-      display_phone_number: string;
-      verified_name?: string;
-      quality_rating?: string;
-    }>;
-  }>(`/${wabaId}/phone_numbers?${params}`);
+  type Row = { id: string; display_phone_number: string; verified_name?: string; quality_rating?: string };
+  const read = (fields: string) =>
+    graph<{ data?: Row[] }>(
+      `/${wabaId}/phone_numbers?${new URLSearchParams({ fields, access_token: accessToken })}`
+    );
+
+  let json: { data?: Row[] };
+  try {
+    json = await read('id,display_phone_number,verified_name,quality_rating');
+  } catch (e) {
+    // A number that has only just been added can refuse some fields. The id
+    // and the number itself are all the connection needs.
+    if (!(e instanceof WhatsAppError)) throw e;
+    json = await read('id,display_phone_number');
+  }
 
   return (json.data ?? []).map((p) => ({
     id: p.id,
