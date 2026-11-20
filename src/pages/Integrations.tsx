@@ -52,6 +52,9 @@ export function Integrations() {
     else if (status === 'no_pages') toast.push('error', 'No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
     else if (status === 'page_in_use') toast.push('error', 'That Facebook Page is already connected to another business.');
     else if (status === 'database_update_needed') toast.push('error', 'The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
+    else if (status === 'whatsapp_no_permission') toast.push('error', 'Facebook signed you in, but the sign-in did not include WhatsApp. The Meta configuration used for WhatsApp has to be a "WhatsApp Embedded Signup" one. Nothing was connected.');
+    else if (status === 'whatsapp_no_account') toast.push('error', 'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.');
+    else if (status === 'whatsapp_no_number') toast.push('error', 'No WhatsApp number was set up. Finish adding a phone number in the WhatsApp signup, then try again.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
   }, []);
 

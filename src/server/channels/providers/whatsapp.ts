@@ -154,6 +154,20 @@ export const whatsappProvider: ChannelProvider = {
       if (e instanceof ProviderError) throw e;
       if (e instanceof WhatsAppError) {
         console.error(`[providers/whatsapp] Meta error (${e.metaCode ?? 'n/a'}): ${e.message}`);
+        // Say what actually went wrong rather than "try again": trying again
+        // with the same Meta configuration fails the same way.
+        if (e.metaCode === 'NO_WHATSAPP_PERMISSION') {
+          throw new ProviderError(
+            'Facebook signed you in, but the sign-in did not include WhatsApp. The Meta configuration used for WhatsApp must be a "WhatsApp Embedded Signup" configuration.',
+            { status: 409, code: 'WHATSAPP_NO_PERMISSION' }
+          );
+        }
+        if (e.metaCode === 'NO_WABA') {
+          throw new ProviderError(
+            'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.',
+            { status: 409, code: 'WHATSAPP_NO_ACCOUNT' }
+          );
+        }
       } else {
         console.error('[providers/whatsapp] signup failed:', e);
       }

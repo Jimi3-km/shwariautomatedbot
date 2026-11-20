@@ -206,12 +206,51 @@ export async function discoverWabaId(accessToken: string): Promise<string> {
   const json = await graph<DebugTokenResponse>(`/debug_token?${params}`);
 
   const scopes = json.data?.granular_scopes ?? [];
-  const waba = scopes.find((s) => s.scope === 'whatsapp_business_management')
-    ?? scopes.find((s) => s.scope === 'whatsapp_business_messaging');
-  const id = waba?.target_ids?.[0];
+  // What was granted, by name and count only: enough to diagnose a failed
+  // signup from the log without recording an id or a token.
+  console.log(
+    '[whatsapp] granted:',
+    scopes.map((s) => `${s.scope}(${s.target_ids?.length ?? 'all'})`).join(', ') || 'no granular scopes'
+  );
 
-  if (!id) throw new WhatsAppError('No WhatsApp Business account was granted');
-  return id;
+  // 1. The account named on a WhatsApp permission.
+  const direct = scopes
+    .filter((s) => s.scope.startsWith('whatsapp_business'))
+    .flatMap((s) => s.target_ids ?? [])[0];
+  if (direct) return direct;
+
+  // 2. The permission was granted without naming an account (Meta does this
+  //    when access covers everything the person chose). Find the account
+  //    through the businesses the token can see.
+  const businessIds = new Set<string>(
+    scopes.filter((s) => s.scope === 'business_management').flatMap((s) => s.target_ids ?? [])
+  );
+  try {
+    const mine = await graph<{ data?: Array<{ id: string }> }>(
+      `/me/businesses?${new URLSearchParams({ fields: 'id', access_token: accessToken })}`
+    );
+    for (const b of mine.data ?? []) businessIds.add(b.id);
+  } catch { /* the token may not be allowed to list businesses */ }
+
+  for (const businessId of businessIds) {
+    for (const edge of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const found = await graph<{ data?: Array<{ id: string }> }>(
+          `/${businessId}/${edge}?${new URLSearchParams({ fields: 'id', access_token: accessToken })}`
+        );
+        const id = found.data?.[0]?.id;
+        if (id) return id;
+      } catch { /* try the next edge */ }
+    }
+  }
+
+  const hasWhatsApp = scopes.some((s) => s.scope.startsWith('whatsapp_business'));
+  throw new WhatsAppError(
+    hasWhatsApp
+      ? 'A WhatsApp permission was granted but no WhatsApp Business account could be found on it'
+      : 'The sign-in did not grant any WhatsApp permission',
+    hasWhatsApp ? 'NO_WABA' : 'NO_WHATSAPP_PERMISSION'
+  );
 }
 
 export interface WhatsAppPhoneNumber {
