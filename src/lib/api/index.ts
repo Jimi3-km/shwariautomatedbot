@@ -161,9 +161,11 @@ export const updateBusiness = (body: Partial<Tenant>) => request<Tenant>('/busin
 export const getChannels = () => request<{ channels: Channel[] }>('/channels');
 
 export const getChannelStatus = (id: string) =>
-  request<{ status: string; webhook: { configured: boolean; matches_expected: boolean; pending_update_count: number; last_error_message: string | null } }>(
-    `/channels/${id}/status`
-  );
+  request<{
+    status: string;
+    webhook?: { configured: boolean; matches_expected: boolean; pending_update_count: number; last_error_message: string | null };
+    health?: { healthy: boolean; summary: string; needs_reconnect: boolean };
+  }>(`/channels/${id}/status`);
 
 export const disconnectChannel = (id: string) =>
   request<{ disconnected: boolean }>(`/channels/${id}`, { method: 'DELETE' });

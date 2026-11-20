@@ -281,7 +281,16 @@ export const whatsappProvider: ChannelProvider = {
     if (phoneNumberId) {
       const state = await getNumberState(phoneNumberId, token.accessToken).catch(() => null);
       if (state && !state.live) {
-        return { healthy: false, summary: numberProblem(state), needs_reconnect: true };
+        // Try once more to make it live: a number verified after the signup
+        // finished only needs registering, not a whole new connection.
+        const again = await activateNumber(phoneNumberId, token.accessToken);
+        if (!again.live) {
+          return {
+            healthy: false,
+            summary: `This number is not live on WhatsApp yet. ${again.reason ?? numberProblem(state)}`,
+            needs_reconnect: false,
+          };
+        }
       }
     }
 

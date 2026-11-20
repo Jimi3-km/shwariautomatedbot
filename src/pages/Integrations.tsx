@@ -296,6 +296,9 @@ function ConnectedChannelRow({
   const [health, setHealth] = useState<string | null>(null);
   const check = useMutation(async () => {
     const r = await getChannelStatus(channel.id);
+    // Instagram, WhatsApp and Facebook report in the platform's own words.
+    if (r.health) { setHealth(r.health.summary); return; }
+    if (!r.webhook) { setHealth('Connected.'); return; }
     setHealth(
       !r.webhook.configured ? 'No webhook is registered with the provider.'
         : !r.webhook.matches_expected ? 'The webhook points somewhere unexpected.'

@@ -97,8 +97,24 @@ channelsRouter.get(
       .from('channels').select('id, channel_type, bot_token, status')
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId).maybeSingle();
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
-    if (channel.channel_type !== 'telegram' || !channel.bot_token) {
-      return res.status(400).json({ error: 'Status is only available for connected Telegram channels' });
+    // Every other channel answers through its provider's own health check,
+    // which asks the platform whether the connection really works. This
+    // button used to work for Telegram only and showed an error elsewhere.
+    if (channel.channel_type !== 'telegram') {
+      const provider = getProvider(channel.channel_type);
+      if (!provider?.healthCheck) {
+        return res.json({ status: channel.status, health: { healthy: channel.status === 'active', summary: channel.status === 'active' ? 'Connected.' : 'Disconnected.', needs_reconnect: false } });
+      }
+      try {
+        const health = await provider.healthCheck(channel.id, ctx);
+        return res.json({ status: channel.status, health });
+      } catch (e) {
+        console.warn('[channels] health check failed:', e instanceof Error ? e.message : e);
+        return res.status(502).json({ error: "We couldn't check that channel just now. Try again in a moment." });
+      }
+    }
+    if (!channel.bot_token) {
+      return res.status(400).json({ error: 'This Telegram channel is not connected.' });
     }
     try {
       const info = await getWebhookInfo(channel.bot_token);
