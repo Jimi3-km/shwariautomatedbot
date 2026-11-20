@@ -109,6 +109,7 @@ the other agents close.
 - Reports what worked.
 
 **What it never does**
+- Generate, edit or source images or video. Only media the owner uploaded.
 - Invent a price, offer, discount, stock claim, testimonial or result. A post
   may only state what the catalogue and business facts say.
 - Post anything not in the content library or not approved under the
@@ -127,6 +128,10 @@ the other agents close.
    **The default, decided 20 Nov 2026.**
 3. *Autopilot* - posts from library items already marked approved go out
    unprompted. Comments and DMs are always autonomous within the rules above.
+
+**Media is the owner's own** (decided 20 Nov 2026): photos and videos the
+business uploads. The agent never generates or alters an image of a product,
+a person or a result. It may write caption drafts; it may not make pictures.
 
 **Content library:** each item has media, a caption, the product or service
 it is about, where it may be posted, an approval state, and how often it may

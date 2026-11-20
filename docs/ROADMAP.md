@@ -63,8 +63,10 @@ back for a false claim more than once in 200 turns.
 *The agent posts; it does not yet talk.*
 
 **What the owner gets**
-- A **content library**: upload media, write or approve a caption, tag the
-  product or service it is about, choose where it may go.
+- A **content library**: upload your own photos and videos, write or approve a
+  caption, tag the product or service it is about, choose where it may go.
+  The agent never generates or edits images; when the library is running low
+  for a product, Shwari asks for more.
 - A **calendar**: how often to post, on which days and hours, per platform.
 - **Approval modes**: approve the week (the default), approve each post, or
   autopilot from already-approved items.
@@ -195,9 +197,8 @@ action being a glance at the payments that did not match automatically.
 ## Decisions needed before Phase 1
 
 1. ~~Approval mode at launch~~ - **decided 20 Nov 2026: approve the week.**
-2. **Who makes the content** - the owner uploads photos and videos, or should
-   the agent also generate images? (Generated images of real products are a
-   trust risk; recommended: owner's media only.)
+2. ~~Who makes the content~~ - **decided 20 Nov 2026: the owner's own media only;
+   no AI-generated images.**
 3. **Facebook** - is there a Facebook Page for each business, and should it
    mirror Instagram or have its own calendar?
 4. **Payment automation** - is auto-verifying a confident M-Pesa match
