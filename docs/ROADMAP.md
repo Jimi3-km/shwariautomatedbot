@@ -47,7 +47,7 @@ conversations, not on real volume.
 |---|---|
 | Meta app Live: business verification, App Review for Instagram messaging | Real customers cannot reach the agents until this is done |
 | WhatsApp connected | The main sales channel in Kenya |
-| A scheduler that runs every few minutes (Vercel Pro cron, or Supabase `pg_cron` calling the existing endpoints) | Follow-ups, reminders and, later, posting cannot wait for a daily run |
+| A scheduler that runs every few minutes: the database's own (`pg_cron` + `pg_net`) calling the existing scheduled endpoints, with the shared secret held in Supabase Vault. Decided 20 Nov 2026; Vercel's daily cron stays as a backstop | Follow-ups, reminders and, later, posting cannot wait for a daily run |
 | One reply per customer message; photos and voice notes understood, not just noted | Duplicate and blind replies are the most visible defect left |
 | A weekly quality review from `review_agent_quality` with a target | So "reliable" is a number, not a feeling |
 | Reset every secret that was pasted into a chat | They are compromised |
@@ -203,5 +203,4 @@ action being a glance at the payments that did not match automatically.
    mirror Instagram or have its own calendar?
 4. **Payment automation** - is auto-verifying a confident M-Pesa match
    acceptable in Phase 3, or must every payment stay with a person?
-5. **Scheduler** - move to Vercel Pro for frequent crons, or use the database's
-   own scheduler at no extra cost?
+5. ~~Scheduler~~ - **decided 20 Nov 2026: the database's own scheduler.**
