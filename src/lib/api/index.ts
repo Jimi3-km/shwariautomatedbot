@@ -235,7 +235,12 @@ export interface MetaCheck {
   detail: string;
   fix?: string;
   copy?: string;
+  subscribe?: 'instagram' | 'whatsapp_business_account' | 'page';
 }
+
+/** Has the server switch on message delivery for one Meta product. Admin-only. */
+export const subscribeMetaWebhook = (object: NonNullable<MetaCheck['subscribe']>) =>
+  request<{ ok: boolean; message: string }>('/setup/meta-webhook', { method: 'POST', body: { object } });
 
 /** Tests the server's Meta settings against Meta. Admin-only. */
 export const getMetaCheck = () =>

@@ -4,7 +4,7 @@ import { allProviders } from '../channels/providers/index.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
 import { llmConfigured, llmModel } from '../ai/llm.js';
-import { runMetaDiagnostics } from '../services/meta/diagnostics.js';
+import { runMetaDiagnostics, subscribeWebhook, WEBHOOK_OBJECTS, type WebhookObject } from '../services/meta/diagnostics.js';
 
 export const setupRouter = Router();
 
@@ -21,6 +21,26 @@ setupRouter.get(
   requireAdmin,
   handler(async (_req, res) => {
     res.json(await runMetaDiagnostics());
+  })
+);
+
+/**
+ * Switch on message delivery for one Meta product from here, so the person
+ * running the deployment does not have to find the right "Subscribe" toggle
+ * in the Meta dashboard. Admin-only; returns Meta's own words when it refuses.
+ */
+setupRouter.post(
+  '/setup/meta-webhook',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const object = String(req.body?.object ?? '') as WebhookObject;
+    if (!WEBHOOK_OBJECTS.includes(object)) {
+      return res.status(400).json({ error: 'Unknown webhook.' });
+    }
+    const result = await subscribeWebhook(object);
+    if (!result.ok) return res.status(502).json({ error: result.message });
+    res.json(result);
   })
 );
 

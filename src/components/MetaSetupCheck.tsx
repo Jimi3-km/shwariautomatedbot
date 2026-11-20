@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Check, CircleHelp, Copy, Stethoscope, X } from 'lucide-react';
-import { getMetaCheck, type MetaCheck } from '../lib/api';
+import { getMetaCheck, subscribeMetaWebhook, type MetaCheck } from '../lib/api';
 import { useMutation } from '../hooks';
 import { Button, Card, Pill } from './ui';
 
@@ -27,6 +27,23 @@ export function MetaSetupCheck() {
   async function run() {
     const data = await check.run();
     if (data) setResult(data);
+  }
+
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<Record<string, string>>({});
+
+  async function turnOn(c: MetaCheck) {
+    if (!c.subscribe) return;
+    setFixing(c.id);
+    setFixNote((n) => ({ ...n, [c.id]: '' }));
+    try {
+      await subscribeMetaWebhook(c.subscribe);
+      await run();
+    } catch (e) {
+      setFixNote((n) => ({ ...n, [c.id]: e instanceof Error ? e.message : 'Meta refused. Try again.' }));
+    } finally {
+      setFixing(null);
+    }
   }
 
   async function copy(text: string, key: string) {
@@ -100,6 +117,16 @@ export function MetaSetupCheck() {
                             <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 2 }} />
                             <span>{c.fix}</span>
                           </p>
+                        )}
+                        {c.ok === false && c.subscribe && (
+                          <div style={{ marginTop: 7 }}>
+                            <Button size="sm" variant="accent" loading={fixing === c.id} onClick={() => turnOn(c)}>
+                              Turn it on for me
+                            </Button>
+                            {fixNote[c.id] && (
+                              <p style={{ fontSize: 12.5, color: 'var(--danger)', marginTop: 5, lineHeight: 1.5 }}>{fixNote[c.id]}</p>
+                            )}
+                          </div>
                         )}
                         {c.ok !== true && c.copy && (
                           <div style={{

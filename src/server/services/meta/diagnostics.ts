@@ -26,6 +26,65 @@ export interface MetaCheck {
   fix?: string;
   /** A value worth copying into the Meta dashboard. */
   copy?: string;
+  /** A webhook this server can switch on itself, without the Meta dashboard. */
+  subscribe?: WebhookObject;
+}
+
+export type WebhookObject = 'instagram' | 'whatsapp_business_account' | 'page';
+export const WEBHOOK_OBJECTS: WebhookObject[] = ['instagram', 'whatsapp_business_account', 'page'];
+
+/**
+ * Register this site's webhook for one Meta product and subscribe it to
+ * "messages", using the app's own credentials.
+ *
+ * Verifying the callback URL in the Meta dashboard and subscribing to a field
+ * are two separate steps there, and the second is easy to miss: the webhook
+ * then looks set up while no message is ever delivered. Meta calls the
+ * callback URL with the verify token before it accepts this, so it only
+ * succeeds when the site is really reachable.
+ */
+export async function subscribeWebhook(object: WebhookObject): Promise<{ ok: boolean; message: string }> {
+  if (!present(metaConfig.appId) || !present(metaConfig.appSecret) || !present(metaConfig.verifyToken)) {
+    return { ok: false, message: 'META_APP_ID, META_APP_SECRET and META_VERIFY_TOKEN must all be set on the server first.' };
+  }
+  const appToken = `${metaConfig.appId}|${metaConfig.appSecret}`;
+  const callback = `${publicApiUrl()}/api/webhooks/meta`;
+
+  // Keep whatever is already switched on: this call replaces the field list.
+  const current = await graph(`/${metaConfig.appId}/subscriptions`, appToken);
+  const existing = (Array.isArray(current.body?.data) ? current.body.data : []).find((s: any) => s?.object === object);
+  const fields = new Set<string>(
+    Array.isArray(existing?.fields) ? existing.fields.map((f: any) => String(f?.name ?? f)) : []
+  );
+  fields.add('messages');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(`${META_GRAPH_URL}/${metaConfig.appId}/subscriptions`, {
+      method: 'POST',
+      signal: controller.signal,
+      body: new URLSearchParams({
+        object,
+        callback_url: callback,
+        fields: [...fields].join(','),
+        verify_token: metaConfig.verifyToken,
+        include_values: 'true',
+        access_token: appToken,
+      }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || body?.success === false) {
+      console.warn(`[meta] could not subscribe the ${object} webhook: ${metaMessage(body)}`);
+      return { ok: false, message: metaMessage(body) };
+    }
+    console.log(`[meta] ${object} webhook subscribed to: ${[...fields].join(', ')}`);
+    return { ok: true, message: 'Subscribed. Messages will now be delivered to this site.' };
+  } catch {
+    return { ok: false, message: 'Meta did not answer in time. Try again in a moment.' };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface MetaDiagnostics {
@@ -163,6 +222,7 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
             fix: `In the Meta dashboard open ${where}, set the callback URL to the address below and the verify token to the same value as META_VERIFY_TOKEN, then subscribe to "messages".`,
           }),
           copy: expected.webhook_callback_url,
+          ...(ok ? {} : { subscribe: object as WebhookObject }),
         });
       };
       describe('instagram', 'Instagram', 'Instagram > API setup with Instagram login > Configure webhooks');
