@@ -15,6 +15,16 @@ type Pair = { key: string; value: string };
 const toPairs = (o: Record<string, unknown> | null | undefined): Pair[] =>
   o ? Object.entries(o).map(([key, value]) => ({ key, value: String(value ?? '') })) : [];
 
+const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+/** Days in the order people read a week; anything else keeps its place after them. */
+const weekOrder = (pairs: Pair[]): Pair[] => {
+  const rank = (key: string) => {
+    const i = WEEK.findIndex((d) => key.trim().toLowerCase().startsWith(d.slice(0, 3)));
+    return i === -1 ? WEEK.length : i;
+  };
+  return pairs.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p.key) - rank(b.p.key) || a.i - b.i).map((x) => x.p);
+};
+
 const fromPairs = (pairs: Pair[]): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const p of pairs) if (p.key.trim()) out[p.key.trim()] = p.value;
@@ -82,7 +92,7 @@ function BusinessForm({
     languages: (business.languages ?? []).join(', '),
     notification_channel: business.notification_channel ?? 'telegram',
     notification_target: business.notification_target ?? '',
-    business_hours: toPairs(business.business_hours as Record<string, unknown>),
+    business_hours: weekOrder(toPairs(business.business_hours as Record<string, unknown>)),
     delivery_rules: toPairs(business.delivery_rules as Record<string, unknown>),
     payment_details: toPairs(business.payment_details as Record<string, unknown>),
     contact_info: toPairs(business.contact_info as Record<string, unknown>),
@@ -129,7 +139,7 @@ function BusinessForm({
               <Textarea rows={3} value={form.business_description} disabled={ro}
                 onChange={(e) => set('business_description', e.target.value)} />
             </Field>
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))' }}>
               <Field label="Agent name" hint="What your AI assistant calls itself.">
                 <Input value={form.agent_name} disabled={ro} onChange={(e) => set('agent_name', e.target.value)} />
               </Field>

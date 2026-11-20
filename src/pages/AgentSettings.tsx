@@ -189,7 +189,7 @@ export function AgentSettings() {
 
           <Card>
             <SectionTitle title="Advanced" hint="Sensible defaults; change only if you need to." />
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}>
               <Field label="Model" hint="Chosen and kept up to date by the platform. It is not set per business.">
                 <Input value="Managed by Shwari" disabled readOnly />
               </Field>

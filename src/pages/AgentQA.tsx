@@ -241,7 +241,7 @@ export function AgentQA() {
       </div>
 
       {/* Metrics Summary Strip */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', marginBottom: 20 }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', marginBottom: 20 }}>
         <Card padded style={{ padding: '12px 16px' }}>
           <div style={{ color: 'var(--text-3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Turns Retrieved</div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>{metrics.total}</div>
@@ -272,7 +272,7 @@ export function AgentQA() {
           <Filter size={15} />
           <span>Filters & Search</span>
         </div>
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))' }}>
           <Select value={role} onChange={(e) => setRole(e.target.value)} options={ROLES} />
           <Select value={channelType} onChange={(e) => setChannelType(e.target.value)} options={CHANNELS} />
           <Select value={modelProfile} onChange={(e) => setModelProfile(e.target.value)} options={PROFILES} />

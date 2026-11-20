@@ -360,12 +360,12 @@ export function PageHeader({ title, subtitle, actions }: {
   title: string; subtitle?: string; actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+    <div className="page-header flex items-start justify-between gap-3 px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
       <div style={{ minWidth: 0 }}>
         <h1 style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.02em' }}>{title}</h1>
         {subtitle && <p style={{ color: 'var(--text-2)', fontSize: 13, marginTop: 2 }}>{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
+      {actions && <div className="page-header-actions flex items-center gap-2 flex-shrink-0">{actions}</div>}
     </div>
   );
 }

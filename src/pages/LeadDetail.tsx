@@ -73,7 +73,7 @@ export function LeadDetail() {
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{
           display: 'grid', gap: 16, maxWidth: 1100, margin: '0 auto',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
         }}>
 
           <Card>

@@ -136,7 +136,7 @@ export function Products() {
         ) : (
           <div style={{
             display: 'grid', gap: 12, maxWidth: 1280, margin: '0 auto',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 270px), 1fr))',
           }}>
             {products.map((p) => (
               <Card key={p.id}>

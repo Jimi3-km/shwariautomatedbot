@@ -47,7 +47,7 @@ export function AppShell() {
   useEffect(() => { setDrawerOpen(false); }, [location.pathname, location.search]);
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
+    <div className="app-shell" style={{ display: 'flex', background: 'var(--bg)' }}>
       {!isMobile && (
         <aside className="sidebar" style={{ width: 'var(--sidebar-w)', flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
           <SidebarContent />
@@ -67,8 +67,42 @@ export function AppShell() {
         <main style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <Outlet />
         </main>
+        {isMobile && <BottomNav onMore={() => setDrawerOpen(true)} />}
       </div>
     </div>
+  );
+}
+
+/**
+ * The four places a phone user goes most, one thumb-reach away, plus the full
+ * menu. The drawer still holds everything; this saves the two taps it costs.
+ */
+function BottomNav({ onMore }: { onMore: () => void }) {
+  const { counts, isAdmin } = useSession();
+  const items: Array<{ to: string; label: string; icon: NavEntry['icon']; end?: boolean; count?: number }> = [
+    { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
+    { to: '/inbox', label: 'Inbox', icon: InboxIcon, count: counts.unread },
+    isAdmin
+      ? { to: '/shwari', label: 'Shwari', icon: Sparkles }
+      : { to: '/leads', label: 'Leads', icon: Users },
+    { to: '/orders', label: 'Orders', icon: ShoppingCart },
+  ];
+  return (
+    <nav className="bottom-nav" aria-label="Main">
+      {items.map(({ to, label, icon: Icon, end, count }) => (
+        <NavLink key={to} to={to} end={end} className={({ isActive }) => `bottom-nav-item ${isActive ? 'active' : ''}`}>
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <Icon size={19} />
+            {!!count && count > 0 && <span className="bottom-nav-badge">{count > 9 ? '9+' : count}</span>}
+          </span>
+          <span>{label}</span>
+        </NavLink>
+      ))}
+      <button type="button" className="bottom-nav-item" onClick={onMore} aria-label="Open the full menu">
+        <Menu size={19} />
+        <span>More</span>
+      </button>
+    </nav>
   );
 }
 

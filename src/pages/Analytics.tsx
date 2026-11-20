@@ -53,7 +53,7 @@ export function Analytics() {
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 16, maxWidth: 1280, margin: '0 auto' }}>
 
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))' }}>
             <StatTile label="Conversations" value={a.totals.conversations} />
             <StatTile label="Leads" value={a.totals.leads} />
             <StatTile label="Orders" value={a.totals.orders} />
@@ -61,7 +61,7 @@ export function Analytics() {
             <StatTile label="Conversion" value={`${a.totals.conversion_rate}%`} />
           </div>
 
-          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))' }}>
             <ChartCard title="Conversations over time">
               <AreaChart data={a.series.conversations} />
             </ChartCard>
@@ -79,7 +79,7 @@ export function Analytics() {
             </ChartCard>
           </div>
 
-          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))' }}>
             <ChartCard title="AI vs human handling">
               <BarList items={[
                 { label: 'Handled by AI', value: a.totals.ai_handled },

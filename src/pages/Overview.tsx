@@ -84,7 +84,7 @@ export function Overview() {
 
           <ChannelStatus channels={channels} />
 
-          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))' }}>
             <RecentConversations items={recentConversations} />
             <RecentLeads items={recentLeads} currency={currency} />
           </div>
@@ -98,7 +98,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
   return (
     <section>
       <div className="section-label" style={{ marginBottom: 8 }}>{title}</div>
-      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))' }}>
         {children}
       </div>
     </section>
@@ -112,7 +112,7 @@ function ChannelStatus({ channels }: { channels: Array<{ channel_type: string; s
         <h2 style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>Channels</h2>
         <Link to="/integrations" style={{ fontSize: 12.5, color: 'var(--text-2)' }}>Manage</Link>
       </div>
-      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))' }}>
         {CHANNELS.map(({ type, label }) => {
           const found = channels.find((c) => c.channel_type === type && c.status === 'active');
           return (

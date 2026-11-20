@@ -65,7 +65,7 @@ export function Leads() {
       <PageHeader title="Leads" subtitle="Every customer your AI agent has spoken to." />
 
       <div style={{ padding: '14px 20px 0', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', width: 260 }}>
+        <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 320 }}>
           <Search size={14} style={{
             position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)',
           }} />
@@ -86,7 +86,7 @@ export function Leads() {
             { value: 'instagram', label: 'Instagram' },
             { value: 'webchat', label: 'Web chat' },
           ]}
-          style={{ height: 32, width: 160 }}
+          style={{ height: 32, flex: '0 1 160px', minWidth: 130 }}
         />
       </div>
 

@@ -558,7 +558,7 @@ function AgentStep({
         </Field>
 
         <Field label="How should it sound?">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 8 }}>
             {TONES.map((t) => {
               const active = tone === t.value;
               return (
