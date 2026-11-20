@@ -1391,3 +1391,158 @@ select.field.board-move {
   .ticket-chat-thread { height: min(300px, 38vh); }
   .chat-bubble { max-width: 90%; }
 }
+
+
+/* ── Disclosure: one collapsible section ─────── */
+.disclosure {
+  min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
+}
+.disclosure-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px;
+  border: 0; border-radius: var(--radius); background: none; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 550; text-align: left; cursor: pointer;
+}
+.disclosure-head:hover { background: var(--surface-2); }
+.disclosure-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.disclosure-count {
+  flex-shrink: 0; padding: 1px 8px; border-radius: 999px; background: var(--surface-2);
+  font-size: 11.5px; font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.disclosure-head:hover > .disclosure-count { background: var(--border); }
+.disclosure-chev { flex-shrink: 0; color: var(--text-3); transition: transform .18s ease; }
+.disclosure-head[aria-expanded="true"] > .disclosure-chev { transform: rotate(180deg); }
+/* Rows animate from 0fr to 1fr, so the panel opens to its own height. */
+.disclosure-panel { display: grid; grid-template-rows: 0fr; min-width: 0; transition: grid-template-rows .2s ease; }
+.disclosure-panel[data-open="true"] { grid-template-rows: 1fr; }
+/* Hidden, not just clipped: closed content takes no focus and is not read out. */
+.disclosure-inner { min-width: 0; min-height: 0; overflow: hidden; visibility: hidden; transition: visibility 0s linear .2s; }
+/* inherit, not visible: an open section inside a closed one must stay hidden with it. */
+.disclosure-panel[data-open="true"] > .disclosure-inner { visibility: inherit; transition-delay: 0s; }
+.disclosure-body { padding: 4px 12px 12px; min-width: 0; }
+
+/* On / off switch */
+.switch {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; padding: 0; border: 0; border-radius: var(--radius); background: none; cursor: pointer;
+}
+.switch-track {
+  position: relative; width: 36px; height: 20px; border-radius: 999px;
+  background: var(--border-2); transition: background .18s ease;
+}
+.switch-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: var(--white); transition: transform .18s ease;
+}
+.switch[aria-checked="true"] > .switch-track { background: var(--success); }
+.switch[aria-checked="true"] > .switch-track::after { transform: translateX(16px); }
+.switch:disabled { opacity: .5; cursor: default; }
+
+/* ── AI team: one accordion card per agent ─────── */
+.team-page { flex: 1; padding: 20px; }
+.team-stack { display: grid; gap: 18px; width: 100%; max-width: 860px; min-width: 0; margin: 0 auto; }
+.team-intro { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.team-intro a, .team-note a, .team-muted a { color: var(--accent); }
+.team-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-stat {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 11px; min-width: 0;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+  font-size: 12.5px; color: var(--text-2);
+}
+.team-stat strong { color: var(--text); font-weight: 600; }
+.team-stat.is-warning { border-color: transparent; background: var(--warning-bg); color: var(--warning); }
+.team-stat.is-ok { color: var(--success); }
+.team-summary-spacer { flex: 1; }
+.team-group { display: grid; gap: 8px; min-width: 0; }
+.team-group-list { display: grid; gap: 10px; min-width: 0; }
+
+.agent-acc {
+  min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); transition: border-color .18s ease;
+}
+.agent-acc[data-open="true"] { border-color: var(--border-2); }
+/* Shwari directs the others, and looks it. */
+.agent-acc.is-manager {
+  border-color: var(--accent); background: linear-gradient(180deg, var(--accent-soft), transparent 96px) var(--surface);
+}
+.agent-acc.is-manager .agent-acc-icon { background: var(--accent); color: var(--white); }
+.agent-acc.is-off .agent-acc-icon { background: var(--surface-2); color: var(--text-3); }
+.agent-acc.is-off .agent-acc-name { color: var(--text-2); }
+.agent-acc-head { display: flex; align-items: center; gap: 2px; min-width: 0; padding-right: 6px; }
+.agent-acc-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; min-height: 62px;
+  padding: 10px 6px 10px 14px; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.agent-acc-icon {
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.agent-acc-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.agent-acc-name {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  font-size: 14.5px; font-weight: 600; color: var(--text);
+}
+.agent-acc-name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-acc-fixed { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: 11px; font-weight: 400; color: var(--text-3); }
+.agent-acc-summary {
+  min-width: 0; font-size: 12.5px; line-height: 1.45; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-acc[data-open="true"] .agent-acc-summary { white-space: normal; overflow-wrap: anywhere; }
+.agent-acc-state { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
+.agent-acc-state-label { font-size: 12px; color: var(--text-2); min-width: 20px; text-align: right; }
+.agent-acc-chev {
+  flex-shrink: 0; width: 36px; height: 44px; display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--radius); background: none; color: var(--text-3); cursor: pointer;
+}
+.agent-acc-chev:hover { color: var(--text); }
+.agent-acc-chev > svg { transition: transform .18s ease; }
+.agent-acc[data-open="true"] .agent-acc-chev > svg { transform: rotate(180deg); }
+.agent-acc-body { display: grid; gap: 8px; min-width: 0; padding: 12px 14px 14px; border-top: 1px solid var(--border); }
+
+.team-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.team-list > li {
+  display: flex; gap: 8px; align-items: flex-start; min-width: 0;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-2);
+}
+.team-list > li > svg { flex-shrink: 0; margin-top: 3px; }
+.team-list > li > span { min-width: 0; overflow-wrap: anywhere; }
+.team-sublabel { margin: 10px 0 6px; }
+.team-sublabel:first-child { margin-top: 0; }
+.team-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.team-chip {
+  max-width: 100%; padding: 3px 9px; border-radius: 999px; background: var(--surface-2);
+  font-size: 11.5px; line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere;
+}
+.team-note {
+  display: flex; gap: 9px; align-items: flex-start; min-width: 0; padding: 10px 12px;
+  border-radius: var(--radius); background: var(--surface-2);
+  font-size: 12.5px; line-height: 1.55; color: var(--text-2);
+}
+.team-note > svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+.team-note > span { min-width: 0; overflow-wrap: anywhere; }
+.team-note.is-warning { background: var(--warning-bg); color: var(--warning); }
+.team-note.is-warning > svg, .team-note.is-warning a { color: inherit; }
+.team-note a { text-decoration: underline; }
+.team-muted { font-size: 12px; line-height: 1.55; color: var(--text-3); overflow-wrap: anywhere; }
+.team-text { font-size: 12.5px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-form { display: grid; gap: 12px; min-width: 0; }
+.team-form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.team-lesson-from { display: block; margin-top: 1px; font-size: 11px; color: var(--text-3); }
+
+@media (max-width: 768px) {
+  .team-page { padding: 12px; }
+  .team-summary-spacer { display: none; }
+  .team-summary > .btn { width: 100%; justify-content: center; min-height: 40px; }
+  .disclosure-head { min-height: 44px; }
+  .agent-acc-toggle { gap: 10px; min-height: 64px; padding-left: 12px; }
+  .agent-acc-body { padding: 12px 10px; }
+  .agent-acc-state-label { display: none; }
+  .agent-acc-chev { width: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-panel, .disclosure-inner, .disclosure-chev, .agent-acc, .agent-acc-chev > svg,
+  .switch-track, .switch-track::after { transition: none; }
+}

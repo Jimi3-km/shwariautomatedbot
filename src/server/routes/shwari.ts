@@ -7,7 +7,7 @@ import {
 import { llmConfigured, sanitizeCompletionText } from '../ai/llm.js';
 import { issuePairingCode } from '../ai/admins.js';
 import { attentionNeeded } from '../ai/tools/insight.js';
-import { AGENT_BLUEPRINTS, ALL_ROLES, DEPARTMENTS } from '../ai/roles.js';
+import { AGENT_BLUEPRINTS, ALL_ROLES, TEAM_ROLES, UNIVERSAL_RULES } from '../ai/roles.js';
 
 export const shwariRouter = Router();
 
@@ -312,12 +312,15 @@ shwariRouter.get(
 // ---------------------------------------------------------------------------
 
 /**
- * The five agents, as the AI team page shows them.
+ * The six agents, as the AI team page shows them.
  *
  * There is no create endpoint. A business does not assemble a team: it is
  * provisioned whole, here, the first time anyone looks. `syncCapabilities`
  * then brings older rows up to date with their blueprint, so a release that
  * gives a department a new capability reaches every tenant without a migration.
+ * A business created before an agent existed gets it the same way: opening
+ * this page is enough, nobody has to message first. (Where the database does
+ * not accept the new role yet, the page simply shows the agents it has.)
  *
  * Capabilities are returned as the real tool names their agent actually holds,
  * paired with a human label. Nothing on that page is decorative — if a
@@ -354,6 +357,8 @@ shwariRouter.get(
           summary: blueprint.summary,
           objective: row.objective || blueprint.objective,
           responsibilities: blueprint.responsibilities,
+          /** The rules this agent cannot be talked out of. Read-only, like the tools. */
+          rules: blueprint.rules,
           instructions: row.instructions,
           escalation: row.escalation || blueprint.escalation,
           status: row.status,
@@ -364,12 +369,49 @@ shwariRouter.get(
           updated_at: row.updated_at,
         }];
       }),
+      /** The rules every agent shares, shown once on the page. */
+      shared_rules: UNIVERSAL_RULES,
     });
   })
 );
 
 /**
- * Reword a department, or switch it off.
+ * What the team has been taught, for the AI team page.
+ *
+ * Read-only, and the tenant comes from the session. A lesson with no role
+ * applies to every agent. Before the lessons table exists this answers with an
+ * empty list rather than an error: the page still has everything else to show.
+ */
+shwariRouter.get(
+  '/agents/lessons',
+  requireAuth,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    const { data, error } = await serviceClient
+      .from('agent_lessons')
+      .select('id, role, lesson, source, created_at')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) return res.json({ lessons: [], available: false });
+
+    res.json({
+      available: true,
+      lessons: (data ?? []).map((l) => ({
+        id: l.id,
+        role: (ALL_ROLES as readonly string[]).includes(l.role) ? l.role : null,
+        lesson: l.lesson,
+        source: l.source,
+        created_at: l.created_at,
+      })),
+    });
+  })
+);
+
+/**
+ * Reword a department or marketing, or switch it off.
  *
  * Name, purpose, standing instructions, escalation and status — nothing else.
  * `tools` and `permissions` are absent by design and rejected if sent: the
@@ -389,7 +431,8 @@ shwariRouter.patch(
         error: 'Shwari directs your other agents, so its own setup is fixed. You can still tell it how you like things done in conversation.',
       });
     }
-    if (!(DEPARTMENTS as readonly string[]).includes(role)) {
+    // Everyone Shwari directs: the four departments and marketing.
+    if (!(TEAM_ROLES as readonly string[]).includes(role)) {
       return res.status(404).json({ error: 'No such department.' });
     }
     for (const forbidden of ['tools', 'permissions', 'capabilities', 'role']) {

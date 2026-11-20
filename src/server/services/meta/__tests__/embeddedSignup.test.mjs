@@ -12,6 +12,8 @@ import assert from 'node:assert';
 process.env.META_APP_ID = '1561926828265582';
 process.env.META_APP_SECRET = 'test-secret';
 process.env.META_WHATSAPP_CONFIG_ID = '1089974970383116';
+// These assertions describe Meta's hosted entry point, which is now opt-in.
+process.env.META_WHATSAPP_FLOW = 'hosted';
 process.env.META_WHATSAPP_REDIRECT_URI =
   'https://shwariautomatedbot.vercel.app/api/channels/oauth/whatsapp/callback';
 

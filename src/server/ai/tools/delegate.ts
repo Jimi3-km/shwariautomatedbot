@@ -1,5 +1,5 @@
 import { ToolInputError, str, oneOf, type Tool } from './types.js';
-import { DEPARTMENTS, AGENT_BLUEPRINTS, type AgentRole } from '../roles.js';
+import { TEAM_ROLES, AGENT_BLUEPRINTS, type AgentRole } from '../roles.js';
 
 /**
  * Handing work to a department.
@@ -15,19 +15,23 @@ import { DEPARTMENTS, AGENT_BLUEPRINTS, type AgentRole } from '../roles.js';
  * pulled in at module load.
  */
 
-const DELEGATABLE = DEPARTMENTS as readonly AgentRole[];
+/**
+ * Everyone Shwari directs, which is wider than the departments a customer can
+ * be routed to: marketing takes jobs here and nowhere else.
+ */
+const DELEGATABLE = TEAM_ROLES as readonly AgentRole[];
 
 export const delegateToAgent: Tool = {
   name: 'delegate_to_agent',
   description:
-    'Hand a job to one of the departments and get back what they did. Use it when the work sits squarely with one of them — a diary question for bookings, an order or payment for orders, a complaint for support, a pricing or product question for sales. For a single quick action you can already do yourself, just do it.',
+    'Hand a job to one of the team and get back what they did. Use it when the work sits squarely with one of them — a diary question for bookings, an order or payment for orders, a complaint for support, a pricing or product question for sales, planning the week\'s posts or checking and fixing captions for marketing. Marketing cannot approve posts: that stays with you, on the owner\'s word. For a single quick action you can already do yourself, just do it.',
   parameters: {
     type: 'object',
     properties: {
       department: {
         type: 'string',
         enum: [...DELEGATABLE],
-        description: 'Which department should handle this.',
+        description: 'Who should handle this.',
       },
       task: {
         type: 'string',
@@ -74,8 +78,10 @@ export const delegateToAgent: Tool = {
       };
     } catch (e) {
       if (e instanceof AgentUnavailableError) {
+        // Off, or - for a role newer than the database - not set up yet. Either
+        // way the job was not done, and the manager has to say so or do it.
         throw new ToolInputError(
-          `${AGENT_BLUEPRINTS[department].defaultName} is switched off. Tell the owner, or switch it on first.`
+          `${AGENT_BLUEPRINTS[department].defaultName} is not available: it is switched off on the AI team page, or not set up on this workspace yet. Nothing was done. Tell the owner, or do the job yourself if you hold the tools for it.`
         );
       }
       throw e;

@@ -9,7 +9,7 @@ import type {
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
-  AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
+  AgentConfig, AgentLesson, AgentRole, AgentStatus, Service, ServiceInput,
   ContentItem, ContentStatus, ScheduledPost, PostingSettings, PostingStatus, WeekPlan,
   FacebookPageChoice, PostPlatform,
 } from '../../types';
@@ -342,8 +342,13 @@ export const getAttention = () => request<AttentionReport>('/shwari/attention');
 // Agents, configured by hand
 // ---------------------------------------------------------------------------
 
-/** The five agents. Provisioned on first read; there is nothing to create. */
-export const getAgents = () => request<{ agents: AgentConfig[] }>('/agents');
+/** The six agents. Provisioned on first read; there is nothing to create. */
+export const getAgents = () =>
+  request<{ agents: AgentConfig[]; shared_rules?: string[] }>('/agents');
+
+/** What the team has been taught. Empty, with available false, where lessons are not set up yet. */
+export const getAgentLessons = () =>
+  request<{ lessons: AgentLesson[]; available: boolean }>('/agents/lessons');
 
 /**
  * Name, objective, instructions, escalation and status only. Capabilities are

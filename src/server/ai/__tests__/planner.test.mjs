@@ -53,6 +53,11 @@ for (const role of ALL_ROLES) {
     assert.ok(prompt.includes('Special owner rule'), 'must include owner instructions');
     if (role === 'manager') {
       assert.ok(!prompt.includes('Customer: Jane Doe'), 'manager must not see customer block');
+    } else if (role === 'marketing') {
+      // Marketing is given jobs by the owner or Shwari. It has no customer in
+      // front of it, so it is never shown one, even if a caller passes one.
+      assert.ok(!prompt.includes('Customer: Jane Doe'), 'marketing must not see customer block');
+      assert.ok(!prompt.includes('WHO YOU ARE TALKING TO'));
     } else {
       assert.ok(prompt.includes('Customer: Jane Doe'), 'specialist must see customer block');
     }

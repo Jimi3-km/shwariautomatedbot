@@ -398,7 +398,7 @@ export interface SetupStatus {
 // Shwari
 // ---------------------------------------------------------------------------
 
-export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders';
+export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders' | 'marketing';
 export type AgentStatus = 'draft' | 'active' | 'disabled';
 
 export interface TeamMember {
@@ -552,7 +552,7 @@ export interface AttentionReport {
   waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
 }
 
-/** One of the five agents every business has. */
+/** One of the six agents every business has. */
 export interface AgentConfig {
   id: string;
   role: AgentRole;
@@ -562,6 +562,8 @@ export interface AgentConfig {
   objective: string;
   /** What it handles, in the owner's words. */
   responsibilities: string[];
+  /** The rules it cannot be talked out of. Absent on a server that predates them. */
+  rules?: string[];
   instructions: string;
   escalation: string;
   status: AgentStatus;
@@ -570,6 +572,15 @@ export interface AgentConfig {
   /** False for the manager: it directs the others, so its setup is fixed. */
   editable: boolean;
   updated_at: string;
+}
+
+/** A standing correction the team was taught. `role` null means every agent. */
+export interface AgentLesson {
+  id: string;
+  role: AgentRole | null;
+  lesson: string;
+  source: 'owner' | 'qa_label' | 'staff_reply';
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +670,8 @@ export interface PostingSlot { day: number; time: string }
 export interface PostingSettings {
   approval_mode: ApprovalMode;
   paused: boolean;
+  /** True when the Marketing agent is switched off on the AI team page: nothing is planned or published. */
+  agent_off?: boolean;
   slots: PostingSlot[];
 }
 

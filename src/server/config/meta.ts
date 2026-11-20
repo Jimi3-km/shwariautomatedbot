@@ -65,6 +65,18 @@ export const metaConfig = {
      * for the plain Cloud API signup, which asks less of the Meta app.
      */
     featureType: (process.env.META_WHATSAPP_FEATURE_TYPE ?? '').trim(),
+    /**
+     * Which entry point starts the signup.
+     *
+     *   dialog  (default) Facebook's sign-in dialog with the Embedded Signup
+     *           configuration. It returns to our callback with a code, which
+     *           is what lets the app finish the connection.
+     *   hosted  Meta's own hosted page. It completes on Meta's side and does
+     *           not hand a code back, so the app never learns the number was
+     *           added: the owner saw "connected" on Meta's page and nothing
+     *           in the app.
+     */
+    flow: ((process.env.META_WHATSAPP_FLOW ?? '').trim().toLowerCase() === 'hosted' ? 'hosted' : 'dialog') as 'dialog' | 'hosted',
   },
 
   facebook: {

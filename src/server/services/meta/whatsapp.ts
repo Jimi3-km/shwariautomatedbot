@@ -106,7 +106,27 @@ function signupExtras(): Record<string, string> {
   return chosen === 'standard' || chosen === 'none' ? plain : { ...plain, featureType: metaConfig.whatsapp.featureType };
 }
 
+/** Facebook's sign-in dialog, which is what returns a code to our callback. */
+export const SIGNUP_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`;
+
 export function buildEmbeddedSignupUrl(state: string): string {
+  if (metaConfig.whatsapp.flow === 'dialog') {
+    const chosen = metaConfig.whatsapp.featureType.toLowerCase();
+    const extras: Record<string, unknown> = { setup: {}, sessionInfoVersion: '3' };
+    if (chosen && chosen !== 'standard' && chosen !== 'none') extras.featureType = metaConfig.whatsapp.featureType;
+    const dialog = new URLSearchParams({
+      client_id: metaConfig.appId,
+      config_id: metaConfig.whatsapp.configId,
+      response_type: 'code',
+      // Required with a configuration id, or the dialog ignores response_type.
+      override_default_response_type: 'true',
+      redirect_uri: metaConfig.whatsapp.redirectUri,
+      extras: JSON.stringify(extras),
+      state,
+    });
+    return `${SIGNUP_DIALOG_URL}?${dialog}`;
+  }
+
   const params = new URLSearchParams({
     app_id: metaConfig.appId,
     config_id: metaConfig.whatsapp.configId,
@@ -199,6 +219,63 @@ export interface WhatsAppPhoneNumber {
   displayPhoneNumber: string;
   verifiedName: string | null;
   qualityRating: string | null;
+}
+
+export interface WhatsAppNumberState {
+  /** CONNECTED once the number is live on the Cloud API. */
+  status: string | null;
+  /** CLOUD_API once registered; NOT_APPLICABLE or ON_PREMISE otherwise. */
+  platformType: string | null;
+  codeVerificationStatus: string | null;
+  live: boolean;
+}
+
+/** Is this number actually a working WhatsApp account yet? */
+export async function getNumberState(phoneNumberId: string, accessToken: string): Promise<WhatsAppNumberState> {
+  const params = new URLSearchParams({
+    fields: 'status,platform_type,code_verification_status',
+    access_token: accessToken,
+  });
+  const json = await graph<{ status?: string; platform_type?: string; code_verification_status?: string }>(
+    `/${phoneNumberId}?${params}`
+  );
+  const status = json.status ?? null;
+  const platformType = json.platform_type ?? null;
+  return {
+    status,
+    platformType,
+    codeVerificationStatus: json.code_verification_status ?? null,
+    live: platformType === 'CLOUD_API' && (status === 'CONNECTED' || status === null),
+  };
+}
+
+/**
+ * The six-digit PIN the number is registered with.
+ *
+ * WhatsApp asks for one when a number is registered and again if it is ever
+ * registered anew. It is derived from the server's encryption key and the
+ * number's id, so it is the same every time without being stored anywhere.
+ */
+export function registrationPin(phoneNumberId: string): string {
+  const key = metaConfig.tokenEncryptionKey || metaConfig.appSecret || 'unconfigured';
+  const digest = crypto.createHmac('sha256', key).update(`wa-pin:${phoneNumberId}`).digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+}
+
+/**
+ * Register the number with the Cloud API.
+ *
+ * Signing up adds the number to the business's account; it does not make it a
+ * live WhatsApp account. Until this call succeeds the number cannot send or
+ * receive anything and does not show up as being on WhatsApp at all.
+ */
+export async function registerNumber(phoneNumberId: string, accessToken: string): Promise<void> {
+  await graph(`/${phoneNumberId}/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ messaging_product: 'whatsapp', pin: registrationPin(phoneNumberId) }),
+    signal: AbortSignal.timeout(20_000),
+  });
 }
 
 export async function listPhoneNumbers(

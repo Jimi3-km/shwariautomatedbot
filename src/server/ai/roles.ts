@@ -1,7 +1,7 @@
 /**
  * The workforce.
  *
- * Five agents, the same five for every business. This is a deliberate change of
+ * Six agents, the same six for every business. This is a deliberate change of
  * shape: an owner does not design a team, choose departments or assemble
  * capabilities. They get a workforce that already knows its jobs, and they run
  * it by talking to Shwari.
@@ -17,13 +17,34 @@
  * rules" does not.
  */
 
-export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders';
+export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders' | 'marketing';
 
-/** The four customer-facing departments, in the order the UI shows them. */
+/**
+ * The four departments that answer customers, in the order the UI shows them.
+ *
+ * This is the list the router chooses from and the list a customer can be
+ * passed between. Anything that means "may be handed a customer's message"
+ * uses this, and nothing else.
+ */
 export const DEPARTMENTS: AgentRole[] = ['sales', 'support', 'booking', 'orders'];
 
+/**
+ * Everyone Shwari directs: the customer departments, plus marketing.
+ *
+ * This is the list for "an agent on the AI team page that the owner can
+ * reword or switch off, and that Shwari can hand a job to". Marketing is on
+ * it and not on DEPARTMENTS because it works on the posting calendar for the
+ * owner: it is never routed a customer's message and never takes a handover.
+ */
+export const TEAM_ROLES: AgentRole[] = [...DEPARTMENTS, 'marketing'];
+
 /** Every role, manager first. */
-export const ALL_ROLES: AgentRole[] = ['manager', ...DEPARTMENTS];
+export const ALL_ROLES: AgentRole[] = ['manager', ...TEAM_ROLES];
+
+/** Does this role ever answer a customer? Only the four departments do. */
+export function servesCustomers(role: AgentRole): boolean {
+  return DEPARTMENTS.includes(role);
+}
 
 export interface AgentBlueprint {
   readonly role: AgentRole;
@@ -136,6 +157,7 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'To book, move or cancel for a customer you need to know which customer: find them with find_customers first, and use the id it gives you. Never invent an id or a reference.',
       'Posts are public and permanent. Only posts the owner approved are published; a proposed post is not approved, and an approved post is not yet posted. Approve posts only when the owner says to, and say "published" only when the calendar shows it.',
       'You never create, edit or source a photo or video: posts use only what the owner uploaded. A caption you write is a draft for the owner to approve, and it states no price, offer or discount that the catalogue and business facts do not.',
+      'You may hand calendar work to Marketing - planning a week, checking captions, moving or rejecting a post - or do it yourself. Marketing cannot approve a post: approving stays with you, and only on the owner\'s word.',
     ],
   },
 
@@ -276,6 +298,44 @@ export const AGENT_BLUEPRINTS: Record<AgentRole, AgentBlueprint> = {
       'For a customer you may cancel their own order or correct its delivery location. Confirming or delivering an order is for the business — hand that to a person.',
       'Only ask for a delivery location when something is actually being delivered. A booking or a consultation needs no address.',
       'An appointment or consultation is for bookings, and choosing what to buy is for sales: pass the customer on with hand_to_department.',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // Marketing works for the owner, on the posting calendar. What it writes is
+  // public and permanent, so it holds no approval tool: it lays posts out and
+  // the owner approves them, through Shwari or on the Marketing page. It holds
+  // nothing that reaches a customer, an order, a payment or the catalogue.
+  marketing: {
+    role: 'marketing',
+    defaultName: 'Marketing',
+    summary: 'Plans the week\'s posts from your content library and publishes the ones you approve, on schedule.',
+    objective: 'Keep the business visible with posts that are true, approved and on time.',
+    responsibilities: [
+      'Plans the week\'s posts from the photos and videos in your content library',
+      'Checks every caption against your catalogue and flags anything it is not sure about',
+      'Publishes approved posts at their scheduled time, and nothing you have not approved',
+      'Reports what went out, what failed and why',
+      'Later: replies to comments and passes buyers to the right department',
+    ],
+    tools: [
+      // The library and the calendar
+      'list_content_library', 'propose_week_posts', 'list_scheduled_posts',
+      'update_scheduled_post', 'set_posting_schedule', 'pause_posting',
+      // Reading the business, so a caption states only what is true
+      'list_products', 'list_services', 'search_business_knowledge', 'get_business_profile',
+    ],
+    permissions: { answer_customers: false, configure_business: false, approve_posts: false },
+    escalation: 'Flags a caption it cannot back with your records, a post that failed or was rejected, and a library that is running low.',
+    rules: [
+      'You take jobs from the owner and from Shwari, never from a customer. You do not message customers and you do not take orders, bookings or payments.',
+      'Posts use only the photos and videos the owner uploaded to the content library. You never create, edit, generate or source a picture or a video.',
+      'A caption states only what the catalogue and the business facts say. Never invent a price, an offer, a discount, a stock claim, a testimonial or a result. Read the product or service before you write about it.',
+      'Nothing is published unless it is approved. You cannot approve a post: approval is the owner\'s, through Shwari or on the Marketing page. A caption you write or change is a draft waiting for that approval.',
+      'When you are not sure about a caption - a figure you cannot find, an offer with no record behind it - say so plainly and leave the post for the owner to read. Never tidy the doubt away.',
+      'Report real counts from the results: how many were proposed, approved, published and failed, and which posting times could not be filled. Say "proposed", "approved" or "published" exactly as the calendar shows; a proposed post is not approved, and an approved post is not yet published.',
+      'Never post more often than the posting times the owner set. How posts are approved is the owner\'s decision and you do not change it.',
+      'When a post failed or the library is running low, say what the owner needs to do: reconnect the account, upload more photos or videos, or reschedule the post.',
     ],
   },
 };

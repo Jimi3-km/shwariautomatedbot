@@ -12,6 +12,8 @@ import {
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
   readSignupReturn,
+  getNumberState,
+  registerNumber,
   WhatsAppError,
 } from '../../services/meta/whatsapp.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
@@ -51,6 +53,47 @@ function toAccount(row: {
   };
 }
 
+/**
+ * Make sure the number is a live WhatsApp account, registering it if not.
+ * Never throws: a number that could not be activated is still saved, and the
+ * health check says plainly what is wrong with it.
+ */
+async function activateNumber(phoneNumberId: string, accessToken: string): Promise<{ live: boolean; reason?: string }> {
+  try {
+    const before = await getNumberState(phoneNumberId, accessToken).catch(() => null);
+    if (before?.live) return { live: true };
+    await registerNumber(phoneNumberId, accessToken);
+    const after = await getNumberState(phoneNumberId, accessToken).catch(() => null);
+    return after && !after.live
+      ? { live: false, reason: numberProblem(after) }
+      : { live: true };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('[providers/whatsapp] could not register the number:', detail);
+    return { live: false, reason: activationHint(detail) };
+  }
+}
+
+function numberProblem(state: { status: string | null; platformType: string | null; codeVerificationStatus: string | null }): string {
+  if (state.codeVerificationStatus && state.codeVerificationStatus !== 'VERIFIED') {
+    return 'The number has not been verified with the code WhatsApp sends by SMS or call. Finish verifying it in the WhatsApp signup, then reconnect.';
+  }
+  return `WhatsApp reports this number as ${state.status ?? 'not ready'}. It is not live yet.`;
+}
+
+function activationHint(detail: string): string {
+  if (/two.?step|pin/i.test(detail)) {
+    return 'This number already has a two-step verification PIN set elsewhere. Turn two-step verification off for the number in WhatsApp Manager, then reconnect.';
+  }
+  if (/verif/i.test(detail)) {
+    return 'The number has not been verified with the code WhatsApp sends. Finish verifying it in the signup, then reconnect.';
+  }
+  if (/already|in use|registered/i.test(detail)) {
+    return 'This number is still registered on the WhatsApp or WhatsApp Business app on a phone. Delete that account in the app first, or use a number that is not on WhatsApp.';
+  }
+  return 'WhatsApp did not activate this number. Open WhatsApp Manager to see what it needs, then reconnect.';
+}
+
 export const whatsappProvider: ChannelProvider = {
   id: 'whatsapp',
   label: 'WhatsApp',
@@ -78,6 +121,7 @@ export const whatsappProvider: ChannelProvider = {
     let accessToken: string;
     let wabaId: string;
     let phone;
+    let activation: { live: boolean; reason?: string } = { live: false };
 
     try {
       // The code is short-lived — Meta gives it 30 seconds — so the exchange
@@ -102,6 +146,10 @@ export const whatsappProvider: ChannelProvider = {
 
       // Inbound messages only arrive once the app is subscribed to the WABA.
       await subscribeApp(wabaId, accessToken);
+
+      // And the number only exists on WhatsApp once it is registered. Without
+      // this the dashboard said "connected" for a number nobody could message.
+      activation = await activateNumber(phone.id, accessToken);
     } catch (e) {
       if (e instanceof ProviderError) throw e;
       if (e instanceof WhatsAppError) {
@@ -188,6 +236,19 @@ export const whatsappProvider: ChannelProvider = {
     const token = await loadToken(ctx.tenantId, 'whatsapp');
     if (!token) {
       return { healthy: false, summary: 'WhatsApp authorization is missing. Reconnect WhatsApp.', needs_reconnect: true };
+    }
+
+    // "Connected" has to mean the number works. A number that was added but
+    // never became a live WhatsApp account is reported as exactly that.
+    const { data: own } = await serviceClient
+      .from('channels').select('channel_account_id')
+      .eq('id', channelId).eq('tenant_id', ctx.tenantId).maybeSingle();
+    const phoneNumberId = (own as { channel_account_id?: string } | null)?.channel_account_id;
+    if (phoneNumberId) {
+      const state = await getNumberState(phoneNumberId, token.accessToken).catch(() => null);
+      if (state && !state.live) {
+        return { healthy: false, summary: numberProblem(state), needs_reconnect: true };
+      }
     }
 
     // The row records the WABA; re-reading it proves the token still works and

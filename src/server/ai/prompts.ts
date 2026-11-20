@@ -1,4 +1,4 @@
-import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, DEPARTMENTS, type AgentRole } from './roles.js';
+import { AGENT_BLUEPRINTS, UNIVERSAL_RULES, DEPARTMENTS, servesCustomers, type AgentRole } from './roles.js';
 import { skillBlock } from './skills/index.js';
 
 /**
@@ -120,6 +120,10 @@ const ROLE_BRIEF: Record<AgentRole, { job: string; notYours: string }> = {
     job: 'You look after orders from the moment they are placed until they arrive, walk customers through how to pay, and write down what they tell you about a payment so a colleague can verify it.',
     notYours: 'Helping someone choose what to buy is for sales. Appointments and consultations are for bookings. Complaints, refunds and disputes go to a person.',
   },
+  marketing: {
+    job: 'You run the posting calendar. You plan the week\'s posts from the photos and videos the owner uploaded, check every caption against the catalogue and the business facts, keep the calendar tidy, and report what went out and what failed.',
+    notYours: 'Approving a post is the owner\'s, through Shwari or on the Marketing page - you never approve one. Making or editing a picture or video is never done by anyone on the team. Talking to customers, orders, bookings and payments belong to the other departments.',
+  },
 };
 
 const WORKING_METHOD_CUSTOMER = [
@@ -151,7 +155,14 @@ export function buildSystemPrompt(
 ): string {
   const blueprint = AGENT_BLUEPRINTS[agent.role];
   const brief = ROLE_BRIEF[agent.role];
-  const customerFacing = agent.role !== 'manager' && !turn.staffCommanded;
+  // Three kinds of agent, not two. The manager talks with the owner. A
+  // department serves customers, unless staff are commanding it on this turn.
+  // Marketing does neither: it is only ever given jobs by the owner or by
+  // Shwari, so it always gets the owner voice and never a customer block.
+  const department = servesCustomers(agent.role);
+  const backOffice = agent.role !== 'manager' && !department;
+  const staffCommanded = backOffice || Boolean(turn.staffCommanded);
+  const customerFacing = department && !staffCommanded;
 
   const sections: string[] = [];
 
@@ -165,14 +176,20 @@ export function buildSystemPrompt(
     `Not your job: ${brief.notYours}`
   );
 
-  if (agent.role !== 'manager') {
+  // Colleagues are the people a customer can be passed to, so only a
+  // department is told about them.
+  if (department) {
     const colleagues = DEPARTMENTS.filter((d) => d !== agent.role)
       .map((d) => `${d} (${AGENT_BLUEPRINTS[d].summary.replace(/\.$/, '')})`)
       .join('; ');
     sections.push(`Your colleagues: ${colleagues}.`);
   }
 
-  if (turn.staffCommanded && agent.role !== 'manager') {
+  if (backOffice) {
+    sections.push(
+      'You are given jobs by the owner, or by Shwari, the manager, acting for the owner - never by a customer, and you never write to one. Do the job and report back briefly what the results show.'
+    );
+  } else if (staffCommanded) {
     sections.push(
       'Right now a member of the business\'s own staff is asking you to do a job, not a customer. Do it and report back briefly what you did.'
     );
@@ -212,13 +229,14 @@ export function buildSystemPrompt(
     '--- end of reference ---'
   );
 
-  if (customerBlock) {
+  // Only a department is ever told about a customer.
+  if (customerBlock && department) {
     sections.push('', '--- WHO YOU ARE TALKING TO ---', customerBlock);
     if (turn.signals) sections.push(turn.signals);
     sections.push('--- end ---');
   }
 
-  if (turn.handover) {
+  if (turn.handover && department) {
     sections.push(
       '',
       `Your colleague in ${turn.handover.from} has just passed this customer to you. Their note (a colleague's summary, for context): "${untrustedText(turn.handover.summary, 500)}"`,
@@ -229,7 +247,7 @@ export function buildSystemPrompt(
       '',
       agent.role === 'manager'
         ? 'This is the start of the conversation. Greet the owner in one friendly line and ask the one question that matters most given what setup is still missing. Do not recite the reference.'
-        : turn.staffCommanded
+        : staffCommanded
           ? 'This is a single job. Do it and report back.'
           : 'This is the customer\'s first message. If it is only a greeting, greet them back in their language and ask how you can help. If it already asks for something, skip the pleasantries and help with it straight away.'
     );

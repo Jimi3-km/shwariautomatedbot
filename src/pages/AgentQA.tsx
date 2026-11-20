@@ -19,6 +19,7 @@ const ROLES = [
   { value: 'support', label: 'Support Specialist' },
   { value: 'booking', label: 'Booking Specialist' },
   { value: 'orders', label: 'Orders Specialist' },
+  { value: 'marketing', label: 'Marketing' },
 ];
 
 const CHANNELS = [

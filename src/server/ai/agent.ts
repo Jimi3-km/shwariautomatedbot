@@ -4,7 +4,7 @@ import {
   complete, LlmNotConfiguredError, allowedModel, type ChatMessage, type ToolDefinition, type ModelProfile,
 } from './llm.js';
 import { TOOLS, toolsFor, runTool, definitionOf, type AgentContext } from './tools/index.js';
-import { AGENT_BLUEPRINTS, ALL_ROLES, type AgentRole } from './roles.js';
+import { AGENT_BLUEPRINTS, ALL_ROLES, servesCustomers, type AgentRole } from './roles.js';
 import { buildSystemPrompt, untrustedText } from './prompts.js';
 import { describeNow, safeTimezone } from './time.js';
 import type { Role } from '../auth.js';
@@ -35,6 +35,11 @@ const MAX_TOOL_ROUNDS = 5;
  * more steps. The turn deadline still bounds how long that can take.
  */
 const MANAGER_TOOL_ROUNDS = 12;
+/**
+ * Marketing lays out a week and reads the catalogue behind each caption, which
+ * is more lookups than one customer question needs and fewer than a setup job.
+ */
+const MARKETING_TOOL_ROUNDS = 8;
 /** Messages older than this gap belong to an earlier conversation, not this one. */
 const SESSION_GAP_MS = 12 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 12;
@@ -108,10 +113,11 @@ interface AgentRow {
 /**
  * Make sure this business has its workforce.
  *
- * Every tenant gets the same five agents, and they are created together the
+ * Every tenant gets the same six agents, and they are created together the
  * first time anything needs one. There is no assembly step and no choosing:
- * a business that signs up today has a manager and four departments before its
- * owner types a word.
+ * a business that signs up today has a manager, four departments and
+ * marketing before its owner types a word. A business that existed before a
+ * role was added gets the missing one here, the next time anything looks.
  *
  * Idempotent by construction — the unique constraint on (tenant_id, role) means
  * a concurrent call inserts nothing rather than duplicating a department.
@@ -121,11 +127,48 @@ export async function ensureWorkforce(tenantId: string): Promise<void> {
     .from('agents').select('role').eq('tenant_id', tenantId);
 
   const have = new Set((existing ?? []).map((a) => a.role));
-  const missing = ALL_ROLES.filter((r) => !have.has(r));
+  let missing = ALL_ROLES.filter((r) => !have.has(r));
+  // The database said recently that it does not take this role yet. Do not
+  // ask again on every customer message; see roleNotAccepted below.
+  if (Date.now() < newRoleRetryAt) missing = missing.filter((r) => !NEWER_ROLES.includes(r));
   if (!missing.length) return;
 
-  const { error } = await serviceClient.from('agents').insert(
-    missing.map((role) => {
+  let { error } = await insertAgents(tenantId, missing);
+
+  // Migration 0026 widens the check on agents.role to take 'marketing'. Until
+  // it is applied, a batch containing that row is rejected whole - which for a
+  // new business would mean no agents at all. So that one refusal is caught
+  // by what it is, and the rest of the workforce is created without it. The
+  // other five work exactly as before; the sixth appears once the migration is
+  // in, with no deploy needed.
+  if (error && roleNotAccepted(error) && missing.some((r) => NEWER_ROLES.includes(r))) {
+    newRoleRetryAt = Date.now() + NEW_ROLE_RETRY_MS;
+    console.warn('[agent] the database does not accept the marketing role yet (migration 0026 is pending); carrying on without it');
+    const rest = missing.filter((r) => !NEWER_ROLES.includes(r));
+    error = rest.length ? (await insertAgents(tenantId, rest)).error : null;
+  }
+
+  // A duplicate key means another request got there first, which is the
+  // outcome we wanted anyway.
+  if (error && error.code !== '23505') {
+    console.error('[agent] could not provision the workforce:', error.message);
+  }
+}
+
+/** Roles added after the first five, which an older database may still refuse. */
+const NEWER_ROLES: AgentRole[] = ['marketing'];
+const NEW_ROLE_RETRY_MS = 10 * 60 * 1000;
+/** Until this moment the newer roles are not offered to the database again. */
+let newRoleRetryAt = 0;
+
+/** A check constraint said no: the role column does not list this role yet. */
+function roleNotAccepted(error: { code?: string; message?: string }): boolean {
+  return error.code === '23514' || /violates check constraint/i.test(error.message ?? '');
+}
+
+function insertAgents(tenantId: string, roles: AgentRole[]) {
+  return serviceClient.from('agents').insert(
+    roles.map((role) => {
       const blueprint = AGENT_BLUEPRINTS[role];
       return {
         tenant_id: tenantId,
@@ -142,12 +185,6 @@ export async function ensureWorkforce(tenantId: string): Promise<void> {
       };
     })
   );
-
-  // A duplicate key means another request got there first, which is the
-  // outcome we wanted anyway.
-  if (error && error.code !== '23505') {
-    console.error('[agent] could not provision the workforce:', error.message);
-  }
 }
 
 /**
@@ -564,11 +601,19 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   // The role is the one the caller asked for and loadAgent filtered on; the
   // row cannot rename itself into a different department.
   const role: AgentRole = input.role;
-  const customerFacing = role !== 'manager' && !input.userId;
+  // Only a department ever answers a customer, and only when no member of
+  // staff is behind the turn. Marketing is never customer-facing: it is given
+  // jobs by the owner or by Shwari, with or without a signed-in user.
+  const department = servesCustomers(role);
+  const customerFacing = department && !input.userId;
+  /** A job given by staff to an agent other than the manager. Always true for marketing. */
+  const staffCommanded = role !== 'manager' && (Boolean(input.userId) || !department);
 
   const [orient, settings, userRole, lessons, signals] = await Promise.all([
     orientation(input.tenantId, role),
-    role === 'manager' ? Promise.resolve(null) : loadAgentSettings(input.tenantId).catch(() => null),
+    // The AI Agent page shapes how customers are spoken to, so it applies to
+    // the departments only: not to the manager, and not to marketing.
+    department ? loadAgentSettings(input.tenantId).catch(() => null) : Promise.resolve(null),
     input.userId ? staffRole(input.tenantId, input.userId).catch(() => null) : Promise.resolve(undefined),
     loadLessons(input.tenantId, role),
     // Read how this customer is behaving - what they want, how keen, how they
@@ -654,10 +699,11 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
   }
 
-  // Customer memory is for the departments serving a customer, not for the
-  // manager, who is talking to the owner.
+  // Customer memory is for the departments serving a customer: not for the
+  // manager, who is talking to the owner, and not for marketing, which has no
+  // customer in front of it even when the job arrived through a conversation.
   const customerBlock =
-    role === 'manager' ? null : await customerContext(input.tenantId, input.conversationId);
+    department ? await customerContext(input.tenantId, input.conversationId) : null;
 
   const messages: ChatMessage[] = [
     {
@@ -673,7 +719,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
           signals: signals ? signalsBlock(signals) : null,
           lessons,
           handover: input.handover ?? null,
-          staffCommanded: role !== 'manager' && Boolean(input.userId),
+          staffCommanded,
         }
       ),
     },
@@ -748,7 +794,8 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
   }
 
-  const maxRounds = role === 'manager' ? MANAGER_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+  const maxRounds =
+    role === 'manager' ? MANAGER_TOOL_ROUNDS : role === 'marketing' ? MARKETING_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
   const profile: ModelProfile = (role === 'booking' || role === 'orders') ? 'fast' : 'primary';
   const model = settings?.model ?? undefined;
 
@@ -815,8 +862,9 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       // confirming a payment, or exposing how the system works.
       const check = checkReply({
         reply: draft, okTools, actedTools, toolNames, customerFacing,
-        // Only the manager is held to "you were asked to do something".
-        ...(role === 'manager' ? { request: input.text } : {}),
+        // The agents that are given jobs rather than customers - the manager
+        // and marketing - are held to "you were asked to do something".
+        ...(department ? {} : { request: input.text }),
       });
       if (!check.ok) {
         // Two chances. The second time the model is not asked nicely: if it

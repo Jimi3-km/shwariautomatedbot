@@ -230,6 +230,14 @@ export function Marketing() {
             Posting is paused. Nothing will be published, including approved posts, until it is resumed under Schedule.
           </Notice>
         )}
+        {status.data?.settings.agent_off && (
+          <Notice tone="warning">
+            The Marketing agent is switched off, so no posts are being planned or published, including approved ones.
+            They stay on the calendar.{' '}
+            <Link to="/agents" style={{ textDecoration: 'underline' }}>Switch Marketing on</Link>{' '}
+            from the AI team page to resume.
+          </Notice>
+        )}
       </div>
 
       {tab === 'calendar' && (

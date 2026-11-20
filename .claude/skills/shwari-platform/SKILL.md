@@ -29,7 +29,7 @@ business has taught it.
 | Bookings | Customers | The diary: free times, booking, moving, cancelling |
 | Orders & Payments | Customers | Order status, payment steps, recording payment claims |
 | Support | Customers | Problems, policies, handover to a person |
-| **Marketing** (planned) | The public | Posting, comments, turning engagement into conversations |
+| **Marketing** | The owner (never customers) | Planning and publishing approved posts; comments are planned |
 
 Marketing is public-facing in a way the others are not: what it writes is seen
 by everyone, permanently. It therefore has stricter rules (see "Marketing").

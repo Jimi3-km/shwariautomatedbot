@@ -2,7 +2,7 @@ import React, {
   createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, CheckCircle2, Info, Loader2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, Info, Loader2, X } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Button
@@ -166,6 +166,84 @@ export function FilterChip({ active, onClick, children }: {
 }) {
   return (
     <button type="button" className="chip" aria-pressed={active} onClick={onClick}>{children}</button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure
+// ---------------------------------------------------------------------------
+
+/**
+ * The part of a disclosure that opens and closes.
+ *
+ * Exported on its own for an accordion whose header is more than a title (the
+ * AI team page puts a switch beside it). Closed content stays in the page but
+ * is hidden from the keyboard and from screen readers by the stylesheet, which
+ * also drops the animation for anyone who asked for reduced motion.
+ */
+export function DisclosurePanel({ id, open, labelledBy, children }: {
+  id: string; open: boolean; labelledBy?: string; children: React.ReactNode;
+}) {
+  return (
+    <div id={id} className="disclosure-panel" data-open={open ? 'true' : 'false'} role="group" aria-labelledby={labelledBy}>
+      <div className="disclosure-inner">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One collapsible section: a real button that owns the region beneath it.
+ *
+ * Pass `open` and `onToggle` to control it, or neither to let it keep its own
+ * state. `count` shows how much is inside before it is opened.
+ */
+export function Disclosure({ title, count, open, defaultOpen = false, onToggle, children, className = '' }: {
+  title: React.ReactNode;
+  count?: number;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onToggle?: (open: boolean) => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const id = useId();
+  const [own, setOwn] = useState(defaultOpen);
+  const isOpen = open ?? own;
+
+  const toggle = () => {
+    if (open === undefined) setOwn(!isOpen);
+    onToggle?.(!isOpen);
+  };
+
+  return (
+    <div className={`disclosure ${className}`} data-open={isOpen ? 'true' : 'false'}>
+      <button
+        type="button" id={`${id}-head`} className="disclosure-head"
+        aria-expanded={isOpen} aria-controls={`${id}-panel`} onClick={toggle}
+      >
+        <span className="disclosure-title">{title}</span>
+        {count !== undefined && <span className="disclosure-count">{count}</span>}
+        <ChevronDown size={15} className="disclosure-chev" aria-hidden />
+      </button>
+      <DisclosurePanel id={`${id}-panel`} open={isOpen} labelledBy={`${id}-head`}>
+        <div className="disclosure-body">{children}</div>
+      </DisclosurePanel>
+    </div>
+  );
+}
+
+/** An on/off switch. A button with role="switch", so Space and Enter both work. */
+export function Switch({ checked, onChange, label, disabled, busy }: {
+  checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean; busy?: boolean;
+}) {
+  return (
+    <button
+      type="button" role="switch" className="switch"
+      aria-checked={checked} aria-label={label} aria-busy={busy || undefined}
+      disabled={disabled || busy} onClick={() => onChange(!checked)}
+    >
+      <span className="switch-track" aria-hidden />
+    </button>
   );
 }
 

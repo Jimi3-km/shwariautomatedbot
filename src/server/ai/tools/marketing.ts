@@ -2,7 +2,7 @@ import { serviceClient } from '../../supabase.js';
 import { ToolInputError, str, bool, oneOf, type Tool, type AgentContext } from './types.js';
 import { parseInTimezone, safeTimezone } from '../time.js';
 import {
-  MarketingError, NOT_SET_UP, missingTable, isUuid, describeWhen,
+  MarketingError, NOT_SET_UP, MARKETING_AGENT_OFF, missingTable, isUuid, describeWhen,
   getSettings, saveSettings, postingReadiness, loadGrounding, checkCaption,
   planWeek, listPosts, approvePosts, updatePost, schedulePost,
   type ContentItem, type ScheduledPost, type PostStatus,
@@ -143,6 +143,7 @@ export const proposeWeekPosts: Tool = {
       week_starting: plan.week_start,
       approval_mode: plan.mode,
       posting_paused: plan.paused,
+      marketing_agent_off: plan.agent_off,
       proposed_count: plan.proposed.length,
       waiting_for_approval: waiting.length,
       approved_automatically: plan.proposed.length - waiting.length,
@@ -158,6 +159,7 @@ export const proposeWeekPosts: Tool = {
         plan.note,
         waiting.length ? UNAPPROVED_NOTE : '',
         plan.unfilled.length ? 'The library is running low: ask the owner to upload more photos or videos.' : '',
+        plan.agent_off ? MARKETING_AGENT_OFF : '',
         ready.note,
       ].filter(Boolean).join(' ') || undefined,
     };
@@ -197,11 +199,13 @@ export const listScheduledPosts: Tool = {
       by_status: countBy(posts.map((p) => p.status)),
       approval_mode: settings.approval_mode,
       posting_paused: settings.paused,
+      marketing_agent_off: settings.agent_off,
       posts: posts.slice(0, 40).map((p) => postView(p, tz)),
       note: [
         !posts.length ? 'Nothing is on the calendar for those dates.' : '',
         waiting ? `${waiting} ${waiting === 1 ? 'post is' : 'posts are'} waiting for approval. ${UNAPPROVED_NOTE}` : '',
         settings.paused ? 'Posting is paused: nothing will be published until it is resumed.' : '',
+        settings.agent_off ? MARKETING_AGENT_OFF : '',
       ].filter(Boolean).join(' ') || undefined,
     };
   },
@@ -245,6 +249,7 @@ export const approvePostsTool: Tool = {
           ? 'These are approved, not yet published: each goes out at its time. Say "approved", not "posted".'
           : 'Nothing was approved.',
         settings.paused ? 'Posting is paused, so they will not go out until it is resumed.' : '',
+        settings.agent_off ? MARKETING_AGENT_OFF : '',
         ready.note,
       ].filter(Boolean).join(' '),
     };
@@ -351,6 +356,13 @@ export const setPostingSchedule: Tool = {
     if (args.slots === undefined && args.approval_mode === undefined) {
       throw new ToolInputError('Pass slots, approval_mode, or both.');
     }
+    // How posts are approved decides what may go out without the owner
+    // reading it. An agent that cannot approve a post must not be able to
+    // switch approval off either, so for Marketing this is refused in code:
+    // the mode is changed through Shwari, or on the Marketing page.
+    if (ctx.agentRole === 'marketing' && args.approval_mode !== undefined) {
+      throw new ToolInputError('How posts are approved is the owner\'s decision. It is changed through Shwari or on the Marketing page, under Schedule. You can still set the posting days and times.');
+    }
     const settings = await guarded(() => saveSettings(ctx.tenantId, {
       slots: args.slots,
       approval_mode: args.approval_mode === undefined ? undefined : oneOf(args, 'approval_mode', ['week', 'each', 'autopilot'] as const, null),
@@ -359,6 +371,7 @@ export const setPostingSchedule: Tool = {
       saved: true,
       approval_mode: settings.approval_mode,
       posting_paused: settings.paused,
+      marketing_agent_off: settings.agent_off,
       posts_per_week: settings.slots.length,
       posting_times: settings.slots.map((s) => `${DAY_NAMES[s.day]} ${s.time}`),
       note: 'This is now what the Marketing page shows under Schedule. Posts already on the calendar keep their times.',
@@ -384,10 +397,13 @@ export const pausePosting: Tool = {
     const { posts } = await listPosts(ctx.tenantId, { from: new Date(), status: 'approved', limit: 100 });
     return {
       posting_paused: settings.paused,
+      marketing_agent_off: settings.agent_off,
       approved_posts_waiting: posts.length,
       note: settings.paused
         ? 'Posting is paused. Nothing will be published until it is resumed.'
-        : 'Posting is on again. Approved posts go out at their times.',
+        : settings.agent_off
+          ? `Posting is no longer paused, but nothing will go out yet. ${MARKETING_AGENT_OFF}`
+          : 'Posting is on again. Approved posts go out at their times.',
     };
   },
 };

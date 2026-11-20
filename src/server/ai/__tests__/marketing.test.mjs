@@ -212,6 +212,7 @@ const { encryptToken } = await import('../../services/meta/tokens.js');
 const { buildAuthorizeUrl, createState } = await import('../../services/meta/instagram.js');
 const { RECONNECT_MESSAGE } = await import('../../services/meta/instagramPublish.js');
 const { AGENT_BLUEPRINTS, DEPARTMENTS } = await import('../roles.js');
+const { MARKETING_AGENT_OFF, postingStopped } = await import('../../services/marketing.js');
 const { TOOLS, runTool } = await import('../tools/index.js');
 const { canUserRunTool } = await import('../../security/permissions.js');
 const { checkReply } = await import('../guard.js');
@@ -712,15 +713,184 @@ const managerCtx = (extra = {}) => ({
 });
 const call = (name, args, ctx = managerCtx()) => runTool(TOOLS, name, JSON.stringify(args), ctx);
 
-await t('the posting tools exist and only the manager holds them', () => {
+await t('the posting tools exist and only the manager and marketing hold them', () => {
   for (const name of MARKETING_TOOLS) {
     assert.ok(TOOLS.has(name), `${name} is not in the catalogue`);
     assert.ok(AGENT_BLUEPRINTS.manager.tools.includes(name), `Shwari is missing ${name}`);
     for (const role of DEPARTMENTS) {
       assert.ok(!AGENT_BLUEPRINTS[role].tools.includes(name), `${role} must not hold ${name}`);
     }
+    // Marketing holds every one of them except the approval.
+    assert.equal(AGENT_BLUEPRINTS.marketing.tools.includes(name), name !== 'approve_posts', name);
   }
 });
+
+await t('only the manager can approve posts', () => {
+  for (const [role, blueprint] of Object.entries(AGENT_BLUEPRINTS)) {
+    assert.equal(blueprint.tools.includes('approve_posts'), role === 'manager', role);
+  }
+});
+
+const marketingCtx = (extra = {}) => ({
+  tenantId: TENANT, userId: 'u1', agentRole: 'marketing', conversationId: null,
+  allowedTools: AGENT_BLUEPRINTS.marketing.tools, userRole: 'owner', timezone: 'Africa/Nairobi',
+  turn: { done: new Map() }, ...extra,
+});
+
+await t('marketing cannot approve a post, even if it tries', async () => {
+  seed();
+  const p = post({ scheduled_for: new Date(Date.now() + 86_400_000).toISOString() });
+  const out = await call('approve_posts', { post_ids: [p.id] }, marketingCtx());
+  assert.equal(out.ok, false);
+  assert.match(out.payload.error, /not permitted/);
+  assert.equal(p.status, 'proposed');
+  assert.equal(p.approved_by, null);
+});
+
+await t('marketing cannot change how posts are approved, only when they go out', async () => {
+  seed();
+  const refused = await call('set_posting_schedule', { approval_mode: 'autopilot' }, marketingCtx());
+  assert.equal(refused.ok, false);
+  assert.match(refused.payload.error, /owner's decision/);
+  assert.equal((await getSettings(TENANT)).approval_mode, 'week', 'the approval mode did not move');
+
+  const times = await call('set_posting_schedule', { slots: [{ day: 2, time: '10:00' }] }, marketingCtx());
+  assert.equal(times.ok, true);
+  assert.deepEqual((await getSettings(TENANT)).slots, [{ day: 2, time: '10:00' }]);
+  assert.equal((await getSettings(TENANT)).approval_mode, 'week');
+
+  // Shwari, on the owner's word, still can.
+  assert.equal((await call('set_posting_schedule', { approval_mode: 'each' })).ok, true);
+  assert.equal((await getSettings(TENANT)).approval_mode, 'each');
+});
+
+await t('what marketing lays out is proposed, never approved or published', async () => {
+  seed({ items: [item(1), item(2)] });
+  const out = await call('propose_week_posts', {}, marketingCtx());
+  assert.equal(out.ok, true);
+  assert.equal(out.payload.proposed_count, posts().length);
+  assert.ok(posts().every((p) => p.status === 'proposed' && !p.approved_by));
+  assert.equal(ig.calls.length, 0);
+
+  // A caption it rewrites on an approved post sends it back for approval.
+  const approved = post({ status: 'approved', approved_by: 'u1', scheduled_for: new Date(Date.now() + 9 * 86_400_000).toISOString(), content_item_id: uuid(3) });
+  const edited = await call('update_scheduled_post', { post_id: approved.id, caption: 'A new caption' }, marketingCtx());
+  assert.equal(edited.ok, true);
+  assert.equal(approved.status, 'proposed', 'a caption an agent wrote is a draft');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- switching the Marketing agent off ---');
+
+const marketingAgent = (status) => { tables.agents = [{ tenant_id: TENANT, role: 'marketing', status }]; };
+
+await t('with the Marketing agent off, nothing is published and the post keeps its approval', async () => {
+  seed();
+  marketingAgent('disabled');
+  const p = post({ status: 'approved', scheduled_for: MON });
+
+  const out = await publishDuePosts({ now: after(MON) });
+  assert.equal(out.published, 0);
+  assert.equal(out.held, 1);
+  assert.equal(ig.calls.length, 0, 'nothing reached Instagram');
+  assert.equal(p.status, 'approved');
+
+  const settings = await getSettings(TENANT);
+  assert.equal(settings.agent_off, true);
+  assert.equal(settings.paused, false, 'the owner\'s own pause is a separate switch and was not touched');
+  assert.equal(postingStopped(settings), true);
+
+  marketingAgent('active');
+  assert.equal((await publishDuePosts({ now: after(MON, 30) })).published, 1, 'it goes out once Marketing is switched back on');
+  assert.equal(publishCalls(), 1);
+});
+
+await t('with the Marketing agent off, no week is planned automatically', async () => {
+  seed();
+  marketingAgent('disabled');
+  const off = await planDueWeeks({ now: NOW });
+  assert.equal(off.planned, 0);
+  assert.equal(posts().length, 0);
+
+  marketingAgent('active');
+  const on = await planDueWeeks({ now: NOW });
+  assert.equal(on.planned, 1);
+  assert.equal(posts().length, 3);
+});
+
+await t('switching Marketing off stops one business and no other', async () => {
+  seed();
+  marketingAgent('disabled');
+  const other = 't2';
+  tables.tenants.push({ id: other, timezone: 'Africa/Nairobi', currency: 'KES' });
+  tables.meta_tokens.push({ ...tables.meta_tokens[0], tenant_id: other });
+  const mine = post({ status: 'approved', scheduled_for: MON });
+  const theirs = post({ status: 'approved', scheduled_for: MON, tenant_id: other });
+
+  const out = await publishDuePosts({ now: after(MON) });
+  assert.equal(out.published, 1);
+  assert.equal(out.held, 1);
+  assert.equal(mine.status, 'approved');
+  assert.equal(theirs.status, 'published');
+});
+
+await t('publish now is refused while Marketing is off, with the reason', async () => {
+  seed();
+  marketingAgent('disabled');
+  const p = post({ status: 'approved', scheduled_for: WED });
+  await assert.rejects(() => publishNow(TENANT, p.id, { by: 'u1', now: NOW }), /Marketing agent is switched off/);
+  assert.equal(ig.calls.length, 0);
+  assert.equal(p.status, 'approved');
+});
+
+await t('Shwari is told why nothing is going out', async () => {
+  seed();
+  marketingAgent('disabled');
+  post({ scheduled_for: new Date(Date.now() + 86_400_000).toISOString() });
+
+  const calendar = await call('list_scheduled_posts', {});
+  assert.equal(calendar.payload.marketing_agent_off, true);
+  assert.equal(calendar.payload.posting_paused, false);
+  assert.ok(calendar.payload.note.includes(MARKETING_AGENT_OFF));
+  assert.match(MARKETING_AGENT_OFF, /switched off on the AI team page/);
+
+  const plan = await call('propose_week_posts', {});
+  assert.equal(plan.payload.marketing_agent_off, true);
+  assert.ok(plan.payload.note.includes(MARKETING_AGENT_OFF));
+
+  const resumed = await call('pause_posting', { paused: false });
+  assert.equal(resumed.payload.posting_paused, false);
+  assert.match(resumed.payload.note, /nothing will go out yet/);
+});
+
+await t('a business with no marketing row posts exactly as before', async () => {
+  // A database that has not had migration 0026: the row cannot exist. Its
+  // absence must never be read as "off".
+  seed();
+  assert.equal(tables.agents, undefined);
+  const settings = await getSettings(TENANT);
+  assert.equal(settings.agent_off, false);
+  post({ status: 'approved', scheduled_for: MON });
+  assert.equal((await publishDuePosts({ now: after(MON) })).published, 1);
+
+  // A draft agent is not "off" either; only an explicit switch-off is.
+  seed();
+  marketingAgent('draft');
+  assert.equal((await getSettings(TENANT)).agent_off, false);
+});
+
+await t('the owner\'s pause still works on its own, with Marketing on', async () => {
+  seed({ settings: { approval_mode: 'week', paused: true, slots: [{ day: 1, time: '18:00' }] } });
+  marketingAgent('active');
+  const p = post({ status: 'approved', scheduled_for: MON });
+  assert.equal((await publishDuePosts({ now: after(MON) })).held, 1);
+  assert.equal(p.status, 'approved');
+  const settings = await getSettings(TENANT);
+  assert.deepEqual([settings.paused, settings.agent_off], [true, false]);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- Shwari and the calendar, continued ---');
 
 await t('every posting tool has a label on the AI team page', async () => {
   const page = await readFile(new URL('../../../pages/Agents.tsx', import.meta.url), 'utf8');

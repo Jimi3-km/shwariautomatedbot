@@ -1,7 +1,7 @@
 import { serviceClient } from '../../supabase.js';
 import { logAuditEvent } from '../../security/audit.js';
 import type { ToolDefinition } from '../llm.js';
-import type { AgentRole } from '../roles.js';
+import { servesCustomers, type AgentRole } from '../roles.js';
 import { canUserRunTool } from '../../security/permissions.js';
 import type { Role } from '../../auth.js';
 
@@ -33,8 +33,8 @@ export interface AgentContext {
   allowedTools: string[];
   /**
    * True when this turn answers a customer rather than staff. Left unset it is
-   * derived: a department with no signed-in user behind it is serving a
-   * customer. See isCustomerTurn.
+   * derived: one of the four customer departments with no signed-in user
+   * behind it is serving a customer. See isCustomerTurn.
    */
   customerFacing?: boolean;
   /** The staff member's role in this business, when a person is commanding the agent. */
@@ -62,7 +62,9 @@ export interface AgentContext {
  * conversation belongs to — never on an id the model was talked into sending.
  */
 export function isCustomerTurn(ctx: AgentContext): boolean {
-  return ctx.customerFacing ?? (ctx.agentRole !== 'manager' && !ctx.userId);
+  // Only the four departments ever serve a customer. The manager and marketing
+  // work for the owner, so a turn of theirs is never one, signed in or not.
+  return ctx.customerFacing ?? (servesCustomers(ctx.agentRole) && !ctx.userId);
 }
 
 export interface CustomerScope {

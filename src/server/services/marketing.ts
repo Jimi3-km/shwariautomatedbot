@@ -33,7 +33,16 @@ export interface Slot { day: number; time: string }
 
 export interface PostingSettings {
   approval_mode: ApprovalMode;
+  /** The owner's own pause, on the Marketing page or through Shwari. */
   paused: boolean;
+  /**
+   * True when the Marketing agent is switched off on the AI team page. It is
+   * read from the agent's row, not stored here, so there is one source of
+   * truth for it. It stops automatic planning and publishing exactly as
+   * `paused` does, and is reported separately so the owner is told which
+   * switch to press. See postingStopped.
+   */
+  agent_off: boolean;
   slots: Slot[];
   last_planned_at: string | null;
 }
@@ -140,6 +149,37 @@ const MAX_VIDEO_ATTEMPTS = 6;
 
 export const NOT_SET_UP = 'Posting is not set up on this workspace yet (a database update is pending).';
 
+/** What the Marketing page and Shwari say when the Marketing agent is off. */
+export const MARKETING_AGENT_OFF =
+  'The Marketing agent is switched off on the AI team page, so no posts are planned or published automatically, including approved ones. They stay on the calendar until Marketing is switched back on.';
+
+/** Nothing goes out: the owner paused posting, or switched the Marketing agent off. */
+export function postingStopped(settings: Pick<PostingSettings, 'paused' | 'agent_off'>): boolean {
+  return settings.paused === true || settings.agent_off === true;
+}
+
+/**
+ * Is the Marketing agent switched off for this business?
+ *
+ * Only an explicit 'disabled' counts. A business with no marketing row - one
+ * whose database has not had migration 0026 yet - posts exactly as it did
+ * before the agent existed, and a failed read never stops posting on its own.
+ */
+export async function marketingAgentOff(tenantId: string): Promise<boolean> {
+  try {
+    const { data, error } = await serviceClient
+      .from('agents')
+      .select('status')
+      .eq('tenant_id', tenantId)
+      .eq('role', 'marketing')
+      .limit(1);
+    if (error || !Array.isArray(data)) return false;
+    return data[0]?.status === 'disabled';
+  } catch {
+    return false;
+  }
+}
+
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /** True when the table itself is not there: migration 0024 has not been applied. */
@@ -180,18 +220,24 @@ export function cleanSlots(raw: unknown): Slot[] {
 }
 
 export async function getSettings(tenantId: string): Promise<PostingSettings> {
-  const fallback: PostingSettings = { approval_mode: 'week', paused: false, slots: DEFAULT_SLOTS, last_planned_at: null };
-  const { data, error } = await serviceClient
-    .from('posting_settings')
-    .select('approval_mode, paused, slots, last_planned_at')
-    .eq('tenant_id', tenantId)
-    .limit(1);
+  const [{ data, error }, agentOff] = await Promise.all([
+    serviceClient
+      .from('posting_settings')
+      .select('approval_mode, paused, slots, last_planned_at')
+      .eq('tenant_id', tenantId)
+      .limit(1),
+    marketingAgentOff(tenantId),
+  ]);
+  const fallback: PostingSettings = {
+    approval_mode: 'week', paused: false, agent_off: agentOff, slots: DEFAULT_SLOTS, last_planned_at: null,
+  };
   const row = !error && Array.isArray(data) ? data[0] : null;
   if (!row) return fallback;
   const mode = row.approval_mode;
   return {
     approval_mode: mode === 'each' || mode === 'autopilot' ? mode : 'week',
     paused: row.paused === true,
+    agent_off: agentOff,
     // An empty list is a real choice (post on no day); only a missing one defaults.
     slots: Array.isArray(row.slots) ? cleanSlots(row.slots) : DEFAULT_SLOTS,
     last_planned_at: row.last_planned_at ?? null,
@@ -451,6 +497,8 @@ export interface PlanResult {
   week_start: string;
   mode: ApprovalMode;
   paused: boolean;
+  /** True when the Marketing agent is off: this plan can be approved, but nothing is published until it is on. */
+  agent_off: boolean;
   proposed: ScheduledPost[];
   /** Where this plan posts to: the platforms the business has connected. */
   platforms: Platform[];
@@ -491,6 +539,7 @@ export async function planWeek(
     week_start: localDate(from, tz),
     mode: settings.approval_mode,
     paused: settings.paused,
+    agent_off: settings.agent_off,
     proposed: [],
     platforms: ['instagram'],
     already_planned: 0,
@@ -705,7 +754,9 @@ export async function planDueWeeks(
     summary.checked++;
 
     const settings = await getSettings(tenantId);
-    if (settings.paused || !settings.slots.length) continue;
+    // Paused by the owner, or the Marketing agent is switched off: either way
+    // nobody is planning this business's week for it.
+    if (postingStopped(settings) || !settings.slots.length) continue;
     // At most once a day per business, so an empty library is not re-planned every run.
     if (settings.last_planned_at && now.getTime() - Date.parse(settings.last_planned_at) < 20 * 3_600_000) continue;
 
@@ -1045,7 +1096,7 @@ export interface PublishSummary {
   due: number;
   published: number;
   failed: number;
-  /** Left for later: posting is paused, the daily ceiling was reached, or a video is still processing. */
+  /** Left for later: posting is paused or the Marketing agent is off, the daily ceiling was reached, or a video is still processing. */
   held: number;
   /** Rows left because the time budget ran out. */
   deferred: number;
@@ -1309,7 +1360,9 @@ export async function publishDuePosts(
     if (post.status !== 'approved') continue;
 
     if (!settings.has(post.tenant_id)) settings.set(post.tenant_id, await getSettings(post.tenant_id));
-    if (settings.get(post.tenant_id)!.paused) { summary.held++; continue; }
+    // Held, not failed: the post keeps its approval and goes out once posting
+    // is resumed or the Marketing agent is switched back on.
+    if (postingStopped(settings.get(post.tenant_id)!)) { summary.held++; continue; }
 
     if (now.getTime() - Date.parse(post.scheduled_for) > MISSED_AFTER_MS) {
       const done = await failPost(post, 'approved',
@@ -1351,8 +1404,12 @@ export async function publishNow(
   if (post.status === 'rejected' || post.status === 'cancelled') {
     throw new MarketingError(`That post was ${post.status}. Reschedule it first.`, 409);
   }
-  if ((await getSettings(tenantId)).paused) {
+  const settings = await getSettings(tenantId);
+  if (settings.paused) {
     throw new MarketingError('Posting is paused. Resume it under Schedule before publishing.', 409);
+  }
+  if (settings.agent_off) {
+    throw new MarketingError('The Marketing agent is switched off. Switch it on from the AI team page before publishing.', 409);
   }
   if ((await publishedInLastDay(tenantId, now)) >= DAILY_POST_CAP) {
     throw new MarketingError(`This business has already posted ${DAILY_POST_CAP} times in the last day. Try again tomorrow.`, 429);

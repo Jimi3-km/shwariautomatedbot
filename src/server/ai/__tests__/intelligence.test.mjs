@@ -81,9 +81,9 @@ const { checkReply, humanizeReply } = await import('../guard.js');
 const { tidyArguments } = await import('../tools/types.js');
 const { isRealQuestion, groundedIn, cleanLesson } = await import('../learning.js');
 const { decideNurture } = await import('../../services/nurture.js');
-const { obviousDepartment } = await import('../router.js');
+const { obviousDepartment, chooseDepartment } = await import('../router.js');
 const { runAgentTurn } = await import('../agent.js');
-const { AGENT_BLUEPRINTS, DEPARTMENTS } = await import('../roles.js');
+const { AGENT_BLUEPRINTS, DEPARTMENTS, ALL_ROLES } = await import('../roles.js');
 const { TOOLS } = await import('../tools/index.js');
 const { buildSystemPrompt } = await import('../prompts.js');
 
@@ -723,7 +723,8 @@ await t('if it still only announces, the customer is not left with a promise', a
 });
 
 await t('every agent has a skill file, and it reaches the briefing', () => {
-  for (const role of ['manager', ...DEPARTMENTS]) {
+  assert.deepEqual(Object.keys(SKILLS).sort(), [...ALL_ROLES].sort(), 'one skill per role, no more and no fewer');
+  for (const role of ALL_ROLES) {
     const skill = SKILLS[role];
     assert.ok(skill.procedures.length >= 4, `${role} needs real procedures`);
     assert.ok(skill.examples.length >= 2, `${role} needs worked examples`);
@@ -736,6 +737,161 @@ await t('every agent has a skill file, and it reaches the briefing', () => {
     }
     const prompt = buildSystemPrompt({ role, name: 'X' }, 'Business: X', true, role === 'manager' ? null : 'Customer: Jane');
     assert.ok(prompt.includes('YOUR PLAYBOOK'), `${role}'s briefing has no playbook`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- marketing: on the team, never in a customer chat ---');
+
+const teamRows = (statuses) => () =>
+  Object.entries(statuses).map(([role, status]) => ({ ...AGENT(role), status }));
+const EVERYONE_ON = { manager: 'active', sales: 'active', support: 'active', booking: 'active', orders: 'active', marketing: 'active' };
+
+await t('the router never offers marketing a customer message', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET agents'] = teamRows(EVERYONE_ON);
+  // Even when the classifier names it, marketing is not a possible answer.
+  script = [says('marketing')];
+  const routed = await chooseDepartment('t1', 'I saw your post on Instagram, do you have that wig in black?', null);
+  assert.ok(DEPARTMENTS.includes(routed.role), `routed to ${routed.role}`);
+  assert.notEqual(routed.role, 'marketing');
+  const asked = JSON.stringify(requests[0].messages);
+  assert.ok(!/marketing/i.test(systemOf(0)), 'marketing is not on the menu the classifier chooses from');
+  assert.match(systemOf(0), /exactly one word from: sales, support, booking, orders\./);
+  assert.ok(asked.includes('Instagram'));
+
+  assert.equal(obviousDepartment('I want a refund', ['marketing']), null);
+});
+
+await t('with every department off, marketing being on routes nobody to it', async () => {
+  reset();
+  rows = baseRows('sales');
+  // PostgREST would apply status=eq.active; the double hands everything back,
+  // so the router's own filter is what is being exercised.
+  rows['GET agents'] = () => [{ ...AGENT('marketing'), status: 'active' }, { ...AGENT('manager'), status: 'active' }];
+  assert.equal(await chooseDepartment('t1', 'hello, are you open?', null), null);
+  assert.equal(requests.length, 0, 'no model was asked');
+});
+
+await t('Shwari can hand a job to marketing, which works with its own tools and rules', async () => {
+  reset();
+  rows = baseRows('manager');
+  rows['GET tenant_users'] = [{ role: 'owner' }];
+  script = [
+    toolCall('delegate_to_agent', { department: 'marketing', task: 'Tell me what is on the posting calendar for the next two weeks and what still needs approval.' }),
+    toolCall('list_scheduled_posts', {}),
+    says('Nothing is on the calendar for the next two weeks, so there is nothing waiting for approval.'),
+    says('Marketing checked: nothing is on the calendar for the next two weeks. Want it to lay out a week?'),
+  ];
+  const out = await runAgentTurn({
+    tenantId: 't1', role: 'manager', userId: 'u1', conversationId: null,
+    text: 'ask marketing what is going out', history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello!' }],
+  });
+  assert.match(out.reply, /Marketing checked/);
+  assert.equal(script.length, 0, 'every scripted step ran: the manager, then marketing twice, then the manager');
+
+  // requests[1] is marketing's first step.
+  const briefing = systemOf(1);
+  assert.match(briefing, /on the marketing side of this business's team/);
+  assert.match(briefing, /never by a customer/);
+  assert.match(briefing, /You are talking with the person who runs this business/, 'the owner voice');
+  assert.match(briefing, /You cannot approve a post/);
+  assert.ok(!briefing.includes('WHO YOU ARE TALKING TO'), 'there is no customer in a marketing turn');
+  assert.ok(!briefing.includes('chatting with a customer'), 'not the customer voice');
+  assert.ok(!briefing.includes('Your colleagues:'), 'no handover targets');
+
+  const offered = requests[1].tools.map((x) => x.function.name).sort();
+  assert.deepEqual(offered, [...AGENT_BLUEPRINTS.marketing.tools].sort());
+  assert.ok(!offered.includes('approve_posts'));
+  assert.ok(!offered.includes('message_customer') && !offered.includes('record_order'));
+
+  // The work is audited under marketing's own role, not the manager's.
+  const audited = db.filter((r) => r.table === 'agent_tool_calls' && r.method === 'POST').map((r) => r.body);
+  assert.ok(audited.some((a) => a.agent_role === 'marketing' && a.tool === 'list_scheduled_posts'));
+  assert.ok(audited.some((a) => a.agent_role === 'manager' && a.tool === 'delegate_to_agent' && a.ok === true));
+});
+
+await t('a marketing turn with no customer and nobody signed in is still not a customer turn', async () => {
+  reset();
+  rows = baseRows('marketing');
+  script = [
+    // Asked to look something up, it answers from memory: caught, as for the manager.
+    says('3 posts are going out this week and all of them are approved.'),
+    toolCall('list_scheduled_posts', {}),
+    says('Nothing is on the calendar for those dates, so nothing will go out.'),
+  ];
+  const out = await runAgentTurn({ tenantId: 't1', role: 'marketing', userId: null, conversationId: null, text: 'list what is going out this week' });
+  assert.match(out.reply, /nothing will go out/);
+  assert.equal(out.answeredBy, 'marketing');
+
+  const first = requests[0];
+  assert.ok(!first.messages.some((m) => m.role === 'assistant' && m.tool_calls), 'no customer records are read up front');
+  assert.ok(!systemOf(0).includes('WHO YOU ARE TALKING TO'));
+  assert.match(systemOf(0), /You are talking with the person who runs this business/);
+  assert.equal(requests[1].tool_choice, 'required', 'a claim with no work behind it must be followed by a tool call');
+  assert.match(requests[1].messages.at(-1).content, /used no tool in this turn/);
+  assert.ok(!db.some((r) => r.table === 'leads' && r.method === 'PATCH'), 'no lead is scored: there is no customer');
+  assert.ok(!db.some((r) => r.table === 'agent_settings'), 'the customer-voice settings are not read for marketing');
+});
+
+await t('a marketing agent that is switched off does no work when asked', async () => {
+  reset();
+  rows = baseRows('manager');
+  rows['GET agents'] = (path) => {
+    const m = path.match(/role=eq\.(\w+)/);
+    const role = m ? m[1] : 'manager';
+    return [{ ...AGENT(role), status: role === 'marketing' ? 'disabled' : 'active' }];
+  };
+  rows['GET tenant_users'] = [{ role: 'owner' }];
+  script = [
+    toolCall('delegate_to_agent', { department: 'marketing', task: 'Plan next week of posts.' }),
+    says('Marketing is switched off on the AI team page, so nothing was planned. Shall I switch it on, or lay the week out myself?'),
+  ];
+  const out = await runAgentTurn({
+    tenantId: 't1', role: 'manager', userId: 'u1', conversationId: null,
+    text: 'get marketing to plan next week', history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello!' }],
+  });
+  assert.equal(requests.length, 2, 'marketing never ran');
+  const result = requests[1].messages.find((m) => m.role === 'tool');
+  assert.match(result.content, /Marketing is not available/);
+  assert.match(result.content, /Nothing was done/);
+  assert.deepEqual(out.actions, []);
+});
+
+await t('before migration 0026 the other five agents are still created', async () => {
+  reset();
+  const inserts = [];
+  rows['GET agents'] = [];
+  rows['POST agents'] = () => [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes('/rest/v1/agents') && (init.method ?? 'GET') === 'POST') {
+      const body = JSON.parse(init.body);
+      inserts.push(body.map((r) => r.role));
+      if (body.some((r) => r.role === 'marketing')) {
+        return new Response(JSON.stringify({
+          code: '23514', message: 'new row for relation "agents" violates check constraint "agents_role_check"',
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('[]', { status: 201, headers: { 'content-type': 'application/json' } });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const { ensureWorkforce } = await import('../agent.js');
+    await ensureWorkforce('t-new');
+    assert.deepEqual(inserts[0], ALL_ROLES, 'all six are tried first');
+    assert.deepEqual(inserts[1], ['manager', ...DEPARTMENTS], 'then the five the database accepts');
+    assert.equal(inserts.length, 2);
+
+    // Straight afterwards the database is not asked for marketing again.
+    await ensureWorkforce('t-new-2');
+    assert.deepEqual(inserts[2], ['manager', ...DEPARTMENTS]);
+    assert.equal(inserts.length, 3);
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 

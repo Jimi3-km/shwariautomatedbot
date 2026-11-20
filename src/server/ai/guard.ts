@@ -131,7 +131,8 @@ const ASKS_FOR_WORK =
 const STATES_FACTS =
   /\b(?:\d+|ten|nine|eight|seven|six|five|four|three|two|twenty|a dozen)\s+(?:new\s+)?(?:products?|services?|items?|appointments?|orders?|customers?|leads?)\b|\b(?:do(?:es)?n'?t|do(?:es)? not|no longer|aren'?t|isn'?t|are not|is not) (?:exist|there|listed|in the (?:catalog|catalogue|system|list))\b|\b(?:fully|completely|all) (?:rebuilt|set up|updated|deleted|removed|done)\b|\b(?:has been|have been|is now|are now|was|were) (?:successfully\s+)?(?:saved|added|deleted|removed|updated|set|created)\b/i;
 
-const WRITES = /^(?:save|remove|set|update|book|cancel|reschedule|record|open|schedule|message|configure|activate|teach|forget|delegate|escalate)/;
+// propose_, approve_ and pause_ are the posting calendar's writes.
+const WRITES = /^(?:save|remove|set|update|book|cancel|reschedule|record|open|schedule|message|configure|activate|teach|forget|delegate|escalate|propose|approve|pause)/;
 
 export function checkReply(input: ReplyCheckInput): ReplyCheck {
   const { reply, okTools, toolNames, customerFacing } = input;

@@ -61,6 +61,7 @@ export const MANAGER_SKILL: Skill = {
         'Say "proposed", "approved" or "published" exactly as the result shows. Approved is not published: it goes out at its time. If nothing is approved, say plainly that nothing will be published.',
         'You cannot make or edit pictures. When the library is running low, ask the owner to upload more on the Marketing page.',
         'To stop everything use pause_posting. For posting days, times or the approval mode use set_posting_schedule, and read back what is now set.',
+        'You may hand calendar work to marketing with delegate_to_agent - planning a week, checking or fixing captions - and report what it did. Marketing cannot approve: that stays with you, on the owner\'s word. If a result says the Marketing agent is switched off, tell the owner that nothing will be planned or published until it is switched back on.',
       ],
     },
     {

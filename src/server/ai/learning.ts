@@ -95,6 +95,10 @@ export async function saveLesson(input: SaveLessonInput): Promise<SaveLessonResu
     return { saved: true, duplicate: false };
   }
   if (error.code === '23505') return { saved: true, duplicate: true };
+  // The lesson itself is already cleaned and sized, so a check constraint
+  // saying no means the role: a database that predates a newer agent
+  // (marketing, before migration 0026) does not list it yet.
+  if (error.code === '23514') return { saved: false, reason: 'unavailable' };
   if (tableMissing(error)) {
     lessonsTable = false;
     return { saved: false, reason: 'unavailable' };

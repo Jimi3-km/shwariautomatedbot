@@ -4,6 +4,7 @@ import { SALES_SKILL } from './sales.js';
 import { SUPPORT_SKILL } from './support.js';
 import { BOOKING_SKILL } from './booking.js';
 import { ORDERS_SKILL } from './orders.js';
+import { MARKETING_SKILL } from './marketing.js';
 
 /**
  * One skill file per agent.
@@ -33,6 +34,7 @@ export const SKILLS: Record<AgentRole, Skill> = {
   support: SUPPORT_SKILL,
   booking: BOOKING_SKILL,
   orders: ORDERS_SKILL,
+  marketing: MARKETING_SKILL,
 };
 
 /** The rule every skill starts from. It is the failure seen most in production. */
