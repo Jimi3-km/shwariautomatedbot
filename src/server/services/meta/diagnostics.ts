@@ -160,6 +160,20 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
     });
   }
 
+  add({
+    id: 'wa.flow', area: 'whatsapp', label: 'WhatsApp signup flow',
+    ok: null,
+    detail: metaConfig.whatsapp.featureType.toLowerCase() === 'standard' || metaConfig.whatsapp.featureType.toLowerCase() === 'none'
+      ? 'Using the standard Cloud API signup.'
+      : 'Using the signup for businesses already on the WhatsApp Business app (coexistence). Meta only allows this for apps approved as a Tech Provider with that feature; otherwise the signup page opens and then says it is not working.',
+    fix: 'If signup opens and then refuses, set META_WHATSAPP_FEATURE_TYPE=standard on the server, redeploy and try again. The configuration ID must be the one named "Meta-hosted Embedded Signup" in Facebook Login for Business > Configurations.',
+  });
+  add({
+    id: 'app.ip_allowlist', area: 'app', label: 'No server IP allowlist on the Meta app', ok: null,
+    detail: 'This site runs on servers whose addresses change. If App settings > Advanced > Security > Server IP allowlist has any entries, Meta rejects this server and every connection fails.',
+    fix: 'Leave "Server IP allowlist" empty.',
+  });
+
   // --- things only the Meta dashboard can show ------------------------------
   add({
     id: 'ig.testers', area: 'instagram', label: 'The Instagram account is allowed to use the app', ok: null,

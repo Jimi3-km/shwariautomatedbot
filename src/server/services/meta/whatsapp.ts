@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { META_GRAPH_URL, META_GRAPH_VERSION, metaConfig } from '../../config/meta.js';
 
 /**
@@ -26,8 +27,38 @@ export class WhatsAppError extends Error {
   }
 }
 
+/**
+ * Sign a Graph call with the app secret.
+ *
+ * A Meta app can be set to "Require app secret", after which every call made
+ * with a user or business token is refused unless it carries an
+ * appsecret_proof: an HMAC of the token, keyed with the app secret. Sending it
+ * is harmless when the setting is off and necessary when it is on, so it is
+ * always sent. App tokens ("id|secret") already contain the secret and are
+ * left alone.
+ */
+export function withAppSecretProof(path: string, init?: RequestInit): string {
+  const secret = metaConfig.appSecret;
+  if (!secret) return path;
+
+  const [base, query = ''] = path.split('?');
+  const params = new URLSearchParams(query);
+  if (params.has('appsecret_proof')) return path;
+
+  let token = params.get('access_token') ?? '';
+  if (!token) {
+    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const auth = headers.get('authorization') ?? '';
+    if (/^bearer\s+/i.test(auth)) token = auth.replace(/^bearer\s+/i, '').trim();
+  }
+  if (!token || token.includes('|')) return path;
+
+  params.set('appsecret_proof', crypto.createHmac('sha256', secret).update(token).digest('hex'));
+  return `${base}?${params}`;
+}
+
 async function graph<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${META_GRAPH_URL}${path}`, init);
+  const res = await fetch(`${META_GRAPH_URL}${withAppSecretProof(path, init)}`, init);
   if (!res.ok) {
     let detail = `Graph API returned HTTP ${res.status}`;
     let code: string | undefined;
