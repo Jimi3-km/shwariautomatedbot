@@ -51,7 +51,7 @@ export interface PromptAgentInput {
 
 /** Everything about this particular turn that shapes the briefing. */
 export interface PromptTurnContext {
-  /** Where the reply will be read: 'whatsapp', 'telegram', 'instagram', 'webchat', 'dashboard'. */
+  /** Where the reply will be read: 'whatsapp', 'telegram', 'instagram', 'facebook', 'webchat', 'dashboard'. */
   channelType?: string | null;
   /** The behaviour reading of the customer, already written as sentences. */
   signals?: string | null;
@@ -90,7 +90,7 @@ function channelNote(channelType: string | null | undefined, customerFacing: boo
   if (c === 'dashboard') return 'You are in the dashboard chat. Simple markdown (bullets, bold) displays properly here.';
   if (!customerFacing && !c) return 'Write plain text.';
   const where =
-    c === 'whatsapp' ? 'WhatsApp' : c === 'instagram' ? 'Instagram messages' : c === 'telegram' ? 'Telegram'
+    c === 'whatsapp' ? 'WhatsApp' : c === 'instagram' ? 'Instagram messages' : c === 'facebook' ? 'Facebook Messenger' : c === 'telegram' ? 'Telegram'
       : c === 'webchat' ? 'the chat box on the business\'s website' : 'a messaging app';
   return `You are on ${where}. Write plain text only: no markdown, no asterisks, no headings, no tables. If you must list a few things, put each on its own line starting with a dash.`;
 }

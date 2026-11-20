@@ -27,6 +27,7 @@ const CHANNELS = [
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'telegram', label: 'Telegram' },
   { value: 'instagram', label: 'Instagram' },
+  { value: 'facebook', label: 'Facebook' },
   { value: 'webchat', label: 'Webchat' },
   { value: 'email', label: 'Email' },
 ];

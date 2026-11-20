@@ -5,7 +5,7 @@ import { useMutation } from '../hooks';
 import { Button, Card, Pill } from './ui';
 
 /**
- * "Why won't Instagram or WhatsApp connect?"
+ * "Why won't Instagram, WhatsApp or a Facebook Page connect?"
  *
  * Those failures happen on Meta's own pages, in Meta's words, with nothing to
  * go on. This asks the server to test each setting against the Meta app and
@@ -15,6 +15,7 @@ const AREAS: Array<{ id: MetaCheck['area']; label: string }> = [
   { id: 'app', label: 'Meta app' },
   { id: 'instagram', label: 'Instagram' },
   { id: 'whatsapp', label: 'WhatsApp' },
+  { id: 'facebook', label: 'Facebook Page' },
   { id: 'webhook', label: 'Receiving messages' },
 ];
 
@@ -47,7 +48,7 @@ export function MetaSetupCheck() {
         </div>
         <div style={{ flex: '1 1 220px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Instagram or WhatsApp won't connect?</span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Instagram, WhatsApp or Facebook won't connect?</span>
             <Pill tone="neutral">Admin only</Pill>
           </div>
           <p style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>

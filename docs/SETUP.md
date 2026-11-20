@@ -114,6 +114,29 @@ Creator) account, and must have messaging access enabled.
 
 ---
 
+## 4b. Facebook Page
+
+Messenger messages to a business's Facebook Page, and publishing approved
+posts to it. Uses the same Meta app, app secret, verify token and encryption
+key as steps 3 and 4. The full walk-through is in `docs/FACEBOOK.md`.
+
+| Variable | Where to find it |
+|---|---|
+| `META_FACEBOOK_CONFIG_ID` | Facebook Login for Business -> Configurations -> the **configuration ID** of a configuration that grants `pages_show_list`, `pages_manage_metadata`, `pages_messaging`, `pages_read_engagement`, `pages_manage_engagement` and `pages_manage_posts`. Not the WhatsApp configuration. |
+
+| Variable | Value | Also paste into Meta at |
+|---|---|---|
+| `META_FACEBOOK_REDIRECT_URI` | `https://<PUBLIC_API_URL>/api/channels/oauth/facebook/callback` - **optional**, this is the default | Facebook Login for Business -> Settings -> **Valid OAuth Redirect URIs** |
+
+Webhooks -> **Page**: the same callback URL (`https://<PUBLIC_API_URL>/api/webhooks/meta`)
+and the same verify token as above, subscribed to the **`messages`** field
+(and `messaging_postbacks`, `feed`).
+
+Only a **Page** can be connected, never a personal profile. Apply migration
+`20261120_0025_facebook_pages.sql` before connecting one.
+
+---
+
 ## 4a. Verified against Meta's live docs
 
 Checked via the Meta Developer Tools MCP, so these are current rather than
@@ -151,6 +174,9 @@ WhatsApp and Instagram flows. Request:
 - `instagram_business_manage_messages`
 - `instagram_business_content_publish` (publishing posts from the Marketing
   calendar; see `docs/MARKETING.md`)
+- `pages_show_list`, `pages_manage_metadata`, `pages_messaging`,
+  `pages_read_engagement`, `pages_manage_engagement`, `pages_manage_posts`
+  (connecting a Facebook Page; see `docs/FACEBOOK.md`)
 
 Web chat and Telegram are unaffected and work for real customers throughout.
 
@@ -165,6 +191,7 @@ Never ask Meta for these — the system creates them:
 - OAuth `state` values
 - the WhatsApp **WABA id**, **phone number id** and business access token
 - the Instagram **user id** and long-lived token
+- the Facebook **Page id** and Page access token
 
 All are discovered or minted during the connect flow and stored per tenant,
 encrypted where they are credentials. None of them belongs in `.env`.

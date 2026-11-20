@@ -4,8 +4,10 @@ Phase 1 of the marketing agent. The business posts its own photos and videos
 to Instagram on a calendar the owner approves. The agent posts; it does not
 yet reply to comments or messages (that is Phase 2).
 
-Facebook Pages are not built yet. The tables carry a `platform` column and the
-code a `Platform` type so a Page can be added without reshaping anything.
+A connected Facebook Page is posted to as well: each library item says where
+it may go (Instagram, Facebook or both), and a week is planned for every
+platform that is connected. With no Page connected nothing here changes. See
+`docs/FACEBOOK.md`.
 
 ## How it works
 
@@ -40,10 +42,10 @@ rules as the dashboard.
   a filter on its status, so two overlapping scheduler runs, or a run and a
   "Publish now" click, post it once. A post that failed is never retried on
   its own: a person reschedules it.
-- **Honest failures.** If Instagram does not confirm a publish, or a run is
-  interrupted mid-publish, the post is marked failed with "it may or may not
-  have gone out - check Instagram before posting it again". It is not sent
-  again to find out.
+- **Honest failures.** If Instagram or Facebook does not confirm a publish, or
+  a run is interrupted mid-publish, the post is marked failed with "it may or
+  may not have gone out - check Instagram (or the Page) before posting it
+  again". It is not sent again to find out.
 - **Not late.** An approved post more than 24 hours past its time is marked
   "missed its time" instead of being published late. A proposed post whose
   time has passed cannot be approved; it has to be given a new time.

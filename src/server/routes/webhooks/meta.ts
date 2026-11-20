@@ -10,7 +10,7 @@ import { housekeeping } from '../../services/followUps.js';
 export const metaWebhookRouter = Router();
 
 /**
- * Meta's inbound webhook, for WhatsApp and Instagram.
+ * Meta's inbound webhook, for WhatsApp, Instagram and Facebook Pages (Messenger).
  *
  * Deliberately unauthenticated in the dashboard sense: Meta has no session and
  * no bearer token. Its credential is the HMAC signature over the raw body,
@@ -87,7 +87,8 @@ async function handleEvents(body: unknown): Promise<void> {
     return;
   }
   if (!events.length) {
-    // Status receipts and read notifications land here. Normal, not an error.
+    // Status receipts, read notifications and changes on a Page's feed land
+    // here. Normal, not an error.
     return;
   }
 

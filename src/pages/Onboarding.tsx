@@ -14,6 +14,7 @@ import {
 } from '../components/ui';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
+import { FacebookPagePicker } from '../components/FacebookPagePicker';
 import type {
   AgentTone, ChannelProviderInfo, ConnectedChannel, CredentialField,
   EmbedSnippet, LaunchResult, OnboardingStepId, ProviderId,
@@ -56,6 +57,7 @@ const TONES: Array<{ value: AgentTone; label: string; blurb: string }> = [
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   whatsapp: "You'll approve access with Meta, and we'll set up your WhatsApp number for you.",
   instagram: "You'll approve access with Instagram, and we'll start handling your DMs.",
+  facebook: "You'll sign in with Facebook and choose your Page. We'll answer its messages and publish the posts you approve.",
   webchat: 'Add a chat bubble to your own website. Nothing to sign up for — ready in one click.',
   telegram: 'Create a bot in Telegram and paste the code it gives you.',
 };
@@ -305,6 +307,8 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
   >(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
   const [confirming, setConfirming] = useState<ProviderId | null>(null);
+  // Signed in with Facebook, with more than one Page to choose from.
+  const [pickingPage, setPickingPage] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -331,8 +335,12 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     window.history.replaceState({}, '', window.location.pathname);
 
     if (status === 'connected') setNotice('Connected.');
+    else if (status === 'pick_page') setPickingPage(true);
     else if (status === 'cancelled') setError('That connection was cancelled. You can try again.');
     else if (status === 'expired') setError('That took too long, so we stopped for safety. Please try again.');
+    else if (status === 'no_pages') setError('No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
+    else if (status === 'page_in_use') setError('That Facebook Page is already connected to another business.');
+    else if (status === 'database_update_needed') setError('The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
     else setError("We couldn't finish connecting. Please try again.");
   }, []);
 
@@ -440,6 +448,16 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           if (!confirming) return;
           const label = providers.find((p) => p.id === confirming)?.label ?? confirming;
           void start.run(confirming, label);
+        }}
+      />
+
+      <FacebookPagePicker
+        open={pickingPage}
+        onClose={() => setPickingPage(false)}
+        onConnected={async (name) => {
+          setPickingPage(false);
+          setNotice(name ? `Connected ${name}.` : 'Connected.');
+          await load();
         }}
       />
 

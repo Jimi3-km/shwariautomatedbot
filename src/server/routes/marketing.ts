@@ -7,10 +7,10 @@ import { serviceClient } from '../supabase.js';
 import { parseInTimezone } from '../ai/time.js';
 import {
   MarketingError, NOT_SET_UP, missingTable, isUuid,
-  getSettings, saveSettings, instagramStatus,
+  getSettings, saveSettings, instagramStatus, facebookStatus, postingPlatforms, isPlatform,
   loadGrounding, checkCaption,
   planWeek, approvePosts, updatePost, schedulePost, publishNow,
-  type ContentItem, type PostPatch,
+  type ContentItem, type PostPatch, type Platform,
 } from '../services/marketing.js';
 
 export const marketingRouter = Router();
@@ -121,6 +121,20 @@ async function resolveAbout(
   return { product_id: null, service_id: null, about };
 }
 
+/**
+ * Where a library item may be posted. Accepts a list, or the comma-separated
+ * text a file upload form sends. Null when nothing was said.
+ */
+function platformList(value: unknown): Platform[] | null {
+  if (value === undefined || value === null || value === '') return null;
+  const raw = Array.isArray(value) ? value : String(value).split(',');
+  const wanted = raw.map((v) => String(v).trim().toLowerCase()).filter(Boolean);
+  if (!wanted.length || !wanted.every(isPlatform)) {
+    throw new MarketingError('Choose where this may be posted: Instagram, Facebook, or both.');
+  }
+  return (['instagram', 'facebook'] as Platform[]).filter((p) => wanted.includes(p));
+}
+
 function maxUses(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
@@ -180,6 +194,8 @@ marketingRouter.post(
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const about = await resolveAbout(ctx.tenantId, body);
+    // Instagram unless the owner said otherwise, as it has always been.
+    const platforms = platformList(body.platforms) ?? ['instagram'];
     const wantsApproved = text(body.status, 20) === 'approved';
     if (wantsApproved && !isAdmin(req)) {
       throw new MarketingError('Only an owner or admin can approve content for posting. Save it as a draft instead.', 403);
@@ -210,7 +226,7 @@ marketingRouter.post(
         media_type: type.kind,
         caption: text(body.caption, 2200),
         ...about,
-        platforms: ['instagram'],
+        platforms,
         status: wantsApproved ? 'approved' : 'draft',
         max_uses: maxUses(body.max_uses),
         created_by: ctx.userId,
@@ -231,7 +247,7 @@ marketingRouter.post(
       ...row,
       review_reason: check.reason,
       // Instagram's publishing API documents JPEG as its only photo format.
-      note: file.mimetype === 'image/png'
+      note: file.mimetype === 'image/png' && platforms.includes('instagram')
         ? 'Saved. Instagram officially accepts JPEG photos only, so this PNG may be refused when it is posted. A JPEG copy is safer.'
         : undefined,
     });
@@ -254,6 +270,11 @@ marketingRouter.patch(
       Object.assign(change, await resolveAbout(ctx.tenantId, body));
     }
     if (body.max_uses !== undefined) change.max_uses = maxUses(body.max_uses);
+    if (body.platforms !== undefined) {
+      const platforms = platformList(body.platforms);
+      if (!platforms) throw new MarketingError('Choose where this may be posted: Instagram, Facebook, or both.');
+      change.platforms = platforms;
+    }
     if (body.status !== undefined) {
       const status = text(body.status, 20);
       if (status !== 'draft' && status !== 'approved' && status !== 'archived') {
@@ -356,9 +377,14 @@ marketingRouter.post(
     const ctx = req.ctx!;
     const when = parseWhen(req.body?.scheduled_for, await tenantTimezone(ctx.tenantId));
     if (!when) throw new MarketingError('Choose a date and time for the post.');
+    const platform = req.body?.platform;
+    if (platform !== undefined && platform !== null && platform !== '' && !isPlatform(platform)) {
+      throw new MarketingError('The platform must be instagram or facebook.');
+    }
     const post = await schedulePost(ctx.tenantId, {
       contentItemId: String(req.body?.content_item_id ?? ''),
       scheduledFor: when,
+      platform: isPlatform(platform) ? platform : null,
     });
     res.status(201).json(post);
   })
@@ -446,10 +472,12 @@ marketingRouter.get(
   requireAuth,
   route(async (req, res) => {
     const ctx = req.ctx!;
-    const [settings, instagram, timezone] = await Promise.all([
-      getSettings(ctx.tenantId), instagramStatus(ctx.tenantId), tenantTimezone(ctx.tenantId),
+    const [settings, instagram, facebook, platforms, timezone] = await Promise.all([
+      getSettings(ctx.tenantId), instagramStatus(ctx.tenantId), facebookStatus(ctx.tenantId),
+      postingPlatforms(ctx.tenantId), tenantTimezone(ctx.tenantId),
     ]);
-    res.json({ settings, instagram, timezone });
+    // `platforms` is where the calendar posts to: what is connected.
+    res.json({ settings, instagram, facebook, platforms, timezone });
   })
 );
 

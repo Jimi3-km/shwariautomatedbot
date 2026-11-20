@@ -74,6 +74,7 @@ setupRouter.get(
         verify_token_is_set: Boolean(metaConfig.verifyToken),
 
         instagram_signin_redirect_uri: `${origin}/api/auth/instagram/callback`,
+        facebook_redirect_uri: `${origin}/api/channels/oauth/facebook/callback`,
         subscribe_to_fields: ['messages'],
       },
       /** Shwari runs in this process rather than in n8n, so it has its own key. */

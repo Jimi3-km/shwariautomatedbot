@@ -72,7 +72,11 @@ export function hopPage(target: string, service: string): string {
 }
 
 function serviceName(url: string): string {
-  return new URL(url).hostname.includes('instagram') ? 'Instagram' : 'WhatsApp';
+  const { hostname, pathname } = new URL(url);
+  if (hostname.includes('instagram')) return 'Instagram';
+  // WhatsApp signup lives on business.facebook.com; the plain Facebook
+  // sign-in dialog is how a Page is connected.
+  return /\/dialog\/oauth\/?$/.test(pathname) ? 'Facebook' : 'WhatsApp';
 }
 
 goRouter.get('/go', (req: Request, res: Response) => {

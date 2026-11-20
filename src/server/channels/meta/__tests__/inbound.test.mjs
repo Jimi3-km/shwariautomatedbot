@@ -257,10 +257,14 @@ console.log('\n--- dispatch ---');
 t('routes each product to its own parser', () => {
   assert.equal(parseMetaWebhook(whatsappBody).provider, 'whatsapp');
   assert.equal(parseMetaWebhook(instagramBody).provider, 'instagram');
+  // A Facebook Page (Messenger) is a product now; an empty delivery is no events.
+  const page = parseMetaWebhook({ object: 'page', entry: [] });
+  assert.equal(page.provider, 'facebook');
+  assert.deepEqual(page.events, []);
 });
 
 t('an unknown product is ignored rather than guessed at', () => {
-  const out = parseMetaWebhook({ object: 'page', entry: [] });
+  const out = parseMetaWebhook({ object: 'user', entry: [] });
   assert.equal(out.provider, null);
   assert.deepEqual(out.events, []);
 });

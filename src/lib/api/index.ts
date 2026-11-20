@@ -11,6 +11,7 @@ import type {
   FollowUp, FollowUpStatus, AttentionReport,
   AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
   ContentItem, ContentStatus, ScheduledPost, PostingSettings, PostingStatus, WeekPlan,
+  FacebookPageChoice, PostPlatform,
 } from '../../types';
 
 export * from './client';
@@ -183,6 +184,19 @@ export const submitChannelCredentials = (provider: ProviderId, values: Record<st
     method: 'POST', body: values,
   });
 
+/**
+ * The Facebook Pages waiting to be chosen from after signing in with Facebook.
+ * Names and ids only; empty when there is no choice to make, or it expired.
+ */
+export const getFacebookPages = () =>
+  request<{ pages: FacebookPageChoice[] }>('/channels/facebook/pages');
+
+/** Connect one of those Pages to this business. */
+export const selectFacebookPage = (pageId: string) =>
+  request<{ account: ConnectedChannel }>('/channels/facebook/select-page', {
+    method: 'POST', body: { page_id: pageId },
+  });
+
 export const getChannelHealth = (channelId: string) =>
   request<ChannelHealth>(`/channels/${channelId}/health`);
 
@@ -213,7 +227,7 @@ export const getSetupStatus = () => request<SetupStatus>('/setup/status');
 
 export interface MetaCheck {
   id: string;
-  area: 'app' | 'instagram' | 'whatsapp' | 'webhook';
+  area: 'app' | 'instagram' | 'whatsapp' | 'facebook' | 'webhook';
   label: string;
   ok: boolean | null;
   detail: string;
@@ -442,7 +456,7 @@ export const updateContent = (
   id: string,
   body: {
     caption?: string; about?: string | null; product_id?: string | null; service_id?: string | null;
-    max_uses?: number | null; status?: ContentStatus;
+    max_uses?: number | null; status?: ContentStatus; platforms?: PostPlatform[];
   }
 ) => request<ContentItem>(`/content/${id}`, { method: 'PATCH', body });
 

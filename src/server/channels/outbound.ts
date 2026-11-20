@@ -11,6 +11,8 @@ export const TEXT_LIMITS = {
   telegram: 4096,
   whatsapp: 4096,
   instagram: 1000,
+  // Messenger refuses a text message longer than 2000 characters.
+  facebook: 2000,
 } as const;
 
 /**

@@ -1,7 +1,7 @@
 import { MetaSetupCheck } from '../components/MetaSetupCheck';
 import React, { useEffect, useState } from 'react';
 import {
-  Send, MessageCircle, Instagram, Globe, CheckCircle2, ExternalLink, Plug,
+  Send, MessageCircle, Instagram, Facebook, Globe, CheckCircle2, ExternalLink, Plug,
 } from 'lucide-react';
 import {
   getChannels, submitChannelCredentials, disconnectChannel, getChannelStatus,
@@ -9,6 +9,7 @@ import {
 } from '../lib/api';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
+import { FacebookPagePicker } from '../components/FacebookPagePicker';
 import { SetupReadinessPanel } from '../components/SetupReadinessPanel';
 import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
@@ -32,6 +33,8 @@ export function Integrations() {
   const [disconnecting, setDisconnecting] = useState<Channel | null>(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
   const [confirming, setConfirming] = useState<ProviderId | null>(null);
+  // Signed in with Facebook, with more than one Page to choose from.
+  const [pickingPage, setPickingPage] = useState(false);
 
   const toast = useToast();
 
@@ -43,8 +46,12 @@ export function Integrations() {
     window.history.replaceState({}, '', window.location.pathname);
 
     if (status === 'connected') { toast.push('success', 'Connected.'); state.reload(); }
+    else if (status === 'pick_page') setPickingPage(true);
     else if (status === 'cancelled') toast.push('info', 'That connection was cancelled.');
     else if (status === 'expired') toast.push('error', 'That took too long, so we stopped for safety. Please try again.');
+    else if (status === 'no_pages') toast.push('error', 'No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
+    else if (status === 'page_in_use') toast.push('error', 'That Facebook Page is already connected to another business.');
+    else if (status === 'database_update_needed') toast.push('error', 'The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
   }, []);
 
@@ -81,6 +88,7 @@ export function Integrations() {
   const telegram = channels.filter((c) => c.channel_type === 'telegram' && c.status === 'active');
   const whatsapp = channels.filter((c) => c.channel_type === 'whatsapp' && c.status === 'active');
   const instagram = channels.filter((c) => c.channel_type === 'instagram' && c.status === 'active');
+  const facebook = channels.filter((c) => c.channel_type === 'facebook' && c.status === 'active');
   const webchat = channels.filter((c) => c.channel_type === 'webchat' && c.status === 'active');
 
   /**
@@ -165,6 +173,22 @@ export function Integrations() {
               description="Handle Instagram direct messages from the same inbox." />
           )}
 
+          {facebook.length > 0 || providerInfo('facebook')?.available ? (
+            <IntegrationCard
+              icon={<Facebook size={18} />}
+              name="Facebook Page"
+              description="Sign in with Facebook and choose your Page. We'll answer its Messenger messages and publish the posts you approve."
+              connected={facebook.length > 0}
+              channels={facebook}
+              isAdmin={isAdmin}
+              onConnect={() => setConfirming('facebook')}
+              onDisconnect={setDisconnecting}
+            />
+          ) : (
+            <ComingSoon icon={<Facebook size={18} />} name="Facebook Page"
+              description="Answer Messenger messages and post to your Page from the same place." />
+          )}
+
           <IntegrationCard
             icon={<Globe size={18} />}
             name="Web chat"
@@ -187,6 +211,16 @@ export function Integrations() {
         busy={beginOAuth.busy}
         onClose={() => setConfirming(null)}
         onConfirm={() => confirming && beginOAuth.run(confirming)}
+      />
+
+      <FacebookPagePicker
+        open={pickingPage}
+        onClose={() => setPickingPage(false)}
+        onConnected={(name) => {
+          setPickingPage(false);
+          toast.push('success', name ? `Connected ${name}.` : 'Connected.');
+          state.reload();
+        }}
       />
 
       <TelegramModal

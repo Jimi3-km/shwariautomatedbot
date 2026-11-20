@@ -166,7 +166,7 @@ shwariRouter.post(
       .select('channel_type, display_name')
       .eq('tenant_id', ctx.tenantId)
       .eq('status', 'active')
-      .in('channel_type', ['telegram', 'whatsapp', 'instagram']);
+      .in('channel_type', ['telegram', 'whatsapp', 'instagram', 'facebook']);
 
     if (!channels?.length) {
       return res.status(400).json({

@@ -5,7 +5,7 @@
  */
 
 export type Role = 'owner' | 'admin' | 'member' | 'viewer';
-export type ChannelType = 'telegram' | 'whatsapp' | 'instagram' | 'webchat';
+export type ChannelType = 'telegram' | 'whatsapp' | 'instagram' | 'webchat' | 'facebook';
 export type ChannelStatus = 'active' | 'disabled';
 export type ConversationStatus = 'open' | 'closed';
 export type MessageSender = 'customer' | 'agent' | 'staff' | 'system';
@@ -273,7 +273,13 @@ export interface Onboarding {
 // Setup wizard
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'whatsapp' | 'instagram' | 'webchat' | 'telegram';
+export type ProviderId = 'whatsapp' | 'instagram' | 'facebook' | 'webchat' | 'telegram';
+
+/** A Facebook Page the owner may choose to connect. Never carries a token. */
+export interface FacebookPageChoice {
+  id: string;
+  name: string;
+}
 
 /**
  * How a channel is connected: a redirect to the provider, a token we take, or
@@ -608,6 +614,8 @@ export type ContentStatus = 'draft' | 'approved' | 'archived';
 export type PostStatus =
   | 'proposed' | 'approved' | 'publishing' | 'published' | 'failed' | 'rejected' | 'cancelled';
 export type ApprovalMode = 'week' | 'each' | 'autopilot';
+/** Where a post goes out. */
+export type PostPlatform = 'instagram' | 'facebook';
 
 export interface ContentItem {
   id: string;
@@ -657,6 +665,10 @@ export interface PostingSettings {
 export interface PostingStatus {
   settings: PostingSettings;
   instagram: { connected: boolean; username: string | null; can_publish: boolean | null; expired: boolean };
+  /** The connected Facebook Page, if any. Absent on a server that predates it. */
+  facebook?: { connected: boolean; page_name: string | null; can_publish: boolean | null; expired: boolean };
+  /** Where the calendar posts to: the platforms that are connected. */
+  platforms?: PostPlatform[];
   timezone: string | null;
 }
 
@@ -665,8 +677,9 @@ export interface WeekPlan {
   mode: ApprovalMode;
   paused: boolean;
   proposed: ScheduledPost[];
+  platforms?: PostPlatform[];
   already_planned: number;
-  unfilled: Array<{ scheduled_for: string; when: string; why: string }>;
+  unfilled: Array<{ scheduled_for: string; when: string; why: string; platform?: PostPlatform }>;
   library: { approved: number; usable: number };
   note?: string;
 }

@@ -39,7 +39,7 @@ export interface NurtureSummary {
 
 const DEFAULT_DELAY_HOURS = 24;
 /** Channels that refuse a message once the customer has been quiet for 24 hours. */
-const WINDOWED = new Set(['instagram', 'whatsapp']);
+const WINDOWED = new Set(['instagram', 'whatsapp', 'facebook']);
 const WINDOW_SAFE_HOURS = 21;
 const SECOND_NUDGE_AFTER_HOURS = 72;
 const GIVE_UP_AFTER_HOURS = 24 * 7;

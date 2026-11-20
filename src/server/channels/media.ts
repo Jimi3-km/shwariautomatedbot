@@ -1,6 +1,7 @@
 import { serviceClient } from '../supabase.js';
 import { INSTAGRAM_GRAPH_URL, META_GRAPH_URL } from '../config/meta.js';
 import { loadToken } from '../services/meta/tokens.js';
+import { loadConnectedPage, sendMessengerImage } from '../services/meta/facebook.js';
 
 /**
  * Sending a picture to a customer.
@@ -52,6 +53,18 @@ export async function sendImageToCustomer(input: {
           signal: AbortSignal.timeout(20_000),
         });
         return res.ok ? { sent: true } : { sent: false, reason: `Instagram refused the photo (HTTP ${res.status}).` };
+      }
+
+      case 'facebook': {
+        const page = await loadConnectedPage(input.tenantId);
+        if (!page || page.isExpired) return { sent: false, reason: 'The Facebook Page is not connected.' };
+        try {
+          await sendMessengerImage(page.accessToken, page.pageId, input.customerId, input.imageUrl);
+          return { sent: true };
+        } catch (e) {
+          const status = (e as { httpStatus?: number } | null)?.httpStatus;
+          return { sent: false, reason: `Facebook refused the photo${status ? ` (HTTP ${status})` : ''}.` };
+        }
       }
 
       case 'whatsapp': {

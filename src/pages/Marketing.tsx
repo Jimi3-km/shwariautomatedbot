@@ -10,7 +10,7 @@ import {
   getPostingSettings, savePostingSettings, getProducts, getServices,
 } from '../lib/api';
 import type {
-  ApprovalMode, ContentItem, PostingSlot, PostingStatus, PostStatus, ScheduledPost, WeekPlan,
+  ApprovalMode, ContentItem, PostingSlot, PostingStatus, PostPlatform, PostStatus, ScheduledPost, WeekPlan,
 } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -50,6 +50,19 @@ const STATUS_TONE: Record<PostStatus, PillTone> = {
   proposed: 'warning', approved: 'info', publishing: 'info', published: 'success',
   failed: 'danger', rejected: 'neutral', cancelled: 'neutral',
 };
+
+const PLATFORM_LABEL: Record<PostPlatform, string> = { instagram: 'Instagram', facebook: 'Facebook' };
+
+const platformLabel = (p: string | null | undefined): string => (p === 'facebook' ? 'Facebook' : 'Instagram');
+
+/**
+ * Where a library item may be posted. An item with nothing listed predates
+ * Facebook and was only ever meant for Instagram.
+ */
+function itemPlatforms(item: Pick<ContentItem, 'platforms'> | null | undefined): PostPlatform[] {
+  const list = (item?.platforms ?? []).filter((p): p is PostPlatform => p === 'instagram' || p === 'facebook');
+  return list.length ? list : ['instagram'];
+}
 
 const MODE_LABEL: Record<ApprovalMode, string> = {
   week: 'Approve the week',
@@ -138,12 +151,18 @@ export function Marketing() {
   const status = useAsync(() => getPostingSettings(), []);
   const tz = usableZone(status.data?.timezone);
   const instagram = status.data?.instagram;
+  const facebook = status.data?.facebook;
+  // What the calendar posts to: whatever is connected.
+  const connected: PostPlatform[] = [
+    ...(instagram?.connected ? ['instagram' as const] : []),
+    ...(facebook?.connected ? ['facebook' as const] : []),
+  ];
 
   return (
     <>
       <PageHeader
         title="Marketing"
-        subtitle="Your own photos and videos, posted to Instagram on a calendar you approve."
+        subtitle="Your own photos and videos, posted to Instagram and your Facebook Page on a calendar you approve."
         actions={
           <div className="segmented" role="group" aria-label="View">
             <button type="button" aria-pressed={tab === 'calendar'} onClick={() => setTab('calendar')}>
@@ -160,11 +179,41 @@ export function Marketing() {
       />
 
       <div style={{ padding: '14px 20px 0', display: 'grid', gap: 8 }}>
-        {instagram && !instagram.connected && (
+        {status.data && connected.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5, color: 'var(--text-2)' }}>
+            <span>Posting to</span>
+            {instagram?.connected && (
+              <Pill tone={instagram.expired || instagram.can_publish !== true ? 'warning' : 'success'} dot>
+                Instagram{instagram.username ? ` @${instagram.username}` : ''}
+              </Pill>
+            )}
+            {facebook?.connected && (
+              <Pill tone={facebook.expired || facebook.can_publish === false ? 'warning' : 'success'} dot>
+                Facebook{facebook.page_name ? ` · ${facebook.page_name}` : ' Page'}
+              </Pill>
+            )}
+            {!instagram?.connected && (
+              <Link to="/integrations" style={{ textDecoration: 'underline' }}>Connect Instagram too</Link>
+            )}
+            {!facebook?.connected && (
+              <Link to="/integrations" style={{ textDecoration: 'underline' }}>Connect a Facebook Page too</Link>
+            )}
+          </div>
+        )}
+        {status.data && connected.length === 0 && (
           <Notice tone="warning">
-            Instagram is not connected, so nothing can be published yet.{' '}
-            <Link to="/integrations" style={{ textDecoration: 'underline' }}>Connect Instagram</Link>.
+            Neither Instagram nor a Facebook Page is connected, so nothing can be published yet.{' '}
+            <Link to="/integrations" style={{ textDecoration: 'underline' }}>Connect one</Link>.
             You can still build the library and the calendar.
+          </Notice>
+        )}
+        {facebook && facebook.connected && (facebook.expired || facebook.can_publish === false) && (
+          <Notice tone="warning">
+            {facebook.expired
+              ? 'The Facebook connection has expired.'
+              : 'The Facebook Page is connected for messages, but the person who connected it cannot post to it.'}{' '}
+            <Link to="/integrations" style={{ textDecoration: 'underline' }}>Reconnect the Page</Link>{' '}
+            and allow posting. Until then approved Facebook posts will fail.
           </Notice>
         )}
         {instagram && instagram.connected && (instagram.expired || instagram.can_publish !== true) && (
@@ -186,7 +235,7 @@ export function Marketing() {
       {tab === 'calendar' && (
         <CalendarTab tz={tz} mode={status.data?.settings.approval_mode ?? 'week'} isAdmin={isAdmin} />
       )}
-      {tab === 'library' && <LibraryTab canWrite={canWrite} isAdmin={isAdmin} />}
+      {tab === 'library' && <LibraryTab canWrite={canWrite} isAdmin={isAdmin} connected={connected} />}
       {tab === 'schedule' && (
         status.loading && !status.data ? <div className="p-5"><LoadingState rows={3} /></div>
           : status.error ? <ErrorState message={status.error} onRetry={status.reload} />
@@ -282,7 +331,9 @@ function CalendarTab({ tz, mode, isAdmin }: { tz?: string; mode: ApprovalMode; i
       {plan && plan.unfilled.length > 0 && (
         <Notice tone="warning">
           {plan.unfilled.length} posting {plan.unfilled.length === 1 ? 'time has' : 'times have'} nothing to post:{' '}
-          {plan.unfilled.map((u) => u.when).join('; ')}. {plan.unfilled[0].why}
+          {plan.unfilled.map((u) => (
+            (plan.platforms?.length ?? 1) > 1 ? `${u.when} (${platformLabel(u.platform)})` : u.when
+          )).join('; ')}. {plan.unfilled[0].why}
         </Notice>
       )}
 
@@ -323,6 +374,7 @@ function CalendarTab({ tz, mode, isAdmin }: { tz?: string; mode: ApprovalMode; i
                               <Pill tone={late ? 'neutral' : STATUS_TONE[p.status]} dot>
                                 {late ? 'Not approved in time' : STATUS_LABEL[p.status]}
                               </Pill>
+                              <Pill tone="neutral">{platformLabel(p.platform)}</Pill>
                             </div>
                             {p.about && <span className="board-card-sub" style={{ marginTop: 4 }}>{p.about}</span>}
                           </div>
@@ -348,7 +400,7 @@ function CalendarTab({ tz, mode, isAdmin }: { tz?: string; mode: ApprovalMode; i
                             href={p.external_permalink} target="_blank" rel="noreferrer"
                             style={{ fontSize: 12, color: 'var(--accent)', display: 'inline-flex', gap: 4, alignItems: 'center' }}
                           >
-                            <ExternalLink size={12} /> View on Instagram
+                            <ExternalLink size={12} /> View on {platformLabel(p.platform)}
                           </a>
                         )}
 
@@ -482,7 +534,7 @@ function PostEditor({ post, tz, onClose, onDone }: {
         open={confirming}
         tone="accent"
         title="Publish this now?"
-        body="It goes to Instagram straight away, for everyone to see, with the caption as last saved. This cannot be undone from here."
+        body={`It goes to ${platformLabel(post.platform)} straight away, for everyone to see, with the caption as last saved. This cannot be undone from here.`}
         confirmLabel="Publish now"
         busy={publish.busy}
         onConfirm={() => publish.run()}
@@ -496,7 +548,9 @@ function PostEditor({ post, tz, onClose, onDone }: {
 // Library
 // ---------------------------------------------------------------------------
 
-function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean }) {
+function LibraryTab({ canWrite, isAdmin, connected }: {
+  canWrite: boolean; isAdmin: boolean; connected: PostPlatform[];
+}) {
   const toast = useToast();
   const state = useAsync(() => getContent(), []);
   const [uploading, setUploading] = useState(false);
@@ -570,6 +624,7 @@ function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean
                 {item.status === 'approved' ? 'Approved' : item.status === 'draft' ? 'Draft' : 'Archived'}
               </Pill>
               {item.media_type === 'video' && <Pill tone="neutral">Video</Pill>}
+              {itemPlatforms(item).map((p) => <Pill key={p} tone="neutral">{PLATFORM_LABEL[p]}</Pill>)}
               <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
                 Posted {item.times_used}{item.max_uses != null ? ` of ${item.max_uses}` : ''}
               </span>
@@ -612,7 +667,7 @@ function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean
 
       {uploading && (
         <ContentEditor
-          item={null} isAdmin={isAdmin}
+          item={null} isAdmin={isAdmin} connected={connected}
           onClose={() => setUploading(false)}
           onSaved={(saved) => {
             toast.push(saved.note ? 'info' : 'success', saved.note ?? (saved.status === 'approved' ? 'Uploaded and approved.' : 'Uploaded as a draft.'));
@@ -623,7 +678,7 @@ function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean
       )}
       {editing && (
         <ContentEditor
-          item={editing} isAdmin={isAdmin}
+          item={editing} isAdmin={isAdmin} connected={connected}
           onClose={() => setEditing(null)}
           onSaved={() => { toast.push('success', 'Saved.'); setEditing(null); state.reload(); }}
         />
@@ -632,7 +687,7 @@ function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Delete this item?"
-        body="The photo or video is removed from the library. If it has been posted before it is archived instead, so the calendar keeps its record. Posts already on Instagram are not affected."
+        body="The photo or video is removed from the library. If it has been posted before it is archived instead, so the calendar keeps its record. Posts already published are not affected."
         confirmLabel="Delete"
         busy={remove.busy}
         onConfirm={() => deleting && remove.run(deleting)}
@@ -642,8 +697,9 @@ function LibraryTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean
   );
 }
 
-function ContentEditor({ item, isAdmin, onClose, onSaved }: {
-  item: ContentItem | null; isAdmin: boolean; onClose: () => void; onSaved: (saved: ContentItem) => void;
+function ContentEditor({ item, isAdmin, connected, onClose, onSaved }: {
+  item: ContentItem | null; isAdmin: boolean; connected: PostPlatform[];
+  onClose: () => void; onSaved: (saved: ContentItem) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -654,6 +710,12 @@ function ContentEditor({ item, isAdmin, onClose, onSaved }: {
   const [about, setAbout] = useState(item && !item.product_id && !item.service_id ? item.about ?? '' : '');
   const [maxUses, setMaxUses] = useState(item?.max_uses != null ? String(item.max_uses) : '');
   const [approve, setApprove] = useState(false);
+  // A new item starts marked for whatever is connected; an existing one keeps its own.
+  const [platforms, setPlatforms] = useState<PostPlatform[]>(
+    item ? itemPlatforms(item) : connected.length ? connected : ['instagram']
+  );
+  const togglePlatform = (p: PostPlatform, on: boolean) =>
+    setPlatforms((cur) => (['instagram', 'facebook'] as PostPlatform[]).filter((x) => (x === p ? on : cur.includes(x))));
 
   const catalogue = useAsync(async () => {
     const [products, services] = await Promise.all([
@@ -669,6 +731,7 @@ function ContentEditor({ item, isAdmin, onClose, onSaved }: {
   const save = useMutation(async () => {
     const [kind, id] = link ? link.split(':') : ['', ''];
     const uses = maxUses.trim() === '' ? null : Number(maxUses);
+    if (!platforms.length) throw new Error('Choose where this may be posted: Instagram, Facebook, or both.');
 
     if (item) {
       onSaved(await updateContent(item.id, {
@@ -677,6 +740,7 @@ function ContentEditor({ item, isAdmin, onClose, onSaved }: {
         service_id: kind === 'service' ? id : null,
         about: kind ? null : about.trim() || null,
         max_uses: uses,
+        platforms,
       }));
       return;
     }
@@ -689,6 +753,7 @@ function ContentEditor({ item, isAdmin, onClose, onSaved }: {
     if (kind === 'service') form.append('service_id', id);
     if (!kind && about.trim()) form.append('about', about.trim());
     if (uses !== null) form.append('max_uses', String(uses));
+    form.append('platforms', platforms.join(','));
     if (approve) form.append('status', 'approved');
     onSaved(await uploadContent(form));
   });
@@ -741,7 +806,27 @@ function ContentEditor({ item, isAdmin, onClose, onSaved }: {
           </Field>
         )}
 
-        <Field label="How many times may it be posted?" hint="Leave empty for no limit.">
+        <Field
+          label="Where may it be posted?"
+          hint={
+            platforms.some((p) => !connected.includes(p))
+              ? `Not connected yet: ${platforms.filter((p) => !connected.includes(p)).map((p) => PLATFORM_LABEL[p]).join(' and ')}. Nothing is posted there until it is.`
+              : 'It is only ever posted where you tick. Ticking both posts it to both at the same time.'
+          }
+        >
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <Checkbox
+              label="Instagram"
+              checked={platforms.includes('instagram')} onChange={(e) => togglePlatform('instagram', e.target.checked)}
+            />
+            <Checkbox
+              label="Facebook Page"
+              checked={platforms.includes('facebook')} onChange={(e) => togglePlatform('facebook', e.target.checked)}
+            />
+          </div>
+        </Field>
+
+        <Field label="How many times may it be posted?" hint="Leave empty for no limit. Going out on Instagram and Facebook at the same time counts once.">
           <Input type="number" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} placeholder="No limit" />
         </Field>
 

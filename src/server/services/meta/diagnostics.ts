@@ -17,7 +17,7 @@ import { publicApiUrl } from '../../config/publicUrl.js';
 
 export interface MetaCheck {
   id: string;
-  area: 'app' | 'instagram' | 'whatsapp' | 'webhook';
+  area: 'app' | 'instagram' | 'whatsapp' | 'facebook' | 'webhook';
   label: string;
   /** true = fine, false = needs fixing, null = could not be checked from here. */
   ok: boolean | null;
@@ -35,6 +35,7 @@ export interface MetaDiagnostics {
     instagram_connect_redirect_uri: string;
     instagram_signin_redirect_uri: string;
     whatsapp_redirect_uri: string;
+    facebook_redirect_uri: string;
   };
   summary: { ok: number; failing: number; unknown: number };
 }
@@ -68,6 +69,7 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
     instagram_connect_redirect_uri: `${origin}/api/channels/oauth/instagram/callback`,
     instagram_signin_redirect_uri: `${origin}/api/auth/instagram/callback`,
     whatsapp_redirect_uri: `${origin}/api/channels/oauth/whatsapp/callback`,
+    facebook_redirect_uri: `${origin}/api/channels/oauth/facebook/callback`,
   };
   const checks: MetaCheck[] = [];
   const add = (c: MetaCheck) => checks.push(c);
@@ -89,6 +91,17 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
   need('env.ig_client_secret', 'instagram', 'INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret, 'The "Instagram app secret" from the same page.');
   need('env.wa_config', 'whatsapp', 'META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId,
     'The configuration ID from Facebook Login for Business > Configurations (a WhatsApp Embedded Signup configuration).');
+
+  need('env.fb_config', 'facebook', 'META_FACEBOOK_CONFIG_ID', metaConfig.facebook.configId,
+    'The configuration ID from Facebook Login for Business > Configurations, for the configuration that asks for the Page permissions. It is not the WhatsApp one.');
+
+  if (present(metaConfig.facebook.configId) && metaConfig.facebook.configId === metaConfig.whatsapp.configId) {
+    add({
+      id: 'fb.config_distinct', area: 'facebook', label: 'The Facebook configuration is not the WhatsApp one', ok: false,
+      detail: 'META_FACEBOOK_CONFIG_ID has the same value as META_WHATSAPP_CONFIG_ID. A WhatsApp Embedded Signup configuration does not ask for Page permissions, so signing in would connect no Page.',
+      fix: 'In Facebook Login for Business > Configurations create a separate configuration with the six Page permissions and use its ID for META_FACEBOOK_CONFIG_ID.',
+    });
+  }
 
   if (present(metaConfig.appId) && present(metaConfig.instagram.clientId) && metaConfig.appId === metaConfig.instagram.clientId) {
     add({
@@ -114,6 +127,8 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
     expected.instagram_connect_redirect_uri, 'Instagram > API setup with Instagram login > Business login settings > OAuth redirect URIs');
   redirect('wa.redirect', 'whatsapp', 'META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri,
     expected.whatsapp_redirect_uri, 'Facebook Login for Business > Settings > Valid OAuth redirect URIs');
+  redirect('fb.redirect', 'facebook', 'META_FACEBOOK_REDIRECT_URI', metaConfig.facebook.redirectUri,
+    expected.facebook_redirect_uri, 'Facebook Login for Business > Settings > Valid OAuth redirect URIs');
 
   // --- live checks against Meta ---------------------------------------------
   if (present(metaConfig.appId) && present(metaConfig.appSecret)) {
@@ -152,6 +167,7 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
       };
       describe('instagram', 'Instagram', 'Instagram > API setup with Instagram login > Configure webhooks');
       describe('whatsapp_business_account', 'WhatsApp', 'WhatsApp > Configuration > Webhook');
+      describe('page', 'Facebook Page', 'Webhooks > Page (or Messenger > Messenger API settings > Configure webhooks)');
     }
   } else {
     add({
@@ -179,6 +195,11 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
     id: 'ig.testers', area: 'instagram', label: 'The Instagram account is allowed to use the app', ok: null,
     detail: 'While the Meta app is in Development mode, only Instagram accounts added to it as testers can connect. Anyone else gets "Sorry, this page isn\'t available" after logging in. The account must also be a Business or Creator account.',
     fix: 'App roles > Roles > Add people > Instagram tester, then accept the invite inside Instagram (Settings > Website permissions > Apps and websites > Tester invites). Or switch the app to Live once the permissions are approved.',
+  });
+  add({
+    id: 'fb.pages_only', area: 'facebook', label: 'Only a Facebook Page can be connected, and others need App Review', ok: null,
+    detail: 'Meta lets an app act on a Page, never on a personal profile: the person signing in must manage the Page and tick it when Facebook asks which Pages to share. While the Meta app is in Development mode, or before its permissions are approved, only people with a role on the app (admin, developer or tester) can connect a Page; anyone else sees an error from Facebook or comes back with no Page.',
+    fix: 'Under App Review > Permissions and features request Advanced access for pages_show_list, pages_manage_metadata, pages_messaging, pages_read_engagement, pages_manage_engagement and pages_manage_posts, and switch the app to Live once approved. Until then, add each person who needs to connect a Page under App roles.',
   });
   add({
     id: 'wa.eligibility', area: 'whatsapp', label: 'The Meta app is allowed to onboard WhatsApp numbers', ok: null,

@@ -67,6 +67,16 @@ export const metaConfig = {
     featureType: (process.env.META_WHATSAPP_FEATURE_TYPE ?? '').trim(),
   },
 
+  facebook: {
+    /**
+     * A Facebook Login for Business configuration id. The configuration, not
+     * a scope list, decides which permissions the owner is asked for: the six
+     * Page permissions listed in docs/FACEBOOK.md.
+     */
+    configId: (process.env.META_FACEBOOK_CONFIG_ID ?? '').trim(),
+    redirectUri: callbackUrl('META_FACEBOOK_REDIRECT_URI', '/api/channels/oauth/facebook/callback'),
+  },
+
   /** 32-byte key, hex or base64, used for AES-256-GCM token encryption. */
   tokenEncryptionKey: (process.env.META_TOKEN_ENCRYPTION_KEY ?? '').trim(),
 } as const;
@@ -120,6 +130,20 @@ export const whatsappEmbeddedSignupConfigured = (): ConfigGap =>
     // Without a configuration id Meta's signup page opens and then refuses.
     ['META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId],
     ['META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
+  ]);
+
+/**
+ * Connecting a Facebook Page. The app secret is needed twice over: to finish
+ * the sign-in, and to verify the Messenger webhooks that follow.
+ */
+export const facebookConnectConfigured = (): ConfigGap =>
+  gap([
+    ['META_APP_ID', metaConfig.appId],
+    ['META_APP_SECRET', metaConfig.appSecret],
+    // Without a configuration id Facebook has no permissions to ask for.
+    ['META_FACEBOOK_CONFIG_ID', metaConfig.facebook.configId],
+    ['META_FACEBOOK_REDIRECT_URI', metaConfig.facebook.redirectUri],
     ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 

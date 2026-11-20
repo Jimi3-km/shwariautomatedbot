@@ -2,6 +2,8 @@ import { serviceClient } from '../supabase.js';
 import { notify } from './notify.js';
 import { loadToken } from './meta/tokens.js';
 import { InstagramPublishError, publishToInstagram } from './meta/instagramPublish.js';
+import { FacebookPublishError, publishToFacebookPage } from './meta/facebookPublish.js';
+import { loadConnectedPage, pageCanPublish } from './meta/facebook.js';
 import { parseInTimezone, safeTimezone, wallClock } from '../ai/time.js';
 
 /**
@@ -91,8 +93,43 @@ export const DEFAULT_SLOTS: Slot[] = [
   { day: 1, time: '18:00' }, { day: 3, time: '18:00' }, { day: 5, time: '18:00' },
 ];
 
-/** The platform this phase publishes to. Facebook joins when a business has a Page. */
-const PLATFORM: Platform = 'instagram';
+export const PLATFORMS: Platform[] = ['instagram', 'facebook'];
+
+export const isPlatform = (v: unknown): v is Platform => v === 'instagram' || v === 'facebook';
+
+export const platformName = (p: string | null | undefined): string => (p === 'facebook' ? 'Facebook' : 'Instagram');
+
+/**
+ * May this library item be posted on this platform?
+ *
+ * An item with no platforms listed predates Facebook and was only ever meant
+ * for Instagram, so it is never sent to a Page nobody marked it for.
+ */
+export function itemAllows(item: Pick<ContentItem, 'platforms'>, platform: Platform): boolean {
+  const list = Array.isArray(item.platforms) ? item.platforms : [];
+  return list.length ? list.includes(platform) : platform === 'instagram';
+}
+
+/**
+ * Where this business's calendar posts to.
+ *
+ * Instagram alone, exactly as before, until a Facebook Page is connected. With
+ * a Page connected it is every platform that is connected: the Page, and
+ * Instagram too if the business has it.
+ */
+export async function postingPlatforms(tenantId: string): Promise<Platform[]> {
+  const { data: pages, error } = await serviceClient
+    .from('channels').select('id')
+    .eq('tenant_id', tenantId).eq('channel_type', 'facebook').eq('status', 'active')
+    .limit(1);
+  if (error || !Array.isArray(pages) || !pages.length) return ['instagram'];
+
+  const { data: ig } = await serviceClient
+    .from('meta_tokens').select('platform')
+    .eq('tenant_id', tenantId).eq('platform', 'instagram')
+    .limit(1);
+  return Array.isArray(ig) && ig.length ? ['instagram', 'facebook'] : ['facebook'];
+}
 
 /** Our own ceiling, well under Instagram's. A calendar never needs more. */
 export const DAILY_POST_CAP = 20;
@@ -415,9 +452,11 @@ export interface PlanResult {
   mode: ApprovalMode;
   paused: boolean;
   proposed: ScheduledPost[];
+  /** Where this plan posts to: the platforms the business has connected. */
+  platforms: Platform[];
   /** Posting times in the window that already held a post. */
   already_planned: number;
-  unfilled: Array<{ scheduled_for: string; when: string; why: string }>;
+  unfilled: Array<{ scheduled_for: string; when: string; why: string; platform: Platform }>;
   library: { approved: number; usable: number };
   note?: string;
 }
@@ -453,137 +492,173 @@ export async function planWeek(
     mode: settings.approval_mode,
     paused: settings.paused,
     proposed: [],
+    platforms: ['instagram'],
     already_planned: 0,
     unfilled: [],
     library: { approved: 0, usable: 0 },
   };
 
   const end = new Date(from.getTime() + WEEK_MS);
-  const [existingQ, itemsQ, pendingQ] = await Promise.all([
-    serviceClient.from('scheduled_posts')
-      .select('id, content_item_id, scheduled_for, status, about')
-      .eq('tenant_id', tenantId).eq('platform', PLATFORM)
-      .gte('scheduled_for', from.toISOString()).lt('scheduled_for', end.toISOString())
-      .limit(500),
+  const [platforms, itemsQ, pendingQ] = await Promise.all([
+    postingPlatforms(tenantId),
     serviceClient.from('content_items')
       .select('*').eq('tenant_id', tenantId).eq('status', 'approved').limit(500),
     serviceClient.from('scheduled_posts')
-      .select('content_item_id, status')
+      .select('content_item_id, status, scheduled_for')
       .eq('tenant_id', tenantId).in('status', PENDING).limit(1000),
   ]);
+  result.platforms = platforms;
 
-  if (missingTable(existingQ.error) || missingTable(itemsQ.error)) {
-    return { ...result, available: false, note: NOT_SET_UP };
-  }
-  if (existingQ.error) throw new Error(existingQ.error.message);
+  if (missingTable(itemsQ.error)) return { ...result, available: false, note: NOT_SET_UP };
   if (itemsQ.error) throw new Error(itemsQ.error.message);
 
-  const existing = (existingQ.data ?? []) as Array<Pick<ScheduledPost, 'id' | 'content_item_id' | 'scheduled_for' | 'status' | 'about'>>;
-  const approved = ((itemsQ.data ?? []) as ContentItem[])
-    .filter((i) => !Array.isArray(i.platforms) || !i.platforms.length || i.platforms.includes(PLATFORM));
-  result.library.approved = approved.length;
+  const everyApproved = (itemsQ.data ?? []) as ContentItem[];
 
-  const pendingUses = new Map<string, number>();
-  for (const row of (pendingQ.data ?? []) as Array<{ content_item_id: string | null }>) {
-    if (row.content_item_id) pendingUses.set(row.content_item_id, (pendingUses.get(row.content_item_id) ?? 0) + 1);
+  // One outing is one use, however many platforms it goes out on: the same
+  // item at the same time on Instagram and on the Page counts once.
+  const pendingOutings = new Map<string, Set<string>>();
+  const noteOuting = (itemId: string, at: string | number) => {
+    const key = String(typeof at === 'number' ? at : Date.parse(at));
+    if (!pendingOutings.has(itemId)) pendingOutings.set(itemId, new Set());
+    pendingOutings.get(itemId)!.add(key);
+  };
+  for (const row of (pendingQ.data ?? []) as Array<{ content_item_id: string | null; scheduled_for: string }>) {
+    if (row.content_item_id) noteOuting(row.content_item_id, row.scheduled_for);
   }
   const usesLeft = (i: ContentItem) =>
     i.max_uses === null || i.max_uses === undefined
       ? Infinity
-      : i.max_uses - (i.times_used ?? 0) - (pendingUses.get(i.id) ?? 0);
-
-  // Least recently posted first, so the library rotates.
-  const candidates = approved
-    .filter((i) => usesLeft(i) > 0)
-    .sort((a, b) =>
-      (a.last_used_at ? Date.parse(a.last_used_at) : 0) - (b.last_used_at ? Date.parse(b.last_used_at) : 0) ||
-      (a.times_used ?? 0) - (b.times_used ?? 0) ||
-      String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
-  result.library.usable = candidates.length;
+      : i.max_uses - (i.times_used ?? 0) - (pendingOutings.get(i.id)?.size ?? 0);
 
   const slots = upcomingSlots(settings.slots, tz, from);
-  if (!settings.slots.length) result.note = 'No posting days are set. Choose them under Schedule.';
-  else if (!approved.length) result.note = 'There are no approved items in the library to post.';
-
-  // Anything in this window counts as used this week, including a post the
-  // owner rejected: rejecting one should bring a different item, not the same.
-  const usedThisWeek = new Set(existing.map((e) => e.content_item_id).filter(Boolean) as string[]);
-  const aboutById = new Map(approved.map((i) => [i.id, aboutKey(i)]));
-  const timeline: Array<{ at: number; key: string | null }> = existing
-    .filter((e) => LIVE.includes(e.status))
-    .map((e) => ({
-      at: Date.parse(e.scheduled_for),
-      key: (e.content_item_id && aboutById.get(e.content_item_id)) || aboutKey({ about: e.about }),
-    }));
-  const taken = new Set(existing.filter((e) => LIVE.includes(e.status)).map((e) => Date.parse(e.scheduled_for)));
+  const approvedAnywhere = new Set<string>();
+  const usableAnywhere = new Set<string>();
+  /**
+   * What each posting time holds on the platforms planned so far. The next
+   * platform is given the same item at the same time when it may have it, so
+   * a business on both sees one post in two places rather than two calendars.
+   */
+  const chosenAt = new Map<number, string>();
 
   let grounding: Grounding | null = null;
 
-  for (const slot of slots) {
-    const at = slot.getTime();
-    if (taken.has(at)) { result.already_planned++; continue; }
+  for (const platform of platforms) {
+    const existingQ = await serviceClient.from('scheduled_posts')
+      .select('id, content_item_id, scheduled_for, status, about')
+      .eq('tenant_id', tenantId).eq('platform', platform)
+      .gte('scheduled_for', from.toISOString()).lt('scheduled_for', end.toISOString())
+      .limit(500);
+    if (missingTable(existingQ.error)) return { ...result, available: false, note: NOT_SET_UP };
+    if (existingQ.error) throw new Error(existingQ.error.message);
 
-    const free = candidates.filter((i) => !usedThisWeek.has(i.id));
-    if (!free.length) {
-      result.unfilled.push({
-        scheduled_for: slot.toISOString(),
-        when: describeWhen(slot, tz),
-        why: !approved.length
-          ? 'There are no approved items in the library.'
-          : !candidates.length
-            ? 'Every approved item has reached its reuse limit.'
-            : 'Every approved item is already in this week. Add more to the library.',
-      });
-      continue;
+    const existing = (existingQ.data ?? []) as Array<Pick<ScheduledPost, 'id' | 'content_item_id' | 'scheduled_for' | 'status' | 'about'>>;
+    const approved = everyApproved.filter((i) => itemAllows(i, platform));
+    for (const i of approved) approvedAnywhere.add(i.id);
+
+    // Least recently posted first, so the library rotates.
+    const candidates = approved
+      .filter((i) => usesLeft(i) > 0)
+      .sort((a, b) =>
+        (a.last_used_at ? Date.parse(a.last_used_at) : 0) - (b.last_used_at ? Date.parse(b.last_used_at) : 0) ||
+        (a.times_used ?? 0) - (b.times_used ?? 0) ||
+        String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+    for (const i of candidates) usableAnywhere.add(i.id);
+
+    // Anything in this window counts as used this week, including a post the
+    // owner rejected: rejecting one should bring a different item, not the same.
+    const usedThisWeek = new Set(existing.map((e) => e.content_item_id).filter(Boolean) as string[]);
+    const aboutById = new Map(approved.map((i) => [i.id, aboutKey(i)]));
+    const live = existing.filter((e) => LIVE.includes(e.status));
+    const timeline: Array<{ at: number; key: string | null }> = live.map((e) => ({
+      at: Date.parse(e.scheduled_for),
+      key: (e.content_item_id && aboutById.get(e.content_item_id)) || aboutKey({ about: e.about }),
+    }));
+    const taken = new Set(live.map((e) => Date.parse(e.scheduled_for)));
+    const placed = new Map<number, string>();
+    for (const e of live) if (e.content_item_id) placed.set(Date.parse(e.scheduled_for), e.content_item_id);
+
+    for (const slot of slots) {
+      const at = slot.getTime();
+      if (taken.has(at)) { result.already_planned++; continue; }
+
+      // The item already going out at this time elsewhere, if this platform may have it.
+      const twinId = chosenAt.get(at);
+      const twin = twinId ? approved.find((i) => i.id === twinId && !usedThisWeek.has(i.id)) : undefined;
+
+      const free = candidates.filter((i) => !usedThisWeek.has(i.id));
+      if (!twin && !free.length) {
+        result.unfilled.push({
+          scheduled_for: slot.toISOString(),
+          when: describeWhen(slot, tz),
+          platform,
+          why: !approved.length
+            ? (platforms.length > 1
+                ? `No approved item in the library is marked for ${platformName(platform)}.`
+                : 'There are no approved items in the library.')
+            : !candidates.length
+              ? 'Every approved item has reached its reuse limit.'
+              : 'Every approved item is already in this week. Add more to the library.',
+        });
+        continue;
+      }
+
+      // Not the same product two posts running, when there is anything else.
+      const before = timeline.filter((p) => p.at < at).sort((a, b) => b.at - a.at)[0]?.key ?? null;
+      const after = timeline.filter((p) => p.at > at).sort((a, b) => a.at - b.at)[0]?.key ?? null;
+      const differs = (i: ContentItem, neighbour: string | null) => !neighbour || aboutKey(i) !== neighbour;
+      const pick =
+        twin ??
+        free.find((i) => differs(i, before) && differs(i, after)) ??
+        free.find((i) => differs(i, before)) ??
+        free[0];
+
+      grounding ??= await loadGrounding(tenantId);
+      const check = checkCaption(grounding, pick.caption ?? '', pick);
+      // Autopilot posts approved items unprompted - except one a person should read first.
+      const auto = settings.approval_mode === 'autopilot' && check.ok;
+
+      const { data: created, error } = await serviceClient
+        .from('scheduled_posts')
+        .insert({
+          tenant_id: tenantId,
+          content_item_id: pick.id,
+          platform,
+          caption: pick.caption ?? '',
+          media_url: pick.media_url,
+          media_type: pick.media_type === 'video' ? 'video' : 'image',
+          about: pick.about ?? null,
+          scheduled_for: slot.toISOString(),
+          status: auto ? 'approved' : 'proposed',
+          needs_review_reason: check.reason,
+          approved_at: auto ? now.toISOString() : null,
+          week_start: result.week_start,
+        })
+        .select('*');
+
+      if (error) {
+        // Someone else planned this time a moment ago. That is the plan working.
+        if (error.code === '23505') { result.already_planned++; taken.add(at); continue; }
+        if (missingTable(error)) return { ...result, available: false, note: NOT_SET_UP };
+        throw new Error(error.message);
+      }
+      const row = (Array.isArray(created) ? created[0] : created) as ScheduledPost | undefined;
+      if (!row) continue;
+
+      result.proposed.push(row);
+      usedThisWeek.add(pick.id);
+      noteOuting(pick.id, at);
+      taken.add(at);
+      placed.set(at, pick.id);
+      timeline.push({ at, key: aboutKey(pick) });
     }
 
-    // Not the same product two posts running, when there is anything else.
-    const before = timeline.filter((p) => p.at < at).sort((a, b) => b.at - a.at)[0]?.key ?? null;
-    const after = timeline.filter((p) => p.at > at).sort((a, b) => a.at - b.at)[0]?.key ?? null;
-    const differs = (i: ContentItem, neighbour: string | null) => !neighbour || aboutKey(i) !== neighbour;
-    const pick =
-      free.find((i) => differs(i, before) && differs(i, after)) ??
-      free.find((i) => differs(i, before)) ??
-      free[0];
-
-    grounding ??= await loadGrounding(tenantId);
-    const check = checkCaption(grounding, pick.caption ?? '', pick);
-    // Autopilot posts approved items unprompted - except one a person should read first.
-    const auto = settings.approval_mode === 'autopilot' && check.ok;
-
-    const { data: created, error } = await serviceClient
-      .from('scheduled_posts')
-      .insert({
-        tenant_id: tenantId,
-        content_item_id: pick.id,
-        platform: PLATFORM,
-        caption: pick.caption ?? '',
-        media_url: pick.media_url,
-        media_type: pick.media_type === 'video' ? 'video' : 'image',
-        about: pick.about ?? null,
-        scheduled_for: slot.toISOString(),
-        status: auto ? 'approved' : 'proposed',
-        needs_review_reason: check.reason,
-        approved_at: auto ? now.toISOString() : null,
-        week_start: result.week_start,
-      })
-      .select('*');
-
-    if (error) {
-      // Someone else planned this time a moment ago. That is the plan working.
-      if (error.code === '23505') { result.already_planned++; taken.add(at); continue; }
-      if (missingTable(error)) return { ...result, available: false, note: NOT_SET_UP };
-      throw new Error(error.message);
-    }
-    const row = (Array.isArray(created) ? created[0] : created) as ScheduledPost | undefined;
-    if (!row) continue;
-
-    result.proposed.push(row);
-    usedThisWeek.add(pick.id);
-    pendingUses.set(pick.id, (pendingUses.get(pick.id) ?? 0) + 1);
-    taken.add(at);
-    timeline.push({ at, key: aboutKey(pick) });
+    for (const [at, itemId] of placed) if (!chosenAt.has(at)) chosenAt.set(at, itemId);
   }
+
+  result.library.approved = approvedAnywhere.size;
+  result.library.usable = usableAnywhere.size;
+  if (!settings.slots.length) result.note = 'No posting days are set. Choose them under Schedule.';
+  else if (!approvedAnywhere.size) result.note = 'There are no approved items in the library to post.';
 
   const waiting = result.proposed.filter((p) => p.status === 'proposed');
   if (waiting.length) {
@@ -805,7 +880,7 @@ export async function updatePost(
   if (post.status === 'published' || post.status === 'publishing') {
     throw new MarketingError(
       post.status === 'published'
-        ? 'That post has already been published. It can only be changed on Instagram itself.'
+        ? `That post has already been published. It can only be changed on ${platformName(post.platform)} itself.`
         : 'That post is being published right now.',
       409
     );
@@ -828,6 +903,9 @@ export async function updatePost(
       const item = Array.isArray(data) ? (data[0] as ContentItem | undefined) : undefined;
       if (!item) throw new MarketingError('That library item could not be found.', 404);
       if (item.status !== 'approved') throw new MarketingError('Only an approved library item can be posted. Approve it in the library first.', 409);
+      if (!itemAllows(item, post.platform)) {
+        throw new MarketingError(`That item is not marked for ${platformName(post.platform)}. Mark it in the library first.`, 409);
+      }
       change.content_item_id = item.id;
       change.media_url = item.media_url;
       change.media_type = item.media_type === 'video' ? 'video' : 'image';
@@ -880,10 +958,15 @@ export async function updatePost(
   return row;
 }
 
-/** Put one specific approved library item on the calendar, as a proposal. */
+/**
+ * Put one specific approved library item on the calendar, as a proposal.
+ *
+ * `platform` says where. Left out, it is the first connected platform the item
+ * is marked for, Instagram before Facebook.
+ */
 export async function schedulePost(
   tenantId: string,
-  input: { contentItemId: string; scheduledFor: Date; now?: Date }
+  input: { contentItemId: string; scheduledFor: Date; platform?: Platform | null; now?: Date }
 ): Promise<ScheduledPost> {
   const now = input.now ?? new Date();
   if (!isUuid(input.contentItemId)) throw new MarketingError('That library item could not be found.', 404);
@@ -907,6 +990,21 @@ export async function schedulePost(
     throw new MarketingError('That item has reached its reuse limit.', 409);
   }
 
+  let platform: Platform;
+  if (input.platform) {
+    if (!isPlatform(input.platform)) throw new MarketingError('The platform must be instagram or facebook.');
+    if (!itemAllows(item, input.platform)) {
+      throw new MarketingError(`That item is not marked for ${platformName(input.platform)}. Mark it in the library first.`, 409);
+    }
+    platform = input.platform;
+  } else {
+    const allowed = (await postingPlatforms(tenantId)).find((p) => itemAllows(item, p));
+    if (!allowed) {
+      throw new MarketingError('That item is not marked for a platform this business has connected. Mark it in the library first.', 409);
+    }
+    platform = allowed;
+  }
+
   const [settings, tenant, check] = await Promise.all([
     getSettings(tenantId), tenantInfo(tenantId), captionCheck(tenantId, item.caption ?? '', item),
   ]);
@@ -917,7 +1015,7 @@ export async function schedulePost(
     .insert({
       tenant_id: tenantId,
       content_item_id: item.id,
-      platform: PLATFORM,
+      platform,
       caption: item.caption ?? '',
       media_url: item.media_url,
       media_type: item.media_type === 'video' ? 'video' : 'image',
@@ -956,6 +1054,67 @@ export interface PublishSummary {
 }
 
 type Outcome = 'published' | 'failed' | 'processing' | 'not_claimed';
+
+/** What both publishers raise: a sentence for the owner, and whether it may have gone out anyway. */
+type PublishFailure = InstagramPublishError | FacebookPublishError;
+
+/**
+ * Hand one claimed post to the platform it is for.
+ *
+ * Returns 'processing' only for Instagram, whose videos are made in two steps;
+ * a Page takes a post in one call, so it is published or it failed.
+ */
+async function sendToPlatform(
+  post: ScheduledPost,
+  waitMs: number
+): Promise<{ state: 'published'; postId: string; permalink: string | null; containerId: string | null } | { state: 'processing'; containerId: string }> {
+  if (post.platform === 'facebook') {
+    let page: Awaited<ReturnType<typeof loadConnectedPage>> = null;
+    try {
+      page = await loadConnectedPage(post.tenant_id);
+    } catch (e) {
+      console.error('[marketing] could not read the Facebook connection:', e instanceof Error ? e.message : e);
+    }
+    if (!page) {
+      throw new FacebookPublishError('not_connected', 'No Facebook Page is connected. Connect one on the Integrations page, then reschedule this post.');
+    }
+    if (page.isExpired) {
+      throw new FacebookPublishError('token', 'The Facebook connection has expired. Reconnect the Page on the Integrations page, then reschedule this post.');
+    }
+    const done = await publishToFacebookPage({
+      accessToken: page.accessToken,
+      pageId: page.pageId,
+      mediaUrl: post.media_url,
+      mediaType: post.media_type,
+      caption: post.caption ?? '',
+      timeoutMs: post.media_type === 'video' ? Math.max(waitMs + 20_000, 30_000) : 20_000,
+    });
+    return { ...done, containerId: null };
+  }
+
+  let token: Awaited<ReturnType<typeof loadToken>> = null;
+  try {
+    token = await loadToken(post.tenant_id, 'instagram');
+  } catch (e) {
+    console.error('[marketing] could not read the Instagram connection:', e instanceof Error ? e.message : e);
+  }
+  if (!token) {
+    throw new InstagramPublishError('not_connected', 'Instagram is not connected. Connect it on the Integrations page, then reschedule this post.');
+  }
+  if (token.isExpired) {
+    throw new InstagramPublishError('token', 'The Instagram connection has expired. Reconnect Instagram on the Integrations page, then reschedule this post.');
+  }
+
+  return publishToInstagram({
+    accessToken: token.accessToken,
+    igUserId: token.instagramUserId,
+    mediaUrl: post.media_url,
+    mediaType: post.media_type,
+    caption: post.caption ?? '',
+    containerId: post.container_id,
+    waitMs,
+  });
+}
 
 async function failPost(
   post: Pick<ScheduledPost, 'id' | 'tenant_id' | 'about' | 'scheduled_for'>,
@@ -1003,30 +1162,10 @@ async function publishOne(post: ScheduledPost, waitMs: number): Promise<Outcome>
   }
   if (!Array.isArray(claimed) || !claimed.length) return 'not_claimed';
 
-  let failure: InstagramPublishError;
+  const where = platformName(post.platform);
+  let failure: PublishFailure;
   try {
-    let token: Awaited<ReturnType<typeof loadToken>> = null;
-    try {
-      token = await loadToken(post.tenant_id, 'instagram');
-    } catch (e) {
-      console.error('[marketing] could not read the Instagram connection:', e instanceof Error ? e.message : e);
-    }
-    if (!token) {
-      throw new InstagramPublishError('not_connected', 'Instagram is not connected. Connect it on the Integrations page, then reschedule this post.');
-    }
-    if (token.isExpired) {
-      throw new InstagramPublishError('token', 'The Instagram connection has expired. Reconnect Instagram on the Integrations page, then reschedule this post.');
-    }
-
-    const result = await publishToInstagram({
-      accessToken: token.accessToken,
-      igUserId: token.instagramUserId,
-      mediaUrl: post.media_url,
-      mediaType: post.media_type,
-      caption: post.caption ?? '',
-      containerId: post.container_id,
-      waitMs,
-    });
+    const result = await sendToPlatform(post, waitMs);
 
     if (result.state === 'processing') {
       if ((post.attempt_count ?? 0) + 1 >= MAX_VIDEO_ATTEMPTS) {
@@ -1055,34 +1194,43 @@ async function publishOne(post: ScheduledPost, waitMs: number): Promise<Outcome>
         updated_at: publishedAt,
       })
       .eq('id', post.id).eq('status', 'publishing');
-    // It is on Instagram either way. A row we could not update stays
+    // It is out in public either way. A row we could not update stays
     // 'publishing' and is swept to failed with a note to check the account,
     // which is the honest state and never causes a second post.
     if (doneErr) console.error(`[marketing] published ${post.id} but could not record it:`, doneErr.message);
 
     if (post.content_item_id) {
-      const { data: item } = await serviceClient
-        .from('content_items').select('times_used').eq('id', post.content_item_id).eq('tenant_id', post.tenant_id).limit(1);
-      const used = Array.isArray(item) && item[0] ? Number(item[0].times_used) || 0 : 0;
-      await serviceClient
-        .from('content_items')
-        .update({ times_used: used + 1, last_used_at: publishedAt, updated_at: publishedAt })
-        .eq('id', post.content_item_id).eq('tenant_id', post.tenant_id);
+      // One outing is one use. When the same item went out at the same time on
+      // the other platform, that outing has been counted already.
+      const { data: twins } = await serviceClient
+        .from('scheduled_posts').select('id')
+        .eq('tenant_id', post.tenant_id).eq('content_item_id', post.content_item_id)
+        .eq('scheduled_for', post.scheduled_for).eq('status', 'published').neq('id', post.id)
+        .limit(1);
+      if (!Array.isArray(twins) || !twins.length) {
+        const { data: item } = await serviceClient
+          .from('content_items').select('times_used').eq('id', post.content_item_id).eq('tenant_id', post.tenant_id).limit(1);
+        const used = Array.isArray(item) && item[0] ? Number(item[0].times_used) || 0 : 0;
+        await serviceClient
+          .from('content_items')
+          .update({ times_used: used + 1, last_used_at: publishedAt, updated_at: publishedAt })
+          .eq('id', post.content_item_id).eq('tenant_id', post.tenant_id);
+      }
     }
 
     await notify({
       tenantId: post.tenant_id,
       kind: 'post_published',
-      title: `Posted to Instagram${post.about ? `: ${post.about}` : ''}`,
+      title: `Posted to ${where}${post.about ? `: ${post.about}` : ''}`,
       body: (post.caption ?? '').slice(0, 200),
       link: '/marketing',
       refId: `post:${post.id}`,
     });
     return 'published';
   } catch (e) {
-    failure = e instanceof InstagramPublishError
+    failure = e instanceof InstagramPublishError || e instanceof FacebookPublishError
       ? e
-      : new InstagramPublishError('unreachable', 'Something went wrong while posting. It may or may not have gone out - check Instagram before posting it again.', { uncertain: true });
+      : new InstagramPublishError('unreachable', `Something went wrong while posting. It may or may not have gone out - check ${where} before posting it again.`, { uncertain: true });
     console.error(`[marketing] publish failed for ${post.id}:`, e instanceof Error ? e.message : e);
   }
 
@@ -1094,16 +1242,16 @@ async function publishOne(post: ScheduledPost, waitMs: number): Promise<Outcome>
 async function sweepStale(now: Date): Promise<number> {
   const { data, error } = await serviceClient
     .from('scheduled_posts')
-    .select('id, tenant_id, about, scheduled_for')
+    .select('id, tenant_id, about, scheduled_for, platform')
     .eq('status', 'publishing')
     .lt('updated_at', new Date(now.getTime() - STALE_PUBLISHING_MS).toISOString())
     .limit(50);
   if (error || !Array.isArray(data)) return 0;
   let swept = 0;
-  for (const row of data as Array<Pick<ScheduledPost, 'id' | 'tenant_id' | 'about' | 'scheduled_for'>>) {
+  for (const row of data as Array<Pick<ScheduledPost, 'id' | 'tenant_id' | 'about' | 'scheduled_for' | 'platform'>>) {
     const done = await failPost(
       row, 'publishing',
-      'Publishing was interrupted. The post may or may not have gone out - check Instagram before posting it again.'
+      `Publishing was interrupted. The post may or may not have gone out - check ${platformName(row.platform)} before posting it again.`
     );
     if (done) swept++;
   }
@@ -1247,6 +1395,53 @@ export interface InstagramStatus {
 }
 
 const PUBLISH_SCOPE = 'instagram_business_content_publish';
+
+/**
+ * One sentence for whoever is about to be told posts are approved, when a
+ * platform on the calendar cannot actually be posted to. Empty when all can.
+ */
+export async function postingReadiness(tenantId: string): Promise<{
+  platforms: Platform[]; instagram: InstagramStatus; facebook: FacebookStatus; note: string;
+}> {
+  const [platforms, instagram, facebook] = await Promise.all([
+    postingPlatforms(tenantId), instagramStatus(tenantId), facebookStatus(tenantId),
+  ]);
+  const notes: string[] = [];
+  if (platforms.includes('instagram') && instagram.can_publish !== true) {
+    notes.push('Instagram is not connected with permission to post, so posts for it will fail until it is reconnected on the Integrations page.');
+  }
+  if (platforms.includes('facebook') && (facebook.can_publish !== true || facebook.expired)) {
+    notes.push('The Facebook Page is not connected with permission to post, so posts for it will fail until it is reconnected on the Integrations page.');
+  }
+  return { platforms, instagram, facebook, note: notes.join(' ') };
+}
+
+export interface FacebookStatus {
+  connected: boolean;
+  /** The Page's name, as Facebook gave it. */
+  page_name: string | null;
+  /** True: the Page can be posted to. False: connected without it. Null: not connected. */
+  can_publish: boolean | null;
+  expired: boolean;
+}
+
+/** Whether this business has a Facebook Page connected that can be posted to. */
+export async function facebookStatus(tenantId: string): Promise<FacebookStatus> {
+  const none: FacebookStatus = { connected: false, page_name: null, can_publish: null, expired: false };
+  let page: Awaited<ReturnType<typeof loadConnectedPage>> = null;
+  try {
+    page = await loadConnectedPage(tenantId);
+  } catch (e) {
+    console.warn('[marketing] could not read the Facebook connection:', e instanceof Error ? e.message : e);
+  }
+  if (!page) return none;
+  return {
+    connected: true,
+    page_name: page.pageName,
+    can_publish: pageCanPublish(page.tasks),
+    expired: page.isExpired,
+  };
+}
 
 export async function instagramStatus(tenantId: string): Promise<InstagramStatus> {
   const { data, error } = await serviceClient

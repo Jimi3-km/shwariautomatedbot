@@ -6,7 +6,8 @@ import type { ProviderId } from '../providers/types.js';
  * Provider payloads differ enough that nothing downstream should ever see
  * them: WhatsApp nests messages under entry[].changes[].value.messages[] and
  * identifies the customer by phone number, Instagram uses entry[].messaging[]
- * and identifies by a scoped account id. Both collapse to this.
+ * and identifies by a scoped account id, and a Facebook Page uses the same
+ * shape with a page-scoped id. All collapse to this.
  */
 export interface NormalizedInboundEvent {
   tenantId: string;

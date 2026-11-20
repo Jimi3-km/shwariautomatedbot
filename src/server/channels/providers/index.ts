@@ -2,6 +2,7 @@ import { telegramProvider } from './telegram.js';
 import { instagramProvider } from './instagram.js';
 import { whatsappProvider } from './whatsapp.js';
 import { webchatProvider } from './webchat.js';
+import { facebookProvider } from './facebook.js';
 import type { ChannelProvider, ProviderId } from './types.js';
 
 export * from './types.js';
@@ -11,7 +12,7 @@ export * from './types.js';
  * entry here — routes, onboarding and the Integrations page pick it up without
  * further edits.
  *
- * Order is the order the UI offers them in: the two Meta channels first
+ * Order is the order the UI offers them in: the Meta channels first
  * because they are the one-click options, then web chat, and Telegram last
  * because it asks the user to fetch a token.
  *
@@ -21,11 +22,12 @@ export * from './types.js';
 const PROVIDERS: Record<ProviderId, ChannelProvider> = {
   whatsapp: whatsappProvider,
   instagram: instagramProvider,
+  facebook: facebookProvider,
   webchat: webchatProvider,
   telegram: telegramProvider,
 };
 
-export const PROVIDER_ORDER: ProviderId[] = ['whatsapp', 'instagram', 'webchat', 'telegram'];
+export const PROVIDER_ORDER: ProviderId[] = ['whatsapp', 'instagram', 'facebook', 'webchat', 'telegram'];
 
 export function isProviderId(value: string): value is ProviderId {
   return Object.prototype.hasOwnProperty.call(PROVIDERS, value);
@@ -39,4 +41,4 @@ export function allProviders(): ChannelProvider[] {
   return PROVIDER_ORDER.map((id) => PROVIDERS[id]);
 }
 
-export { telegramProvider, instagramProvider, whatsappProvider, webchatProvider };
+export { telegramProvider, instagramProvider, whatsappProvider, webchatProvider, facebookProvider };

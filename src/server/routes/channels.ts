@@ -9,6 +9,8 @@ import {
 } from '../channels/providers/index.js';
 import { webhookUrl as telegramWebhookUrl } from '../channels/providers/telegram.js';
 import { verifyOAuthState } from '../services/meta/oauthState.js';
+import { selectFacebookPage } from '../channels/providers/facebook.js';
+import { listPageChoices } from '../services/meta/facebook.js';
 
 export const channelsRouter = Router();
 
@@ -272,7 +274,11 @@ channelsRouter.get(
     }
 
     try {
-      await provider.callback(params, { tenantId: state.tenantId, userId: state.userId });
+      const result = await provider.callback(params, { tenantId: state.tenantId, userId: state.userId });
+      // Signed in, but not connected yet: the owner still has a choice to make
+      // (which Facebook Page). The choice itself stays on the server; the
+      // browser is only told that there is one.
+      if ('pending' in result) return back(result.pending);
       return back('connected');
     } catch (e) {
       if (e instanceof ProviderError) {
@@ -281,6 +287,48 @@ channelsRouter.get(
       }
       console.error(`[channels] ${providerId} callback failed:`, e);
       return back('failed');
+    }
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Facebook: choosing which Page
+// ---------------------------------------------------------------------------
+
+/**
+ * The Pages this business may choose from after signing in with Facebook.
+ *
+ * Names and ids only. The Page access tokens that came back with them stay
+ * encrypted on the server and are never part of any response.
+ */
+channelsRouter.get(
+  '/channels/facebook/pages',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const pages = await listPageChoices(req.ctx!.tenantId);
+    res.json({ pages: pages.map((p) => ({ id: p.id, name: p.name })) });
+  })
+);
+
+/**
+ * Connect one of those Pages.
+ *
+ * The business is the signed-in one. The page id in the body only selects
+ * among the Pages that business was offered; anything else is refused.
+ */
+channelsRouter.post(
+  '/channels/facebook/select-page',
+  requireAuth,
+  requireAdmin,
+  handler(async (req, res) => {
+    const pageId = typeof req.body?.page_id === 'string' ? req.body.page_id.trim() : '';
+    if (!pageId || pageId.length > 64) return res.status(400).json({ error: 'Choose a Page.' });
+    try {
+      const { account } = await selectFacebookPage(req.ctx!, pageId);
+      res.status(201).json({ account });
+    } catch (e) {
+      sendProviderError(res, e, "We couldn't connect that Page. Please try again.");
     }
   })
 );

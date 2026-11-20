@@ -3,7 +3,7 @@ import { ToolInputError, str, bool, oneOf, type Tool, type AgentContext } from '
 import { parseInTimezone, safeTimezone } from '../time.js';
 import {
   MarketingError, NOT_SET_UP, missingTable, isUuid, describeWhen,
-  getSettings, saveSettings, instagramStatus, loadGrounding, checkCaption,
+  getSettings, saveSettings, postingReadiness, loadGrounding, checkCaption,
   planWeek, listPosts, approvePosts, updatePost, schedulePost,
   type ContentItem, type ScheduledPost, type PostStatus,
 } from '../../services/marketing.js';
@@ -48,6 +48,7 @@ const short = (text: string | null | undefined, max = 140) => {
 function postView(p: ScheduledPost, tz: string) {
   return {
     post_id: p.id,
+    platform: p.platform === 'facebook' ? 'Facebook Page' : 'Instagram',
     when: describeWhen(p.scheduled_for, tz),
     scheduled_for: p.scheduled_for,
     about: p.about || null,
@@ -136,7 +137,7 @@ export const proposeWeekPosts: Tool = {
     const plan = await guarded(() => planWeek(ctx.tenantId, { from: when(args, 'from', ctx) }));
     if (!plan.available) return { proposed_count: 0, proposed: [], note: NOT_SET_UP };
     const waiting = plan.proposed.filter((p) => p.status === 'proposed');
-    const instagram = await instagramStatus(ctx.tenantId);
+    const ready = await postingReadiness(ctx.tenantId);
 
     return {
       week_starting: plan.week_start,
@@ -148,14 +149,16 @@ export const proposeWeekPosts: Tool = {
       proposed: plan.proposed.map((p) => postView(p, tz)),
       already_on_the_calendar: plan.already_planned,
       unfilled_count: plan.unfilled.length,
-      unfilled: plan.unfilled.map((u) => ({ when: u.when, why: u.why })),
+      unfilled: plan.unfilled.map((u) => ({ when: u.when, platform: u.platform === 'facebook' ? 'Facebook Page' : 'Instagram', why: u.why })),
       library: plan.library,
-      instagram_can_post: instagram.can_publish === true,
+      posting_to: plan.platforms.map((p) => (p === 'facebook' ? 'Facebook Page' : 'Instagram')),
+      instagram_can_post: ready.instagram.can_publish === true,
+      facebook_can_post: ready.facebook.can_publish === true && !ready.facebook.expired,
       note: [
         plan.note,
         waiting.length ? UNAPPROVED_NOTE : '',
         plan.unfilled.length ? 'The library is running low: ask the owner to upload more photos or videos.' : '',
-        instagram.can_publish === true ? '' : 'Instagram is not connected with permission to post yet, so approved posts will fail until it is reconnected on the Integrations page.',
+        ready.note,
       ].filter(Boolean).join(' ') || undefined,
     };
   },
@@ -230,7 +233,7 @@ export const approvePostsTool: Tool = {
       by: ctx.userId,
     }));
     const settings = await getSettings(ctx.tenantId);
-    const instagram = await instagramStatus(ctx.tenantId);
+    const ready = await postingReadiness(ctx.tenantId);
 
     return {
       approved_count: result.approved.length,
@@ -242,7 +245,7 @@ export const approvePostsTool: Tool = {
           ? 'These are approved, not yet published: each goes out at its time. Say "approved", not "posted".'
           : 'Nothing was approved.',
         settings.paused ? 'Posting is paused, so they will not go out until it is resumed.' : '',
-        instagram.can_publish === true ? '' : 'Instagram is not connected with permission to post, so these will fail until it is reconnected on the Integrations page.',
+        ready.note,
       ].filter(Boolean).join(' '),
     };
   },

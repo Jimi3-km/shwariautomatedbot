@@ -1,6 +1,7 @@
 import { serviceClient } from '../supabase.js';
 import { INSTAGRAM_GRAPH_URL } from '../config/meta.js';
 import { loadToken } from './meta/tokens.js';
+import { fetchMessengerName, loadConnectedPage } from './meta/facebook.js';
 
 /**
  * What to call a customer before they have told us their name.
@@ -10,6 +11,7 @@ import { loadToken } from './meta/tokens.js';
  * something recognisable instead:
  *
  *   Instagram   the @username, looked up from Instagram
+ *   Facebook    the person's name, looked up from their Messenger profile
  *   WhatsApp    the phone number, written as a phone number
  *   Web chat    a short visitor code in front of the business's name
  *
@@ -57,6 +59,19 @@ async function instagramUsername(tenantId: string, igScopedId: string): Promise<
   }
 }
 
+/** The name on the Messenger profile of someone who wrote to the Page. */
+async function messengerName(tenantId: string, psid: string): Promise<string | null> {
+  try {
+    const page = await loadConnectedPage(tenantId);
+    if (!page || page.isExpired) return null;
+    return await fetchMessengerName(page.accessToken, psid);
+  } catch {
+    // Meta withholds the profile from some apps and some people. Not having a
+    // name is never a reason to hold a message up.
+    return null;
+  }
+}
+
 /**
  * The label for a customer on a channel, or null when the channel's own name
  * (Telegram, a WhatsApp profile name) is already good enough.
@@ -68,6 +83,8 @@ export async function identityLabel(input: {
   switch (input.channelType) {
     case 'instagram':
       return (await instagramUsername(input.tenantId, input.customerId)) ?? (profile || null);
+    case 'facebook':
+      return (await messengerName(input.tenantId, input.customerId)) ?? (profile || null);
     case 'whatsapp':
       return profile ? `${profile} (${phoneLabel(input.customerId)})` : phoneLabel(input.customerId);
     case 'webchat': {

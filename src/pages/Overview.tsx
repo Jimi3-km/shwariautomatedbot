@@ -15,6 +15,7 @@ const CHANNELS: Array<{ type: string; label: string }> = [
   { type: 'telegram', label: 'Telegram' },
   { type: 'whatsapp', label: 'WhatsApp' },
   { type: 'instagram', label: 'Instagram' },
+  { type: 'facebook', label: 'Facebook' },
   { type: 'webchat', label: 'Web chat' },
 ];
 
