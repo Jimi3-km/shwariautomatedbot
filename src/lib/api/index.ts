@@ -131,7 +131,9 @@ export const getPayments = (verification_status?: VerificationStatus | '') =>
  * trigger rejects any verified row without a real staff user of the tenant.
  */
 export const verifyPayment = (id: string, decision: 'verified' | 'rejected', reason?: string) =>
-  request<Payment>(`/payments/${id}/verify`, { method: 'POST', body: { decision, reason } });
+  request<Payment & { customer_notified?: boolean; customer_notice_reason?: string }>(
+    `/payments/${id}/verify`, { method: 'POST', body: { decision, reason } }
+  );
 
 export const issueReceipt = (id: string) =>
   request<{ order_ref: string | null; recipient: string | null; html: string; delivery: { sent: boolean; reason: string } }>(

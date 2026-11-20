@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
 import { RefError, leadIdOrNull, customerIdOrNull, textOrNull } from './refs.js';
 import { logAuditEvent } from '../security/audit.js';
+import { notifyPaymentVerified } from '../services/paymentNotice.js';
 
 export const commerceRouter = Router();
 
@@ -81,7 +82,30 @@ commerceRouter.post(
         .eq('id', data.order_id).eq('tenant_id', ctx.tenantId);
     }
 
-    res.json(data);
+    // The customer was told a colleague would confirm. Now one has, so tell
+    // them - on the channel they wrote in, with the figures just verified.
+    // A rejection is not announced: that conversation is for a person to have.
+    let notice: Awaited<ReturnType<typeof notifyPaymentVerified>> | null = null;
+    if (decision === 'verified') {
+      notice = await notifyPaymentVerified({
+        tenantId: ctx.tenantId,
+        paymentId: String(req.params.id),
+        amount: data.amount,
+        currency: data.currency,
+        leadId: data.lead_id ?? null,
+        orderId: data.order_id ?? null,
+      });
+    }
+
+    res.json({
+      ...data,
+      ...(notice
+        ? {
+            customer_notified: notice.notified,
+            ...(notice.notified === false ? { customer_notice_reason: notice.reason } : { customer_notice_channel: notice.channel }),
+          }
+        : {}),
+    });
   })
 );
 

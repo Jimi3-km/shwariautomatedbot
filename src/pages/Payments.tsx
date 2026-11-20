@@ -41,8 +41,15 @@ export function Payments() {
   const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
 
   const decide = useMutation(async (id: string, decision: 'verified' | 'rejected', reason?: string) => {
-    await verifyPayment(id, decision, reason);
-    toast.push('success', decision === 'verified' ? 'Payment verified.' : 'Payment claim rejected.');
+    const result = await verifyPayment(id, decision, reason);
+    if (decision !== 'verified') {
+      toast.push('success', 'Payment claim rejected.');
+    } else if (result.customer_notified) {
+      toast.push('success', 'Payment verified. The customer has been sent a confirmation.');
+    } else {
+      // Verified either way; say plainly that the customer has not been told.
+      toast.push('info', `Payment verified, but the customer was not notified: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
+    }
     setConfirming(null); setRejecting(null); setRejectReason('');
     state.reload();
     refreshCounts();

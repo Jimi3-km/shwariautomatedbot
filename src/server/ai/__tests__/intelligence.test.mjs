@@ -776,5 +776,60 @@ await t('the verdict is written alongside the turn', async () => {
   assert.deepEqual(label.body.tags, ['auto']);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- confirming a verified payment ---');
+
+const { notifyPaymentVerified, paymentConfirmationText } = await import('../../services/paymentNotice.js');
+
+await t('the confirmation states only what was verified', () => {
+  const text = paymentConfirmationText({ customerName: 'Jane Wanjiru', businessName: 'Glamour Crown Wigs', amount: 28000, currency: 'kes', orderRef: 'ORD-MX3' });
+  assert.equal(text, 'Hi Jane, we have received and confirmed your payment of KES 28,000 for order ORD-MX3. Your order is now confirmed and we will update you on the next step. Thank you for choosing Glamour Crown Wigs.');
+  assert.equal(
+    paymentConfirmationText({ customerName: '+254 700 000000', amount: null, currency: null }),
+    'Hi, we have received and confirmed your payment. Thank you.'
+  );
+});
+
+const PAYMENT = { tenantId: 't1', paymentId: 'pay-1', amount: 28000, currency: 'KES', leadId: 7, orderId: 'o1' };
+
+await t('verifying a payment sends the customer a confirmation in their conversation', async () => {
+  reset();
+  rows = {
+    'GET conversations': [{ id: 'c1', channel_id: null, channel_type: 'webchat', customer_id: 'wc-1', customer_name: 'Jane' }],
+    'GET conversation_messages': [],
+    'GET tenants': [{ business_name: 'Glamour Crown Wigs' }],
+    'GET orders': [{ order_ref: 'ORD-MX3' }],
+    'POST conversation_messages': [{ id: 901 }],
+  };
+  const out = await notifyPaymentVerified(PAYMENT);
+  assert.deepEqual(out, { notified: true, channel: 'webchat' });
+  const sent = db.find((r) => r.table === 'conversation_messages' && r.method === 'POST');
+  assert.equal(sent.body.sender, 'agent');
+  assert.match(sent.body.body, /confirmed your payment of KES 28,000 for order ORD-MX3/);
+  assert.equal(sent.body.extracted.payment_id, 'pay-1');
+  assert.equal(sent.body.extracted.payment_confirmation, true);
+});
+
+await t('pressing Verify twice does not message the customer twice', async () => {
+  reset();
+  rows = {
+    'GET conversations': [{ id: 'c1', channel_id: null, channel_type: 'webchat', customer_id: 'wc-1', customer_name: 'Jane' }],
+    'GET conversation_messages': [{ id: 901, extracted: { payment_id: 'pay-1' } }],
+  };
+  const out = await notifyPaymentVerified(PAYMENT);
+  assert.equal(out.notified, false);
+  assert.equal(db.filter((r) => r.table === 'conversation_messages' && r.method === 'POST').length, 0);
+});
+
+await t('a payment with no customer conversation is verified without a message, and says so', async () => {
+  reset();
+  const noLead = await notifyPaymentVerified({ ...PAYMENT, leadId: null });
+  assert.equal(noLead.notified, false);
+  rows = { 'GET conversations': [] };
+  const noConv = await notifyPaymentVerified(PAYMENT);
+  assert.equal(noConv.notified, false);
+  assert.match(noConv.reason, /no conversation/i);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
