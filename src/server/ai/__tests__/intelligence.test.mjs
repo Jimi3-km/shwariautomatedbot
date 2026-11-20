@@ -952,5 +952,51 @@ await t('"I\'ve recorded it" with no claim recorded is caught', () => {
   assert.ok(check("I've noted the transaction code. A colleague will verify it shortly.", ['record_payment_claim']).ok);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- payment details: one place ---');
+
+const mgrCtx = () => ({ tenantId: 't1', userId: 'u1', agentRole: 'manager', conversationId: null, allowedTools: AGENT_BLUEPRINTS.manager.tools, userRole: 'owner', turn: { done: new Map() } });
+
+await t('payment details Shwari saves land on the Settings page, replacing the old ones', async () => {
+  reset();
+  rows = { 'GET tenants': [{ payment_details: { Mpesa: '0718495640' } }] };
+  const out = await runTool(TOOLS, 'set_payment_instructions', JSON.stringify({
+    details: { Paybill: '456565', 'Account number': '123456' },
+    instructions: 'M-Pesa > Lipa na M-Pesa > Paybill > 456565 > 123456 > amount > PIN',
+  }), mgrCtx());
+  assert.equal(out.ok, true, JSON.stringify(out.payload));
+  const write = db.find((r) => r.table === 'tenants' && r.method === 'PATCH');
+  assert.deepEqual(write.body.payment_details, {
+    Paybill: '456565', 'Account number': '123456',
+    'How to pay': 'M-Pesa > Lipa na M-Pesa > Paybill > 456565 > 123456 > amount > PIN',
+  });
+  assert.deepEqual(out.payload.replaced, ['Mpesa']);
+  assert.equal(out.payload.where_to_see_it, 'Settings > Payments');
+});
+
+await t('a second way to pay can be added without removing the first', async () => {
+  reset();
+  rows = { 'GET tenants': [{ payment_details: { Mpesa: '0718495640' } }] };
+  await runTool(TOOLS, 'set_payment_instructions', JSON.stringify({ details: { Bank: 'KCB 1234567890' }, keep_existing: true }), mgrCtx());
+  const write = db.find((r) => r.table === 'tenants' && r.method === 'PATCH');
+  assert.deepEqual(write.body.payment_details, { Mpesa: '0718495640', Bank: 'KCB 1234567890' });
+});
+
+await t('agents quote exactly what the Settings page shows', async () => {
+  reset();
+  rows = { 'GET tenants': [{ payment_details: { Paybill: '456565', 'Account number': '123456', 'How to pay': 'Enter your PIN.' } }] };
+  const ctx = { tenantId: 't1', userId: null, agentRole: 'orders', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.orders.tools, turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'get_payment_instructions', '{}', ctx);
+  assert.equal(out.payload.configured, true);
+  assert.equal(out.payload.instructions, 'Paybill: 456565\nAccount number: 123456\nEnter your PIN.');
+  assert.deepEqual(out.payload.accounts, { Paybill: '456565', 'Account number': '123456' });
+
+  reset();
+  rows = { 'GET tenants': [{ payment_details: {} }], 'GET business_facts': [] };
+  const none = await runTool(TOOLS, 'get_payment_instructions', '{}', ctx);
+  assert.equal(none.payload.configured, false);
+  assert.equal(none.payload.instructions, null);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

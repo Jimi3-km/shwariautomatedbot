@@ -1,3 +1,4 @@
+import { syncPaymentFact } from '../ai/tools/business.js';
 import { syncHoursFromSettings } from '../ai/hours.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
@@ -305,6 +306,17 @@ catalogRouter.put(
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(403).json({ error: 'Not permitted to update this business' });
+
+    // Payment details edited on the Settings page are what the agents quote.
+    if (req.body?.payment_details !== undefined) {
+      const details: Record<string, string> = {};
+      for (const [k, v] of Object.entries((req.body.payment_details ?? {}) as Record<string, unknown>)) {
+        if (String(k).trim() && v !== null && v !== undefined && String(v).trim()) details[String(k).trim()] = String(v).trim();
+      }
+      await syncPaymentFact(ctx.tenantId, details).catch((e) => {
+        console.warn('[catalog] could not sync payment details:', e instanceof Error ? e.message : e);
+      });
+    }
 
     // Hours edited on the Settings page are the hours the agents must use.
     if (req.body?.business_hours !== undefined) {

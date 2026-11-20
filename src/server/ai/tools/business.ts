@@ -562,36 +562,105 @@ export const listKnowledgeGaps: Tool = {
 // wrap them: one for the owner to set, one for the customer agents to read, so
 // neither has to guess a key.
 
+/**
+ * How customers pay lives in one place: the Payments tab of Settings
+ * (tenants.payment_details). The agents quote from it and Shwari writes to it.
+ *
+ * It used to live in two. Shwari saved the steps as a business fact and said
+ * "done", the owner opened Settings and saw the old details, and the agents
+ * were quoting a paybill that the page promising "your agent may only quote
+ * what appears here" did not show.
+ */
+export const HOW_TO_PAY_KEY = 'How to pay';
+
+function asDetails(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const key = String(k).trim().slice(0, 60);
+      const val = v === null || v === undefined ? '' : String(v).trim().slice(0, 2000);
+      if (key && val) out[key] = val;
+    }
+  }
+  return out;
+}
+
+/** Keep the legacy fact in step with Settings, so nothing reads a stale copy. */
+export async function syncPaymentFact(tenantId: string, details: Record<string, string>): Promise<void> {
+  const steps = details[HOW_TO_PAY_KEY];
+  if (steps) {
+    await serviceClient.from('business_facts').upsert(
+      {
+        tenant_id: tenantId, category: 'payment', fact_key: 'how_to_pay',
+        value: steps, source: 'owner', updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'tenant_id,category,fact_key' }
+    );
+  } else {
+    await serviceClient.from('business_facts').delete()
+      .eq('tenant_id', tenantId).eq('category', 'payment');
+  }
+}
+
 export const setPaymentInstructions: Tool = {
   name: 'set_payment_instructions',
   description:
-    'Record how customers should pay this business — the till, paybill, bank or wallet details and the steps to follow. The sales and orders agents read this out to customers, so write it exactly as a customer should see it.',
+    'Record how customers should pay this business. Saves to the Payments tab of Settings, which is the only place the agents quote payment details from. Pass the account details as labelled values (for example Paybill, Account number, Till, Bank) and the steps a customer follows. By default this replaces the payment details already there, because the owner is telling you how customers pay now.',
   parameters: {
     type: 'object',
     properties: {
-      instructions: { type: 'string', description: 'The full payment steps, in plain language.' },
+      details: {
+        type: 'object',
+        description: 'The account details as label: value, e.g. {"Paybill": "456565", "Account number": "123456"}. Only what the owner gave you.',
+        additionalProperties: { type: 'string' },
+      },
+      instructions: { type: 'string', description: 'The steps a customer follows to pay, in plain language.' },
+      keep_existing: {
+        type: 'boolean',
+        description: 'true to add to the payment details already saved instead of replacing them (a second way to pay).',
+      },
     },
-    required: ['instructions'],
     additionalProperties: false,
   },
   mutates: true,
 
   async run(args, ctx) {
-    const value = str(args, 'instructions', { required: true, max: 2000 });
+    const steps = str(args, 'instructions', { max: 2000 });
+    const given = asDetails(args.details);
+    delete given[HOW_TO_PAY_KEY];
+    if (!steps && !Object.keys(given).length) {
+      throw new ToolInputError('Send the account details, the steps to pay, or both.');
+    }
 
-    const { error } = await serviceClient.from('business_facts').upsert(
-      {
-        tenant_id: ctx.tenantId,
-        category: 'payment',
-        fact_key: 'how_to_pay',
-        value,
-        source: 'owner',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'tenant_id,category,fact_key' }
-    );
+    const { data: tenant, error: readErr } = await serviceClient
+      .from('tenants').select('payment_details').eq('id', ctx.tenantId).single();
+    if (readErr) throw new Error(readErr.message);
+    const current = asDetails(tenant?.payment_details);
+
+    const next: Record<string, string> = bool(args, 'keep_existing', false) ? { ...current } : {};
+    // Steps without new account details update the steps and leave the
+    // accounts alone: "change the wording" is not "remove the paybill".
+    if (!Object.keys(given).length && !bool(args, 'keep_existing', false)) {
+      for (const [k, v] of Object.entries(current)) if (k !== HOW_TO_PAY_KEY) next[k] = v;
+    }
+    Object.assign(next, given);
+    if (steps) next[HOW_TO_PAY_KEY] = steps;
+    else if (current[HOW_TO_PAY_KEY] && bool(args, 'keep_existing', false)) next[HOW_TO_PAY_KEY] = current[HOW_TO_PAY_KEY];
+
+    const { error } = await serviceClient
+      .from('tenants')
+      .update({ payment_details: next, updated_at: new Date().toISOString() })
+      .eq('id', ctx.tenantId);
     if (error) throw new Error(error.message);
-    return { saved: true };
+    await syncPaymentFact(ctx.tenantId, next);
+
+    const removed = Object.keys(current).filter((k) => !(k in next));
+    return {
+      saved: true,
+      now_on_settings_payments_tab: next,
+      ...(removed.length ? { replaced: removed, note: `These earlier entries were replaced: ${removed.join(', ')}. Tell the owner, in case one of them should stay.` } : {}),
+      where_to_see_it: 'Settings > Payments',
+    };
   },
 };
 
@@ -603,18 +672,35 @@ export const getPaymentInstructions: Tool = {
   mutates: false,
 
   async run(_args, ctx) {
-    const { data, error } = await serviceClient
-      .from('business_facts')
-      .select('value')
-      .eq('tenant_id', ctx.tenantId)
-      .eq('category', 'payment')
-      .order('updated_at', { ascending: false });
+    const { data: tenant, error } = await serviceClient
+      .from('tenants').select('payment_details').eq('id', ctx.tenantId).single();
     if (error) throw new Error(error.message);
+    const details = asDetails(tenant?.payment_details);
 
-    const instructions = (data ?? []).map((f) => f.value).filter(Boolean).join('\n\n');
+    // Steps recorded before the two stores were merged.
+    let steps = details[HOW_TO_PAY_KEY] ?? '';
+    if (!steps) {
+      const { data: facts } = await serviceClient
+        .from('business_facts').select('value')
+        .eq('tenant_id', ctx.tenantId).eq('category', 'payment')
+        .order('updated_at', { ascending: false }).limit(1);
+      steps = (Array.isArray(facts) && facts[0]?.value) || '';
+    }
+
+    const accounts = Object.entries(details).filter(([k]) => k !== HOW_TO_PAY_KEY);
+    const lines = [
+      ...accounts.map(([k, v]) => `${k}: ${v}`),
+      ...(steps ? [steps] : []),
+    ];
     return {
-      configured: Boolean(instructions),
-      instructions: instructions || null,
+      configured: lines.length > 0,
+      // Kept as one string too: it is what the agents have always relayed.
+      instructions: lines.length ? lines.join('\n') : null,
+      accounts: Object.fromEntries(accounts),
+      steps: steps || null,
+      note: lines.length
+        ? 'These are the only payment details you may give. Relay them exactly.'
+        : 'No payment details are set. Say a colleague will send them; never invent one.',
     };
   },
 };

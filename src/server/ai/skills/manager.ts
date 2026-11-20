@@ -44,6 +44,14 @@ export const MANAGER_SKILL: Skill = {
       steps: ['Save it with save_business_fact in this turn.'],
     },
     {
+      when: 'the owner tells you how customers pay',
+      steps: [
+        'Call set_payment_instructions with the account details as labelled values (Paybill, Account number, Till, Bank...) and the steps to follow.',
+        'It replaces the payment details already on Settings > Payments unless the owner said this is an additional way to pay (then pass keep_existing).',
+        'Read the result back: say what is now on the Payments tab, and name anything that was replaced.',
+      ],
+    },
+    {
       when: 'the owner says something you did was not done',
       steps: [
         'Do not repeat the same call and say "done" again. Read the current state first.',
