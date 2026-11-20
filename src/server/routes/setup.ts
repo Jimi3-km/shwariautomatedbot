@@ -4,8 +4,25 @@ import { allProviders } from '../channels/providers/index.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
 import { llmConfigured, llmModel } from '../ai/llm.js';
+import { runMetaDiagnostics } from '../services/meta/diagnostics.js';
 
 export const setupRouter = Router();
+
+/**
+ * Test the Meta settings against Meta itself.
+ *
+ * Admin-only, like the readiness check below, and for the same reason: it is
+ * for the person running the deployment. It reports what is set and whether it
+ * matches, never a secret's value.
+ */
+setupRouter.get(
+  '/setup/meta-check',
+  requireAuth,
+  requireAdmin,
+  handler(async (_req, res) => {
+    res.json(await runMetaDiagnostics());
+  })
+);
 
 /**
  * Operator readiness check.

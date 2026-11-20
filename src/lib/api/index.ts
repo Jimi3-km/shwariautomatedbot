@@ -191,6 +191,20 @@ export const getOnboardingState = () => request<OnboardingState>('/onboarding/st
 /** Operator readiness. Admin-only; 403 for anyone else. */
 export const getSetupStatus = () => request<SetupStatus>('/setup/status');
 
+export interface MetaCheck {
+  id: string;
+  area: 'app' | 'instagram' | 'whatsapp' | 'webhook';
+  label: string;
+  ok: boolean | null;
+  detail: string;
+  fix?: string;
+  copy?: string;
+}
+
+/** Tests the server's Meta settings against Meta. Admin-only. */
+export const getMetaCheck = () =>
+  request<{ checks: MetaCheck[]; summary: { ok: number; failing: number; unknown: number } }>('/setup/meta-check');
+
 export const createOnboardingBusiness = (body: {
   business_name: string;
   business_category?: string;

@@ -67,11 +67,19 @@ const EMBEDDED_SIGNUP_EXTRAS = {
   featureType: 'whatsapp_business_app_onboarding',
 } as const;
 
+/** The extras for the flow the operator chose; see metaConfig.whatsapp.featureType. */
+function signupExtras(): Record<string, string> {
+  const chosen = metaConfig.whatsapp.featureType.toLowerCase();
+  if (!chosen) return { ...EMBEDDED_SIGNUP_EXTRAS };
+  const { featureType: _coexistence, ...plain } = EMBEDDED_SIGNUP_EXTRAS;
+  return chosen === 'standard' || chosen === 'none' ? plain : { ...plain, featureType: metaConfig.whatsapp.featureType };
+}
+
 export function buildEmbeddedSignupUrl(state: string): string {
   const params = new URLSearchParams({
     app_id: metaConfig.appId,
     config_id: metaConfig.whatsapp.configId,
-    extras: JSON.stringify(EMBEDDED_SIGNUP_EXTRAS),
+    extras: JSON.stringify(signupExtras()),
     redirect_uri: metaConfig.whatsapp.redirectUri,
     state,
   });

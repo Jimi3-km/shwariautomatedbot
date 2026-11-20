@@ -1,3 +1,4 @@
+import { MetaSetupCheck } from '../components/MetaSetupCheck';
 import React, { useEffect, useState } from 'react';
 import {
   Send, MessageCircle, Instagram, Globe, CheckCircle2, ExternalLink, Plug,
@@ -117,6 +118,7 @@ export function Integrations() {
 
           {/* Renders nothing once the server is fully configured. */}
           {isAdmin && <SetupReadinessPanel />}
+          {isAdmin && <MetaSetupCheck />}
 
           <div className="section-label">Messaging</div>
 
