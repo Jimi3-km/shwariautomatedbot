@@ -11,7 +11,7 @@ import type { Role } from '../auth.js';
 import { isComplexCommand, createAndExecutePlan } from './planner.js';
 import { logAgentTurn } from '../security/eval.js';
 import { checkReply, correctionMessage, honestHoldingReply, humanizeReply } from './guard.js';
-import { recordSignals, signalsBlock, detectIntent, type Intent } from './signals.js';
+import { recordSignals, signalsBlock, detectIntent, readPaymentProof, type Intent } from './signals.js';
 import { loadLessons } from './learning.js';
 
 /**
@@ -704,6 +704,50 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       });
     }
   }
+  /**
+   * A payment confirmation is recorded by the runtime, not left to the model.
+   *
+   * In production a customer forwarded a new M-Pesa code and the agent replied
+   * "I've recorded it" having called nothing, so the claim never reached the
+   * Payments page. When the message itself is proof of payment, the claim is
+   * written here, on whichever department is answering, and the model is
+   * handed the outcome to report.
+   */
+  if (customerFacing && input.conversationId && TOOLS.has('record_payment_claim')) {
+    const proof = readPaymentProof(input.text);
+    if (proof) {
+      const call = {
+        id: 'pre_payment',
+        name: 'record_payment_claim',
+        argumentsJson: JSON.stringify({
+          transaction_code: proof.code,
+          ...(proof.amount !== null ? { amount: proof.amount } : {}),
+          ...(proof.method ? { payment_method: proof.method } : {}),
+        }),
+      };
+      const outcome = await runTool(TOOLS, call.name, call.argumentsJson, {
+        ...ctx,
+        // The runtime is acting here, so the department's own tool list does
+        // not apply; customer scoping in the tool still does.
+        allowedTools: [...ctx.allowedTools, 'record_payment_claim'],
+      });
+      messages.push({ role: 'assistant', content: null, toolCalls: [call] });
+      messages.push({ role: 'tool', toolCallId: call.id, content: fitToolResult(outcome.payload, 2000) });
+      if (outcome.ok) {
+        okTools.push(call.name);
+        actedTools.push(call.name);
+        if ((outcome.payload as any)?.recorded === true) actions.push(call.name);
+      }
+      messages.push({
+        role: 'user',
+        content:
+          '[Internal note - not from the customer.] Their message was a payment confirmation, and it has already been handled for you: the result is directly above. ' +
+          'Do not record it again. Reply according to that result: if it was recorded, say it is noted and a colleague will verify it shortly; ' +
+          'if the reference was already used or could not be added, say exactly that. Never say the payment is confirmed or received.',
+      });
+    }
+  }
+
   const maxRounds = role === 'manager' ? MANAGER_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
   const profile: ModelProfile = (role === 'booking' || role === 'orders') ? 'fast' : 'primary';
   const model = settings?.model ?? undefined;

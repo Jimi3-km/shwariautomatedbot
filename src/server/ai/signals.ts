@@ -307,3 +307,44 @@ export async function recordSignals(tenantId: string, conversationId: string): P
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Payment proof
+// ---------------------------------------------------------------------------
+
+export interface PaymentProof {
+  code: string;
+  amount: number | null;
+  method: string | null;
+}
+
+const PAID_WORDS = /\b(confirmed|sent to|paid|payment|nimetuma|nimelipa|nimeshalipa|imetumwa|transaction|m-?pesa|receipt|ref(?:erence)?)\b/i;
+
+/**
+ * Read a payment confirmation out of a customer's message.
+ *
+ * A forwarded M-Pesa text looks like "UJJ66AH7ZZ Confirmed. Ksh6,500.00 sent
+ * to ...". The code is a run of capitals and digits containing both; the
+ * amount follows Ksh/KES. Returns null unless the message really looks like
+ * proof of payment, so an order reference or a product code is not mistaken
+ * for one.
+ */
+export function readPaymentProof(text: string): PaymentProof | null {
+  const t = (text ?? '').trim();
+  if (!t || !PAID_WORDS.test(t)) return null;
+
+  const codes = t.match(/\b[A-Z0-9]{8,12}\b/g) ?? [];
+  const code = codes.find((c) => /[A-Z]/.test(c) && /\d/.test(c) && !/^(?:KES|KSH)\d+$/.test(c));
+  if (!code) return null;
+  // An order reference such as KRY-MWOK26TP is not a payment code.
+  if (new RegExp(`[A-Z]{2,5}-${code}\\b`).test(t)) return null;
+
+  const money = t.match(/\b(?:ksh|kes|kshs|sh)\.?\s?([\d,]+(?:\.\d{1,2})?)/i);
+  const amount = money ? Number(money[1].replace(/,/g, '')) : NaN;
+
+  return {
+    code,
+    amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    method: /m-?pesa|confirmed\.|sent to/i.test(t) ? 'M-Pesa' : null,
+  };
+}

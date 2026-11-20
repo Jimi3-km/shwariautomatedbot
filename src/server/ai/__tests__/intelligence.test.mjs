@@ -908,5 +908,49 @@ await t('the same order sent twice in a moment is recorded once', async () => {
   assert.equal(db.filter((r) => r.table === 'orders' && r.method === 'POST').length, 0);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n--- a payment confirmation is recorded without relying on the model ---');
+
+const { readPaymentProof } = await import('../signals.js');
+
+await t('an M-Pesa confirmation is read; an order reference or chatter is not', () => {
+  assert.deepEqual(
+    readPaymentProof('UJJ66AH7ZZ Confirmed. Ksh6500.00 sent to glamour crown wigs on 19/10/26 at 10:02'),
+    { code: 'UJJ66AH7ZZ', amount: 6500, method: 'M-Pesa' }
+  );
+  assert.deepEqual(readPaymentProof('nimelipa, code ni QWE123ABCD'), { code: 'QWE123ABCD', amount: null, method: null });
+  assert.equal(readPaymentProof('where is my order KRY-MWOK26TP, I paid already'), null);
+  assert.equal(readPaymentProof('how much is the BRAZILIAN2024 wig'), null);
+  assert.equal(readPaymentProof('I will pay tomorrow'), null);
+});
+
+await t('the claim reaches the Payments list even when the model calls nothing', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET orders'] = (path) => (path.includes('payment_status=eq.unpaid') ? [{ id: 'o1', order_ref: 'KRY-MWOK26TP', total: 6500 }] : []);
+  rows['GET payments'] = [];
+  rows['POST payments'] = [{ id: 'pay-9', transaction_code: 'UJJ66AH7ZZ', amount: 6500, currency: 'KES', verification_status: 'unverified' }];
+  script = [says("Thanks - I've noted code UJJ66AH7ZZ for order KRY-MWOK26TP. A colleague will verify it shortly.")];
+  const out = await runAgentTurn({
+    tenantId: 't1', role: 'sales', userId: null, conversationId: 'c1',
+    text: 'UJJ66AH7ZZ Confirmed. Ksh6500.00 sent to glamour crown wigs on 19/10/26 at 10:02',
+  });
+  const saved = db.find((r) => r.table === 'payments' && r.method === 'POST');
+  assert.ok(saved, 'no payment claim was written');
+  assert.equal(saved.body.transaction_code, 'UJJ66AH7ZZ');
+  assert.equal(saved.body.amount, 6500);
+  assert.equal(saved.body.order_id, 'o1');
+  assert.equal(saved.body.verification_status, 'unverified');
+  assert.ok(out.actions.includes('record_payment_claim'));
+  assert.match(out.reply, /verify it shortly/);
+  assert.ok(db.some((r) => r.table === 'notifications' && r.method === 'POST' && r.body.kind === 'payment_claim'), 'the team was not notified');
+});
+
+await t('"I\'ve recorded it" with no claim recorded is caught', () => {
+  assert.ok(check("Thanks for the code. I've recorded it for order KRY-MWOK26TP. A colleague will verify shortly.", ['list_orders']).issues.includes('unbacked_action'));
+  assert.ok(check("I've noted the transaction code for our team.", []).issues.includes('unbacked_action'));
+  assert.ok(check("I've noted the transaction code. A colleague will verify it shortly.", ['record_payment_claim']).ok);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

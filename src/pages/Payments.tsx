@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { CreditCard, Check, X, Receipt, ShieldCheck } from 'lucide-react';
 import { getPayments, verifyPayment, issueReceipt } from '../lib/api';
 import type { Payment, VerificationStatus } from '../types';
-import { useAsync, useIsMobile, useMutation } from '../hooks';
+import { useAsync, useIsMobile, useMutation, useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FilterChip, InlineError,
@@ -34,6 +34,8 @@ export function Payments() {
 
   const [filter, setFilter] = useState<VerificationStatus | ''>('unverified');
   const state = useAsync(() => getPayments(filter || undefined), [filter]);
+  // A claim a customer has just made appears without anyone reloading the page.
+  useVisiblePolling(state.reload, 20_000, true);
 
   const [confirming, setConfirming] = useState<Payment | null>(null);
   const [rejecting, setRejecting] = useState<Payment | null>(null);

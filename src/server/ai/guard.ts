@@ -65,6 +65,11 @@ const ACTION_CLAIMS: Array<{ pattern: RegExp; backedBy: string[]; what: string }
     backedBy: ['record_order', 'list_orders', 'update_order_status', 'get_customer_history', 'delegate_to_agent'],
   },
   {
+    what: 'a payment being noted for verification',
+    pattern: /\b(?:i(?:'ve| have)|we(?:'ve| have)|i just|i|we)\s+(?:now\s+|just\s+|successfully\s+|also\s+)?(?:recorded|noted|logged|saved|passed (?:on|along)|forwarded|submitted|added)\b[^.!?\n]{0,60}\b(?:payment|transaction|code|reference|ref|mpesa|m-pesa|it for (?:order|our team|verification))\b|\b(?:payment|transaction code|code|reference)\b[^.!?\n]{0,40}\b(?:has been|is|was) (?:now\s+)?(?:recorded|noted|logged|submitted|added)\b|\bnime(?:rekodi|andika|pokea)\w*/i,
+    backedBy: ['record_payment_claim', 'delegate_to_agent'],
+  },
+  {
     what: 'handing over to a person',
     pattern: /\b(?:i(?:'ve| have)|i just|i)\s+(?:now\s+|just\s+)?(?:escalated|handed (?:this|you|it) over|passed (?:this|you|it) (?:on|over) to|opened a ticket|raised a ticket|flagged (?:this|it) (?:to|for))\b/i,
     backedBy: ['escalate_to_human', 'open_ticket', 'list_tickets', 'update_ticket', 'delegate_to_agent'],
