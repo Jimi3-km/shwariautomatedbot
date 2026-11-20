@@ -1,3 +1,5 @@
+import { stateReturnOrigin } from '../../services/meta/instagram.js';
+import { safeReturnOrigin, requestOrigin } from '../../config/origins.js';
 import { Router } from 'express';
 import { serviceClient } from '../../supabase.js';
 import { handler } from '../../auth.js';
@@ -30,6 +32,10 @@ export const instagramAuthRouter = Router();
 
 /** Where to bounce the browser when the flow ends. */
 function appOrigin(req: import('express').Request): string {
+  // Back to the address they started on, when the state carries one of ours.
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  const started = state && verifyState(state) ? safeReturnOrigin(stateReturnOrigin(state)) : null;
+  if (started) return started;
   if (metaConfig.instagram.redirectUri) {
     try { return new URL(metaConfig.instagram.redirectUri).origin; } catch { /* fall through */ }
   }
@@ -52,7 +58,7 @@ instagramAuthRouter.get(
       return res.status(503).json(notConfigured('Instagram sign-in', cfg));
     }
 
-    const state = createState();
+    const state = createState(safeReturnOrigin(requestOrigin(req)));
     const url = buildAuthorizeUrl(state);
     console.log('[auth/instagram] redirecting to Meta consent screen');
     // State is carried in the URL and verified by HMAC on return, so no

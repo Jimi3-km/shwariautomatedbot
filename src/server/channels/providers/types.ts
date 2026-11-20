@@ -84,6 +84,8 @@ export interface HealthReport {
 export interface ConnectContext {
   tenantId: string;
   userId: string;
+  /** The app origin the person is on, when starting a connection. */
+  returnTo?: string | null;
 }
 
 export interface CallbackResult {

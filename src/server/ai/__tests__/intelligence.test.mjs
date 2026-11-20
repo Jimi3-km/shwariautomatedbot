@@ -14,6 +14,9 @@ process.env.SUPABASE_URL = 'https://example.supabase.co';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
 process.env.SHWARI_API_KEY = 'test-key';
+// Read once when the Meta config module loads, so they are set before any import.
+process.env.META_APP_SECRET = 'test-app-secret';
+process.env.INSTAGRAM_CLIENT_SECRET = 'test-ig-secret';
 
 let pass = 0;
 let fail = 0;
@@ -1074,6 +1077,46 @@ await t('a photo sent with a message gets one reply, not two', async () => {
   reset();
   rows = { 'GET conversation_messages': [{ body: 'hello', created_at: now, extracted: {} }] };
   assert.equal(await coveredByTextMessage({ ...photo, text: 'here is my payment' }, 'c1', 0), false, 'a message with words is never skipped');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- more than one domain ---');
+
+process.env.CORS_ORIGIN = 'https://ai.tryavora.space, https://shwariautomatedbot.vercel.app/';
+process.env.META_APP_SECRET = process.env.META_APP_SECRET || 'test-app-secret';
+process.env.INSTAGRAM_CLIENT_SECRET = process.env.INSTAGRAM_CLIENT_SECRET || 'test-ig-secret';
+const { safeReturnOrigin, allowedAppOrigins } = await import('../../config/origins.js');
+const { createOAuthState, verifyOAuthState } = await import('../../services/meta/oauthState.js');
+const igAuth = await import('../../services/meta/instagram.js');
+
+await t('only this app\'s own addresses are ever returned to', () => {
+  assert.ok(allowedAppOrigins().includes('https://ai.tryavora.space'));
+  assert.equal(safeReturnOrigin('https://ai.tryavora.space'), 'https://ai.tryavora.space');
+  assert.equal(safeReturnOrigin('https://AI.tryavora.space/some/page'), 'https://ai.tryavora.space');
+  assert.equal(safeReturnOrigin('https://shwariautomatedbot.vercel.app'), 'https://shwariautomatedbot.vercel.app');
+  assert.equal(safeReturnOrigin('https://evil.example'), null);
+  assert.equal(safeReturnOrigin('https://ai.tryavora.space.evil.example'), null);
+  assert.equal(safeReturnOrigin(''), null);
+});
+
+await t('connecting a channel remembers which address the person started on', () => {
+  const state = createOAuthState({ provider: 'instagram', tenantId: 't1', userId: 'u1', returnTo: 'https://ai.tryavora.space' });
+  const back = verifyOAuthState(state);
+  assert.equal(back.tenantId, 't1');
+  assert.equal(back.returnTo, 'https://ai.tryavora.space');
+  // A state with no origin still verifies, and a tampered one does not.
+  assert.equal(verifyOAuthState(createOAuthState({ provider: 'whatsapp', tenantId: 't1', userId: 'u1' })).returnTo, null);
+  assert.equal(verifyOAuthState(state.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'))), null);
+});
+
+await t('Instagram sign-in returns to the address it started from', () => {
+  const state = igAuth.createState('https://ai.tryavora.space');
+  assert.equal(state.split('.').length, 3, 'the state keeps its shape');
+  assert.equal(igAuth.verifyState(state), true);
+  assert.equal(igAuth.stateReturnOrigin(state), 'https://ai.tryavora.space');
+  const plain = igAuth.createState();
+  assert.equal(igAuth.verifyState(plain), true);
+  assert.equal(igAuth.stateReturnOrigin(plain), null);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -115,7 +115,7 @@ export function Payments() {
                   <Pill tone={TONE[p.verification_status]}>{humanize(p.verification_status)}</Pill>
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
-                  {p.customer_id || p.customer_phone || 'Unknown customer'}
+                  {(p as any).customer_name || p.customer_phone || p.customer_id || 'Unknown customer'}
                 </div>
                 {p.transaction_code && (
                   <div className="mono" style={{ fontSize: 12, marginTop: 3 }}>{p.transaction_code}</div>
@@ -141,7 +141,12 @@ export function Payments() {
                 {payments.map((p) => (
                   <tr key={p.id}>
                     <td className="primary">
-                      <div>{p.customer_id || p.customer_phone || '—'}</div>
+                      <div style={{ fontWeight: 500 }}>{(p as any).customer_name || p.customer_phone || p.customer_id || '—'}</div>
+                      {(p as any).customer_name && (p.customer_phone || (p as any).order_ref) && (
+                        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                          {[(p as any).order_ref, p.customer_phone].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
                       {p.customer_email && (
                         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.customer_email}</div>
                       )}

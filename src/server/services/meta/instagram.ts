@@ -61,8 +61,11 @@ export class InstagramOAuthError extends Error {
  * callback from being forged and bounds how long a state stays valid, without
  * needing server-side session storage.
  */
-export function createState(): string {
-  const nonce = crypto.randomBytes(16).toString('base64url');
+export function createState(returnTo?: string | null): string {
+  // The origin rides inside the signed nonce, after a separator that never
+  // appears in base64url, so the state keeps its three dot-separated parts.
+  const random = crypto.randomBytes(16).toString('base64url');
+  const nonce = returnTo ? `${random}~${Buffer.from(returnTo).toString('base64url')}` : random;
   const issued = Date.now().toString(36);
   const payload = `${nonce}.${issued}`;
   const mac = crypto
@@ -276,4 +279,16 @@ export async function subscribeToMessages(accessToken: string): Promise<void> {
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) await readMetaError(res, 'Could not subscribe the Instagram account to messages');
+}
+
+/** The origin carried in a sign-in state. Only meaningful after verifyState passes. */
+export function stateReturnOrigin(state: string): string | null {
+  const nonce = (state ?? '').split('.')[0] ?? '';
+  const at = nonce.indexOf('~');
+  if (at < 0) return null;
+  try {
+    return Buffer.from(nonce.slice(at + 1), 'base64url').toString('utf8') || null;
+  } catch {
+    return null;
+  }
 }

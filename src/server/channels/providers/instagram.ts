@@ -65,7 +65,7 @@ export const instagramProvider: ChannelProvider = {
     const a = this.availability();
     if (!a.available) throw new ProviderNotConfiguredError('Instagram', a.missing);
 
-    const state = createOAuthState({ provider: 'instagram', tenantId: ctx.tenantId, userId: ctx.userId });
+    const state = createOAuthState({ provider: 'instagram', tenantId: ctx.tenantId, userId: ctx.userId, returnTo: ctx.returnTo ?? null });
     // Connecting a channel comes back on its own callback, not the sign-in
     // one, so the redirect URI is passed explicitly through both legs.
     return {

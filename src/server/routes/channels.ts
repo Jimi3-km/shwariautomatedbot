@@ -1,3 +1,4 @@
+import { safeReturnOrigin, requestOrigin } from '../config/origins.js';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth, requireAdmin, handler } from '../auth.js';
@@ -193,7 +194,9 @@ channelsRouter.post(
     const provider = getProvider(req.params.provider);
     if (!provider) return res.status(404).json({ error: 'Unknown channel.' });
     try {
-      res.json(await provider.connect(req.ctx!));
+      // Remember which of our addresses they are on, so the return leg brings
+      // them back to it rather than to the domain Meta redirects to.
+      res.json(await provider.connect({ ...req.ctx!, returnTo: safeReturnOrigin(requestOrigin(req)) }));
     } catch (e) {
       sendProviderError(res, e, "We couldn't start that connection. Please try again.");
     }
@@ -247,8 +250,14 @@ channelsRouter.get(
     const provider = getProvider(providerId);
     const params = req.query as Record<string, string>;
 
+    // The state is read first because it says which of our addresses to
+    // return to. It is re-checked against the allowlist: a signed state proves
+    // who minted it, not that the origin inside it is still one of ours.
+    const state = params.state ? verifyOAuthState(params.state) : null;
+    const home = safeReturnOrigin(state?.returnTo) ?? '';
+
     const back = (status: string) =>
-      res.redirect(302, `/integrations?connect=${encodeURIComponent(providerId)}&status=${status}`);
+      res.redirect(302, `${home}/integrations?connect=${encodeURIComponent(providerId)}&status=${status}`);
 
     if (!provider?.callback) return back('unknown');
 
@@ -257,7 +266,6 @@ channelsRouter.get(
       return back(params.error === 'access_denied' ? 'cancelled' : 'failed');
     }
 
-    const state = params.state ? verifyOAuthState(params.state) : null;
     if (!state || state.provider !== providerId) {
       console.warn(`[channels] ${providerId} callback state rejected`);
       return back('expired');

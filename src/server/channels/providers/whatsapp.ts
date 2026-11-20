@@ -65,7 +65,7 @@ export const whatsappProvider: ChannelProvider = {
     const a = this.availability();
     if (!a.available) throw new ProviderNotConfiguredError('WhatsApp', a.missing);
 
-    const state = createOAuthState({ provider: 'whatsapp', tenantId: ctx.tenantId, userId: ctx.userId });
+    const state = createOAuthState({ provider: 'whatsapp', tenantId: ctx.tenantId, userId: ctx.userId, returnTo: ctx.returnTo ?? null });
     return { mode: 'oauth', authorize_url: buildEmbeddedSignupUrl(state) };
   },
 

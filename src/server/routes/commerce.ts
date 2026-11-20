@@ -27,7 +27,36 @@ commerceRouter.get(
     }
     const { data, error } = await q;
     if (error) return res.status(400).json({ error: error.message });
-    res.json({ payments: data ?? [] });
+
+    // The name the customer gave, as it appears on the receipt, and the order
+    // the payment is for: a channel id on its own tells a person nothing.
+    const rows = (data ?? []) as any[];
+    const leadIds = [...new Set(rows.map((p) => p.lead_id).filter((v) => v !== null && v !== undefined))];
+    const orderIds = [...new Set(rows.map((p) => p.order_id).filter(Boolean))];
+    const [leads, orders] = await Promise.all([
+      leadIds.length
+        ? ctx.db.from('leads').select('id, customer_name, phone, email').eq('tenant_id', ctx.tenantId).in('id', leadIds)
+        : Promise.resolve({ data: [] as any[] }),
+      orderIds.length
+        ? ctx.db.from('orders').select('id, order_ref').eq('tenant_id', ctx.tenantId).in('id', orderIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const leadById = new Map(((leads as any).data ?? []).map((l: any) => [String(l.id), l]));
+    const orderById = new Map(((orders as any).data ?? []).map((o: any) => [String(o.id), o]));
+
+    res.json({
+      payments: rows.map((p) => {
+        const lead: any = p.lead_id !== null && p.lead_id !== undefined ? leadById.get(String(p.lead_id)) : null;
+        const order: any = p.order_id ? orderById.get(String(p.order_id)) : null;
+        return {
+          ...p,
+          customer_name: lead?.customer_name ?? null,
+          customer_phone: p.customer_phone ?? lead?.phone ?? null,
+          customer_email: p.customer_email ?? lead?.email ?? null,
+          order_ref: order?.order_ref ?? null,
+        };
+      }),
+    });
   })
 );
 
