@@ -55,7 +55,7 @@ commerceRouter.post(
     const { data, error } = await ctx.db
       .from('payments').update(updates)
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId)
-      .select('amount, currency, lead_id, order_id')
+      .select('id, amount, currency, lead_id, order_id')
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Payment not found' });
@@ -76,6 +76,29 @@ commerceRouter.post(
         .update({ stage: decision === 'verified' ? 'payment_verified' : 'payment_claimed', updated_at: new Date().toISOString() })
         .eq('id', data.lead_id).eq('tenant_id', ctx.tenantId);
     }
+    // A claim recorded without an order still pays for one. When the customer
+    // has a single unpaid order for exactly this amount, that is the order.
+    if (decision === 'verified' && !data.order_id && data.lead_id && data.amount !== null) {
+      const { data: open } = await ctx.db
+        .from('orders').select('id, total')
+        .eq('tenant_id', ctx.tenantId).eq('lead_id', data.lead_id)
+        .eq('payment_status', 'unpaid').neq('status', 'cancelled')
+        .order('created_at', { ascending: false }).limit(10);
+      const matches = (open ?? []).filter((o: any) => Number(o.total) === Number(data.amount));
+      // Several identical unpaid orders are duplicates of one purchase: the
+      // newest is the one the customer was last shown.
+      if (matches.length) {
+        data.order_id = matches[0].id;
+        await ctx.db.from('payments').update({ order_id: data.order_id })
+          .eq('id', req.params.id).eq('tenant_id', ctx.tenantId);
+        const extras = matches.slice(1).map((o: any) => o.id);
+        if (extras.length) {
+          await ctx.db.from('orders')
+            .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+            .in('id', extras).eq('tenant_id', ctx.tenantId);
+        }
+      }
+    }
     if (decision === 'verified' && data.order_id) {
       await ctx.db.from('orders')
         .update({ payment_status: 'paid', status: 'confirmed', updated_at: new Date().toISOString() })
@@ -87,14 +110,7 @@ commerceRouter.post(
     // A rejection is not announced: that conversation is for a person to have.
     let notice: Awaited<ReturnType<typeof notifyPaymentVerified>> | null = null;
     if (decision === 'verified') {
-      notice = await notifyPaymentVerified({
-        tenantId: ctx.tenantId,
-        paymentId: String(req.params.id),
-        amount: data.amount,
-        currency: data.currency,
-        leadId: data.lead_id ?? null,
-        orderId: data.order_id ?? null,
-      });
+      notice = await notifyPaymentVerified({ tenantId: ctx.tenantId, paymentId: String(req.params.id) });
     }
 
     res.json({
@@ -102,7 +118,8 @@ commerceRouter.post(
       ...(notice
         ? {
             customer_notified: notice.notified,
-            ...(notice.notified === false ? { customer_notice_reason: notice.reason } : { customer_notice_channel: notice.channel }),
+            receipt_emailed: notice.receipt_emailed,
+            ...(notice.notified ? { customer_notice_channel: notice.channel } : { customer_notice_reason: notice.reason }),
           }
         : {}),
     });

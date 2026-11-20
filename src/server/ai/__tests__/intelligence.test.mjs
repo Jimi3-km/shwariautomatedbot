@@ -780,55 +780,132 @@ await t('the verdict is written alongside the turn', async () => {
 console.log('\n--- confirming a verified payment ---');
 
 const { notifyPaymentVerified, paymentConfirmationText } = await import('../../services/paymentNotice.js');
+const { findOrderByRef } = await import('../tools/operations.js');
 
-await t('the confirmation states only what was verified', () => {
-  const text = paymentConfirmationText({ customerName: 'Jane Wanjiru', businessName: 'Glamour Crown Wigs', amount: 28000, currency: 'kes', orderRef: 'ORD-MX3' });
-  assert.equal(text, 'Hi Jane, we have received and confirmed your payment of KES 28,000 for order ORD-MX3. Your order is now confirmed and we will update you on the next step. Thank you for choosing Glamour Crown Wigs.');
+await t('the confirmation carries a receipt built only from what was verified', () => {
+  const text = paymentConfirmationText({
+    customerName: 'Jane Wanjiru', businessName: 'Glamour Crown Wigs', amount: 3200, currency: 'kes',
+    orderRef: 'KRY-MWOIMZ71', items: [{ name: 'Wig Care Essentials Bundle', qty: 1 }],
+    method: 'M-Pesa', transactionCode: 'UJJ66AH7ZT', deliveryLocation: 'Westlands',
+    verifiedAt: '2026-11-20T05:08:18Z', timezone: 'Africa/Nairobi',
+  });
+  assert.equal(text, [
+    'Hi Jane, we have received and confirmed your payment of KES 3,200 for order KRY-MWOIMZ71. Your order is now confirmed and we will update you on the next step.',
+    '',
+    'RECEIPT',
+    '- Order: KRY-MWOIMZ71',
+    '- Items: Wig Care Essentials Bundle',
+    '- Amount paid: KES 3,200',
+    '- Paid by: M-Pesa, ref UJJ66AH7ZT',
+    '- Delivery to: Westlands',
+    '- Date: 20 Nov 2026',
+    '',
+    'Thank you for choosing Glamour Crown Wigs.',
+  ].join('\n'));
   assert.equal(
     paymentConfirmationText({ customerName: '+254 700 000000', amount: null, currency: null }),
-    'Hi, we have received and confirmed your payment. Thank you.'
+    'Hi, we have received and confirmed your payment.\n\nThank you.'
   );
 });
 
-const PAYMENT = { tenantId: 't1', paymentId: 'pay-1', amount: 28000, currency: 'KES', leadId: 7, orderId: 'o1' };
+const PAYMENT_ROW = {
+  id: 'pay-1', tenant_id: 't1', lead_id: 7, order_id: 'o1', conversation_id: 'c1', amount: 3200, currency: 'KES',
+  payment_method: 'M-Pesa', transaction_code: 'UJJ66AH7ZT', verified_at: '2026-11-20T05:08:18Z', receipt_sent_at: null, customer_email: null,
+};
+const noticeRows = (extra = {}) => ({
+  'GET payments': [PAYMENT_ROW],
+  'GET tenants': [{ business_name: 'Glamour Crown Wigs', currency: 'KES', timezone: 'Africa/Nairobi' }],
+  'GET orders': [{ order_ref: 'KRY-MWOIMZ71', items: [{ name: 'Wig Care Essentials Bundle', qty: 1 }], delivery_location: 'Westlands' }],
+  'GET leads': [{ customer_name: 'Jane', email: null }],
+  'GET conversations': [{ id: 'c1', channel_id: null, channel_type: 'webchat', customer_id: 'wc-1', customer_name: 'Jane' }],
+  'GET conversation_messages': [],
+  'POST conversation_messages': [{ id: 901 }],
+  ...extra,
+});
 
-await t('verifying a payment sends the customer a confirmation in their conversation', async () => {
+await t('verifying a payment sends the confirmation and receipt in the conversation', async () => {
   reset();
-  rows = {
-    'GET conversations': [{ id: 'c1', channel_id: null, channel_type: 'webchat', customer_id: 'wc-1', customer_name: 'Jane' }],
-    'GET conversation_messages': [],
-    'GET tenants': [{ business_name: 'Glamour Crown Wigs' }],
-    'GET orders': [{ order_ref: 'ORD-MX3' }],
-    'POST conversation_messages': [{ id: 901 }],
-  };
-  const out = await notifyPaymentVerified(PAYMENT);
-  assert.deepEqual(out, { notified: true, channel: 'webchat' });
+  rows = noticeRows();
+  const out = await notifyPaymentVerified({ tenantId: 't1', paymentId: 'pay-1' });
+  assert.equal(out.notified, true);
+  assert.equal(out.channel, 'webchat');
   const sent = db.find((r) => r.table === 'conversation_messages' && r.method === 'POST');
   assert.equal(sent.body.sender, 'agent');
-  assert.match(sent.body.body, /confirmed your payment of KES 28,000 for order ORD-MX3/);
+  assert.match(sent.body.body, /confirmed your payment of KES 3,200 for order KRY-MWOIMZ71/);
+  assert.match(sent.body.body, /RECEIPT[\s\S]*Paid by: M-Pesa, ref UJJ66AH7ZT/);
   assert.equal(sent.body.extracted.payment_id, 'pay-1');
-  assert.equal(sent.body.extracted.payment_confirmation, true);
+  assert.ok(db.some((r) => r.table === 'payments' && r.method === 'PATCH' && r.body.receipt_sent_at), 'the receipt was not marked as sent');
 });
 
 await t('pressing Verify twice does not message the customer twice', async () => {
   reset();
-  rows = {
-    'GET conversations': [{ id: 'c1', channel_id: null, channel_type: 'webchat', customer_id: 'wc-1', customer_name: 'Jane' }],
-    'GET conversation_messages': [{ id: 901, extracted: { payment_id: 'pay-1' } }],
-  };
-  const out = await notifyPaymentVerified(PAYMENT);
+  rows = noticeRows({ 'GET conversation_messages': [{ id: 901, extracted: { payment_id: 'pay-1' } }] });
+  const out = await notifyPaymentVerified({ tenantId: 't1', paymentId: 'pay-1' });
   assert.equal(out.notified, false);
   assert.equal(db.filter((r) => r.table === 'conversation_messages' && r.method === 'POST').length, 0);
 });
 
 await t('a payment with no customer conversation is verified without a message, and says so', async () => {
   reset();
-  const noLead = await notifyPaymentVerified({ ...PAYMENT, leadId: null });
-  assert.equal(noLead.notified, false);
-  rows = { 'GET conversations': [] };
-  const noConv = await notifyPaymentVerified(PAYMENT);
-  assert.equal(noConv.notified, false);
-  assert.match(noConv.reason, /no conversation/i);
+  rows = noticeRows({ 'GET payments': [{ ...PAYMENT_ROW, conversation_id: null, lead_id: null }], 'GET conversations': [] });
+  const out = await notifyPaymentVerified({ tenantId: 't1', paymentId: 'pay-1' });
+  assert.equal(out.notified, false);
+  assert.match(out.reason, /no conversation/i);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n--- recording a payment for verification ---');
+
+const ordersCtx = () => ({ tenantId: 't1', userId: null, agentRole: 'orders', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.orders.tools, turn: { done: new Map() } });
+
+await t('an order is found even when the reference has an extra ORD- on the front', async () => {
+  reset();
+  rows = { 'GET orders': (path) => (path.includes('order_ref=eq.KRY-MWOIMZ71') ? [{ id: 'o1', order_ref: 'KRY-MWOIMZ71', lead_id: 7 }] : []) };
+  const found = await findOrderByRef('t1', 'ord-KRY-MWOIMZ71');
+  assert.equal(found?.order_ref, 'KRY-MWOIMZ71');
+});
+
+await t('a claim with a wrong or missing order reference is still recorded, against their open order', async () => {
+  reset();
+  rows = baseRows('orders');
+  rows['GET orders'] = (path) => (path.includes('payment_status=eq.unpaid') ? [{ id: 'o1', order_ref: 'KRY-MWOIMZ71', total: 3200 }] : []);
+  rows['GET payments'] = [];
+  rows['POST payments'] = [{ id: 'pay-9', transaction_code: 'UJJ66AH7ZT', amount: 3200, currency: 'KES', verification_status: 'unverified' }];
+  const out = await runTool(TOOLS, 'record_payment_claim', JSON.stringify({ transaction_code: 'UJJ66AH7ZT', amount: 3200, order_ref: 'ORD-NOPE-123' }), ordersCtx());
+  assert.equal(out.ok, true, JSON.stringify(out.payload));
+  assert.equal(out.payload.recorded, true);
+  assert.equal(out.payload.for_order, 'KRY-MWOIMZ71');
+  const saved = db.find((r) => r.table === 'payments' && r.method === 'POST').body;
+  assert.equal(saved.order_id, 'o1');
+  assert.equal(saved.verification_status, 'unverified');
+});
+
+await t('a reference already used by another customer is not silently dropped', async () => {
+  reset();
+  rows = baseRows('orders');
+  rows['GET orders'] = [];
+  rows['GET payments'] = [{ id: 'pay-1', verification_status: 'verified', lead_id: 99, customer_id: 'someone-else', order_id: null }];
+  const out = await runTool(TOOLS, 'record_payment_claim', JSON.stringify({ transaction_code: 'UJJ66AH7ZT', amount: 3200 }), ordersCtx());
+  assert.equal(out.payload.recorded, false);
+  assert.equal(out.payload.reference_already_used, true);
+  assert.match(out.payload.note, /could NOT be added/);
+  const ticket = db.find((r) => r.table === 'support_tickets' && r.method === 'POST');
+  assert.ok(ticket, 'no ticket was opened for a person');
+  assert.match(ticket.body.subject, /UJJ66AH7ZT/);
+  assert.equal(db.filter((r) => r.table === 'payments' && r.method === 'POST').length, 0);
+});
+
+await t('the same order sent twice in a moment is recorded once', async () => {
+  reset();
+  rows = baseRows('sales');
+  rows['GET products'] = [{ name: 'Wig Care Essentials Bundle', price: 3200, in_stock: true }];
+  rows['GET orders'] = [{ id: 'o1', order_ref: 'KRY-MWOIMZ71', items: [{ name: 'Wig Care Essentials Bundle', qty: 1, price: 3200 }], total: 3200, currency: 'KES', status: 'pending', payment_status: 'unpaid' }];
+  const ctx = { tenantId: 't1', userId: null, agentRole: 'sales', conversationId: 'c1', allowedTools: AGENT_BLUEPRINTS.sales.tools, turn: { done: new Map() } };
+  const out = await runTool(TOOLS, 'record_order', JSON.stringify({ items: [{ name: 'wig care essentials bundle', qty: 1 }] }), ctx);
+  assert.equal(out.ok, true);
+  assert.equal(out.payload.already_recorded, true);
+  assert.equal(out.payload.order.order_ref, 'KRY-MWOIMZ71');
+  assert.equal(db.filter((r) => r.table === 'orders' && r.method === 'POST').length, 0);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

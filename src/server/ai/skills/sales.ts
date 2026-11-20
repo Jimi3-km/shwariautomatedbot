@@ -25,7 +25,7 @@ export const SALES_SKILL: Skill = {
       steps: [
         'Call record_order in this turn, using the exact catalogue name. The total is worked out from the catalogue.',
         'Call get_payment_instructions and give the steps exactly as written.',
-        'Reply with the order reference, the item, the total, and how to pay. Say a colleague confirms the payment.',
+        'Reply with the order reference exactly as the result gives it (never add or change a prefix), the item, the total, and how to pay. Say the order is placed and will be confirmed once a colleague has verified the payment - never that it is confirmed already.',
       ],
     },
     {

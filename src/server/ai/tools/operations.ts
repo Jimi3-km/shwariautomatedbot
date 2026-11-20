@@ -458,6 +458,59 @@ export const cancelAppointment: Tool = {
 // Orders
 // ---------------------------------------------------------------------------
 
+/**
+ * Find an order by the reference someone typed.
+ *
+ * Models and customers both mangle references: an "ORD-" stuck on the front
+ * of a reference that already has the business's own prefix, lower case, a
+ * stray space. A payment was left unlinked from its order for exactly that
+ * reason. The exact reference is tried first, then the same thing with a
+ * leading ORD- removed, then a match on the unique tail.
+ */
+/** A reference as typed, and without an ORD- someone put on the front. */
+export function refSpellings(raw: string): string[] {
+  const ref = raw.trim().toUpperCase().replace(/\s+/g, '');
+  const stripped = ref.replace(/^(?:ORD(?:ER)?[-#: ]*)+/, '');
+  return Array.from(new Set([ref, stripped].filter(Boolean)));
+}
+
+/**
+ * `leadId`, when given, pins every lookup to that customer's orders: on a
+ * customer turn a reference must never find someone else's order.
+ */
+export async function findOrderByRef(tenantId: string, raw: string, leadId?: number | null): Promise<any | null> {
+  const ref = raw.trim().toUpperCase().replace(/\s+/g, '');
+  if (!ref) return null;
+  const select = 'id, order_ref, lead_id, customer_id, total, status, payment_status';
+  const pinned = leadId !== undefined && leadId !== null;
+  const exact = async (value: string) => {
+    let q = serviceClient.from('orders').select(select).eq('tenant_id', tenantId).eq('order_ref', value);
+    if (pinned) q = q.eq('lead_id', leadId);
+    const { data } = await q.maybeSingle();
+    return data ?? null;
+  };
+
+  const direct = await exact(ref);
+  if (direct) return direct;
+
+  const stripped = ref.replace(/^(?:ORD(?:ER)?[-#: ]*)+/, '');
+  if (stripped && stripped !== ref) {
+    const second = await exact(stripped);
+    if (second) return second;
+  }
+
+  const tail = (stripped || ref).split('-').pop() ?? '';
+  if (tail.length >= 6) {
+    let q = serviceClient
+      .from('orders').select(select).eq('tenant_id', tenantId)
+      .ilike('order_ref', `%${likeLiteral(tail)}`);
+    if (pinned) q = q.eq('lead_id', leadId);
+    const { data } = await q.limit(2);
+    if (Array.isArray(data) && data.length === 1) return data[0];
+  }
+  return null;
+}
+
 export const recordOrder: Tool = {
   name: 'record_order',
   description:
@@ -539,6 +592,35 @@ export const recordOrder: Tool = {
 
     const { data: tenant } = await serviceClient
       .from('tenants').select('business_name, order_prefix, currency').eq('id', ctx.tenantId).single();
+
+    // The same order twice is not two orders. A customer who sends their
+    // details as a message and a photo gets two turns at once, and each one
+    // recorded the order: an unpaid order for the same customer and the same
+    // items in the last quarter of an hour is returned instead of repeated.
+    if (customer.leadId !== null && customer.leadId !== undefined) {
+      const { data: recent } = await serviceClient
+        .from('orders')
+        .select('id, order_ref, items, total, currency, status, payment_status, created_at')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('lead_id', customer.leadId)
+        .eq('status', 'pending')
+        .eq('payment_status', 'unpaid')
+        .gte('created_at', new Date(Date.now() - 15 * 60_000).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(5);
+      const signature = (list: any[]) =>
+        (Array.isArray(list) ? list : [])
+          .map((i) => `${String(i?.name ?? '').trim().toLowerCase()}x${Number(i?.qty) || 1}`)
+          .sort().join('|');
+      const same = (Array.isArray(recent) ? recent : []).find((o: any) => signature(o.items) === signature(items));
+      if (same) {
+        return {
+          order: { id: same.id, order_ref: same.order_ref, total: same.total, currency: same.currency, status: same.status },
+          already_recorded: true,
+          note: 'This order was already recorded a moment ago. Use this reference exactly as written; do not record it again.',
+        };
+      }
+    }
 
     const { data, error } = await serviceClient
       .from('orders')
@@ -952,8 +1034,10 @@ export const listOrders: Tool = {
       if (scope.leadId !== null) q = q.eq('lead_id', scope.leadId);
       else if (scope.customerId) q = q.eq('customer_id', scope.customerId);
       else return { orders: [] };
-      if (ref) q = q.eq('order_ref', ref.toUpperCase());
-    } else if (ref) q = q.eq('order_ref', ref.toUpperCase());
+      // The reference only narrows within their own orders; both spellings are
+      // tried in the same pinned query rather than in a lookup of its own.
+      if (ref) q = q.in('order_ref', refSpellings(ref));
+    } else if (ref) q = q.in('order_ref', refSpellings(ref));
     else if (leadId !== null) q = q.eq('lead_id', leadId);
     else if (ctx.conversationId) {
       // In a customer's own conversation, "my orders" means theirs — never
@@ -1056,31 +1140,76 @@ export const recordPaymentClaim: Tool = {
     const customer = await resolveCustomer(args, ctx).catch(() => null);
     const ref = str(args, 'order_ref', { max: 40 }).toUpperCase();
 
+    // Which order is this for? A reference is used when it finds one of the
+    // customer's orders. When it finds nothing - a mistyped or embellished
+    // reference - the claim is still recorded rather than refused: the money
+    // may well have moved, and a claim nobody sees is the worst outcome.
     let orderId: string | null = null;
+    let orderRef: string | null = null;
     if (ref) {
-      const { data: order } = await serviceClient
-        .from('orders').select('id, lead_id, customer_id')
-        .eq('tenant_id', ctx.tenantId).eq('order_ref', ref).maybeSingle();
-      if (!order || (isCustomerTurn(ctx) && !(customer && ownedBy(order, customer)))) {
-        throw new ToolInputError(`There is no order ${ref}.`);
-      }
-      orderId = order.id;
+      // On a customer turn the search itself is limited to their own orders.
+      const order = isCustomerTurn(ctx)
+        ? (customer?.leadId != null ? await findOrderByRef(ctx.tenantId, ref, customer.leadId) : null)
+        : await findOrderByRef(ctx.tenantId, ref);
+      const theirs = order && (!isCustomerTurn(ctx) || (customer && ownedBy(order, customer)));
+      if (theirs) { orderId = order.id; orderRef = order.order_ref; }
+      else if (!isCustomerTurn(ctx)) throw new ToolInputError(`There is no order ${ref}.`);
+    }
+    // No usable reference: it is for the order they have just placed. The
+    // newest unpaid one, preferring one whose total matches what they sent.
+    if (!orderId && customer && customer.leadId !== null && customer.leadId !== undefined) {
+      const { data: open } = await serviceClient
+        .from('orders').select('id, order_ref, total')
+        .eq('tenant_id', ctx.tenantId).eq('lead_id', customer.leadId)
+        .eq('payment_status', 'unpaid').neq('status', 'cancelled')
+        .order('created_at', { ascending: false }).limit(5);
+      const list = Array.isArray(open) ? open : [];
+      const match = (amount !== null ? list.find((o: any) => Number(o.total) === amount) : null) ?? list[0];
+      if (match) { orderId = match.id; orderRef = match.order_ref; }
     }
 
-    // The same reference twice is the customer repeating themselves, not a
-    // second payment. Two claims would mean two things for staff to verify.
+    // The same reference twice from the same customer is them repeating
+    // themselves, not a second payment.
     const { data: existing } = await serviceClient
       .from('payments')
-      .select('id, verification_status')
+      .select('id, verification_status, lead_id, customer_id, order_id')
       .eq('tenant_id', ctx.tenantId)
       .eq('transaction_code', code)
       .maybeSingle();
 
     if (existing) {
+      const sameCustomer = customer ? ownedBy(existing, customer) : !isCustomerTurn(ctx);
+      if (sameCustomer) {
+        // Link it to the order now if it was recorded without one.
+        if (!existing.order_id && orderId && existing.verification_status === 'unverified') {
+          await serviceClient.from('payments').update({ order_id: orderId })
+            .eq('tenant_id', ctx.tenantId).eq('id', existing.id);
+        }
+        return {
+          recorded: false,
+          already_known: true,
+          note: 'That reference is already on the list for this customer. Tell them it is being checked.',
+        };
+      }
+
+      // A reference already used for a different customer's payment. It cannot
+      // go on the list twice, and the agent must not decide what it means, so
+      // it is put in front of a person as a ticket instead.
+      await serviceClient.from('support_tickets').insert({
+        tenant_id: ctx.tenantId,
+        lead_id: customer?.leadId ?? null,
+        conversation_id: ctx.conversationId,
+        customer_id: customer?.customerId ?? null,
+        customer_name: customer?.customerName ?? null,
+        subject: `Payment reference ${code} was already used for another customer`,
+        body: `A customer sent transaction code ${code}${amount !== null ? ` for ${amount}` : ''}${orderRef ? ` against order ${orderRef}` : ''}, but that code is already recorded for a different customer's payment. Check the statement before releasing anything.`,
+        priority: 'high',
+        opened_by_agent: ctx.agentRole,
+      });
       return {
         recorded: false,
-        already_known: true,
-        note: 'That reference is already on the list. Tell the customer it is being checked.',
+        reference_already_used: true,
+        note: 'This reference is already recorded against a different payment, so it could NOT be added to the list. A ticket has been opened for a colleague. Do not tell the customer it is noted or being verified: tell them the reference could not be matched to a new payment, ask them to check they sent the right M-Pesa message, and say a colleague will follow up.',
       };
     }
 
@@ -1113,7 +1242,10 @@ export const recordPaymentClaim: Tool = {
     return {
       recorded: true,
       claim: data,
-      note: 'On the list for a person to verify. Do not tell the customer it is confirmed.',
+      for_order: orderRef,
+      note: orderRef
+        ? `On the list for a person to verify, against order ${orderRef}. Do not tell the customer it is confirmed.`
+        : 'On the list for a person to verify. No order could be matched to it. Do not tell the customer it is confirmed.',
     };
   },
 };

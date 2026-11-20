@@ -21,7 +21,8 @@ export const ORDERS_SKILL: Skill = {
     {
       when: 'a customer says they have paid, or sends a transaction code',
       steps: [
-        'Call record_payment_claim in this turn with the code, amount and method they gave.',
+        'Call record_payment_claim in this turn with the code, amount and method they gave. You do not need the order reference: it is matched to their open order for you.',
+        'Read the result before you reply. Only say it is noted when the result says recorded. If the result says the reference was already used for another payment, say it could not be matched and a colleague will follow up.',
         'Tell them it is noted and a colleague will verify it shortly. Never say the payment was received, confirmed or that the order is paid.',
       ],
     },

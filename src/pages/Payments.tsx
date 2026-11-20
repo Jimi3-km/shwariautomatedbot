@@ -45,7 +45,11 @@ export function Payments() {
     if (decision !== 'verified') {
       toast.push('success', 'Payment claim rejected.');
     } else if (result.customer_notified) {
-      toast.push('success', 'Payment verified. The customer has been sent a confirmation.');
+      toast.push('success', result.receipt_emailed
+        ? 'Payment verified. The receipt was sent in the chat and by email.'
+        : 'Payment verified. The confirmation and receipt were sent in the chat.');
+    } else if (result.receipt_emailed) {
+      toast.push('info', `Payment verified. The receipt was emailed, but the chat message was not sent: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
     } else {
       // Verified either way; say plainly that the customer has not been told.
       toast.push('info', `Payment verified, but the customer was not notified: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
