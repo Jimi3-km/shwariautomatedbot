@@ -15,13 +15,13 @@ export { legalRoute } from './legalRoute';
 export type { LegalKind } from './legalRoute';
 import type { LegalKind } from './legalRoute';
 
-interface LegalInfo { operator: string; contact_email: string | null }
+interface LegalInfo { operator: string; contact_email: string | null; contact_phone: string | null }
 
 const UPDATED = '22 November 2026';
 const PRODUCT = 'Shwari';
 
 function useLegalInfo(): LegalInfo {
-  const [info, setInfo] = useState<LegalInfo>({ operator: PRODUCT, contact_email: null });
+  const [info, setInfo] = useState<LegalInfo>({ operator: PRODUCT, contact_email: null, contact_phone: null });
   useEffect(() => {
     let cancelled = false;
     fetch('/api/public-config')
@@ -31,6 +31,7 @@ function useLegalInfo(): LegalInfo {
         setInfo({
           operator: String(j.legal.operator || PRODUCT),
           contact_email: j.legal.contact_email ? String(j.legal.contact_email) : null,
+          contact_phone: j.legal.contact_phone ? String(j.legal.contact_phone) : null,
         });
       })
       .catch(() => { /* the page still reads without it */ });
@@ -70,9 +71,16 @@ export function LegalPage({ kind }: { kind: LegalKind }) {
 }
 
 function Contact({ info }: { info: LegalInfo }) {
-  return info.contact_email
-    ? <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>
-    : <>the <a href="/data-deletion">request form</a> on this site</>;
+  if (!info.contact_email && !info.contact_phone) {
+    return <>the <a href="/data-deletion">request form</a> on this site</>;
+  }
+  return (
+    <>
+      {info.contact_email && <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>}
+      {info.contact_email && info.contact_phone && ' or '}
+      {info.contact_phone && <a href={`tel:${info.contact_phone.replace(/[^+\d]/g, '')}`}>{info.contact_phone}</a>}
+    </>
+  );
 }
 
 function Privacy({ info }: { info: LegalInfo }) {

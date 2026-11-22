@@ -111,6 +111,7 @@ export function createApp() {
       legal: {
         operator: (process.env.LEGAL_OPERATOR_NAME ?? '').trim() || null,
         contact_email: (process.env.LEGAL_CONTACT_EMAIL ?? '').trim() || null,
+        contact_phone: (process.env.LEGAL_CONTACT_PHONE ?? '').trim() || null,
       },
     });
   });
