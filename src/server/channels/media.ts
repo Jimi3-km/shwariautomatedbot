@@ -1,3 +1,4 @@
+import { withAppSecretProof } from '../services/meta/whatsapp.js';
 import { serviceClient } from '../supabase.js';
 import { INSTAGRAM_GRAPH_URL, META_GRAPH_URL } from '../config/meta.js';
 import { loadToken } from '../services/meta/tokens.js';
@@ -74,18 +75,22 @@ export async function sendImageToCustomer(input: {
           .eq('tenant_id', input.tenantId).eq('platform', 'whatsapp').maybeSingle();
         const phoneNumberId = (data as any)?.phone_number_id;
         if (!token || token.isExpired || !phoneNumberId) return { sent: false, reason: 'WhatsApp is not connected.' };
-        const res = await fetch(`${META_GRAPH_URL}/${phoneNumberId}/messages`, {
+        const init: RequestInit = {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${token.accessToken}` },
           body: JSON.stringify({
             messaging_product: 'whatsapp',
+            recipient_type: 'individual',
             to: input.customerId,
             type: 'image',
             image: { link: input.imageUrl, ...(caption ? { caption } : {}) },
           }),
           signal: AbortSignal.timeout(20_000),
-        });
-        return res.ok ? { sent: true } : { sent: false, reason: `WhatsApp refused the photo (HTTP ${res.status}).` };
+        };
+        // Signed with the app secret like every other WhatsApp call: an app
+        // set to require it refuses an unsigned media send while text works.
+        const res = await fetch(`${META_GRAPH_URL}${withAppSecretProof(`/${phoneNumberId}/messages`, init)}`, init);
+        return res.ok ? { sent: true } : { sent: false, reason: await whatsappRefusal(res, 'photo') };
       }
 
       default:
@@ -95,6 +100,21 @@ export async function sendImageToCustomer(input: {
     console.warn('[media] photo send failed:', e instanceof Error ? e.message : e);
     return { sent: false, reason: 'The photo could not be sent.' };
   }
+}
+
+/** Why WhatsApp said no, in its own words, so a failure can be acted on. */
+async function whatsappRefusal(res: Response, what: 'photo' | 'file'): Promise<string> {
+  let detail = '';
+  try {
+    const body = (await res.json()) as { error?: { message?: string; code?: number; error_data?: { details?: string } } };
+    const e = body?.error;
+    detail = [e?.code ? `code ${e.code}` : '', e?.error_data?.details || e?.message || ''].filter(Boolean).join(': ');
+  } catch { /* no readable body */ }
+  // 131047: more than 24 hours since the customer last wrote.
+  if (/131047|24 hours/i.test(detail)) {
+    return `WhatsApp only delivers a ${what} within 24 hours of the customer's last message.`;
+  }
+  return `WhatsApp refused the ${what} (HTTP ${res.status}${detail ? `, ${detail.slice(0, 160)}` : ''}).`;
 }
 
 /**
@@ -141,18 +161,20 @@ export async function sendDocumentToCustomer(input: {
       case 'whatsapp': {
         const token = await loadToken(input.tenantId, 'whatsapp');
         if (!token || token.isExpired || !token.phoneNumberId) return { sent: false, reason: 'WhatsApp is not connected.' };
-        const res = await fetch(`${META_GRAPH_URL}/${token.phoneNumberId}/messages`, {
+        const init: RequestInit = {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${token.accessToken}` },
           body: JSON.stringify({
             messaging_product: 'whatsapp',
+            recipient_type: 'individual',
             to: input.customerId,
             type: 'document',
             document: { link: input.fileUrl, filename, ...(caption ? { caption } : {}) },
           }),
           signal: AbortSignal.timeout(20_000),
-        });
-        return res.ok ? { sent: true } : { sent: false, reason: `WhatsApp refused the file (HTTP ${res.status}).` };
+        };
+        const res = await fetch(`${META_GRAPH_URL}${withAppSecretProof(`/${token.phoneNumberId}/messages`, init)}`, init);
+        return res.ok ? { sent: true } : { sent: false, reason: await whatsappRefusal(res, 'file') };
       }
 
       case 'instagram': {

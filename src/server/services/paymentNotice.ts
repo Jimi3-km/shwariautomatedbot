@@ -318,27 +318,45 @@ async function sendInChat(
   try {
     await provider.sendMessage(channelId, conv.customer_id, text, { tenantId: input.tenantId, userId: '' });
 
-    // Then the receipt itself, as a PDF they can keep and forward. The text
-    // has already arrived, so a file that fails costs nothing.
+    // Then the receipt itself, twice over: as a photo, which shows in the chat
+    // without being opened and is what people screenshot and forward, and as
+    // a PDF to keep. The photo used to be sent only when the PDF was refused,
+    // so on WhatsApp, which accepts the PDF, no photo ever went out. The text
+    // has already arrived, so either failing costs nothing.
+    const caption = order?.order_ref ? `Receipt ${order.order_ref}` : 'Receipt';
+    const outcome: Record<string, string> = {};
     let image = false;
+    if (imageUrl) {
+      const photo = await sendImageToCustomer({
+        tenantId: input.tenantId, channelType: conv.channel_type, channelId,
+        customerId: conv.customer_id, imageUrl, caption,
+      });
+      image = photo.sent;
+      outcome.photo = photo.sent ? 'sent' : (photo.reason ?? 'not sent');
+      if (!photo.sent) console.warn('[payment-notice] receipt photo not sent:', photo.reason);
+    }
     if (pdfUrl) {
       const doc = await sendDocumentToCustomer({
         tenantId: input.tenantId, channelType: conv.channel_type, channelId,
         customerId: conv.customer_id, fileUrl: pdfUrl, filename: pdfName,
-        caption: order?.order_ref ? `Receipt ${order.order_ref}` : 'Receipt',
+        // The photo already carries the caption; a second one is noise.
+        ...(image ? {} : { caption }),
       });
-      image = doc.sent;
+      outcome.file = doc.sent ? 'sent' : (doc.reason ?? 'not sent');
       if (!doc.sent) console.warn('[payment-notice] receipt PDF not sent:', doc.reason);
+      // A channel that takes no photos still counts as having the receipt.
+      if (!image && doc.sent) image = true;
     }
-    // A platform that refuses the file still gets the receipt as a picture.
-    if (!image && imageUrl) {
-      const photo = await sendImageToCustomer({
-        tenantId: input.tenantId, channelType: conv.channel_type, channelId,
-        customerId: conv.customer_id, imageUrl,
-        caption: order?.order_ref ? `Receipt ${order.order_ref}` : 'Receipt',
-      });
-      image = photo.sent;
-      if (!photo.sent) console.warn('[payment-notice] receipt photo not sent:', photo.reason);
+
+    // What actually went out is kept on the message, so "did the photo
+    // arrive?" can be answered from the record rather than from a log that
+    // has already expired.
+    const messageId = (row as any)?.id;
+    if (messageId !== undefined && messageId !== null && Object.keys(outcome).length) {
+      await serviceClient
+        .from('conversation_messages')
+        .update({ extracted: { ...extracted, receipt_delivery: outcome } })
+        .eq('id', messageId).eq('tenant_id', input.tenantId);
     }
     return { notified: true, channel: conv.channel_type, text, image };
   } catch (e) {

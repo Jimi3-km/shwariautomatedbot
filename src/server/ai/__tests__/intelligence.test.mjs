@@ -1235,6 +1235,33 @@ await t('a photo sent with a message gets one reply, not two', async () => {
   assert.equal(await coveredByTextMessage({ ...photo, text: 'here is my payment' }, 'c1', 0), false, 'a message with words is never skipped');
 });
 
+await t('a verified payment sends the receipt as a photo as well as a file', async () => {
+  reset();
+  rows = noticeRows({
+    'GET conversations': [{ id: 'c1', channel_id: 'ch1', channel_type: 'telegram', customer_id: '7270087282', customer_name: 'Jane' }],
+    'GET channels': [{ id: 'ch1', status: 'active', bot_token: 'TEST:token', channel_type: 'telegram' }],
+    // Telegram answers every Bot API call with { ok: true }.
+    'POST https://api.telegram.org/botTEST:token/sendMessage': { ok: true, result: {} },
+    'POST https://api.telegram.org/botTEST:token/sendPhoto': { ok: true, result: {} },
+  });
+  const out = await notifyPaymentVerified({ tenantId: 't1', paymentId: 'pay-1' });
+  assert.equal(out.notified, true);
+  assert.equal(out.receipt_image, true, 'the photo was not sent');
+
+  const photo = db.find((r) => r.path.includes('/sendPhoto'));
+  assert.ok(photo, 'no photo request was made');
+  assert.match(photo.body.photo, /\/api\/receipts\/image\/pay-1\.png\?sig=/);
+  assert.equal(photo.body.caption, 'Receipt KRY-MWOIMZ71');
+
+  // The photo is sent whether or not the file goes through: it used to be
+  // sent only when the file was refused, so WhatsApp never got one.
+  const recorded = db.filter((r) => r.table === 'conversation_messages' && r.method === 'PATCH')
+    .map((r) => r.body?.extracted?.receipt_delivery).find(Boolean);
+  assert.ok(recorded, 'what was delivered was not recorded on the message');
+  assert.equal(recorded.photo, 'sent');
+  assert.ok('file' in recorded, 'the file was not attempted');
+});
+
 // ---------------------------------------------------------------------------
 console.log('\n--- more than one domain ---');
 
