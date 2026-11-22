@@ -193,6 +193,30 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
   if (present(metaConfig.appId) && present(metaConfig.appSecret)) {
     const appToken = `${metaConfig.appId}|${metaConfig.appSecret}`;
 
+    // --- the Instagram app's own ID and secret ------------------------------
+    // Instagram sign-in uses a separate ID and secret from the Meta app's
+    // (Instagram > API setup with Instagram login > Business login settings).
+    // With the wrong secret, Instagram still signs people in and hands back a
+    // token, then refuses every request made with it ("Unsupported request"),
+    // so the mistake looks like a fault in the account rather than a setting.
+    if (present(metaConfig.instagram.clientId) && present(metaConfig.instagram.clientSecret)) {
+      const sameAsMeta = metaConfig.instagram.clientSecret === metaConfig.appSecret;
+      const sameId = metaConfig.instagram.clientId === metaConfig.appId;
+      const ig = await graph(`/${metaConfig.instagram.clientId}?fields=id,name`, `${metaConfig.instagram.clientId}|${metaConfig.instagram.clientSecret}`);
+      const okPair = ig.ok && !sameAsMeta;
+      add({
+        id: 'ig.credentials', area: 'instagram', label: 'Instagram accepts its app ID and secret',
+        ok: sameAsMeta ? false : ig.ok ? true : null,
+        detail: sameAsMeta
+          ? 'INSTAGRAM_CLIENT_SECRET holds the same value as META_APP_SECRET. Instagram sign-in has its own secret; with the Meta app secret here, people sign in and are then refused.'
+          : ig.ok ? `The Instagram app ID and secret belong together${sameId ? ' (note: the Instagram app ID is the same as the Meta app ID, which is unusual)' : ''}.`
+          : `Meta did not accept this ID and secret as a pair: ${metaMessage(ig.body)} This check is not conclusive for every app, but a reset or mistyped Instagram app secret gives exactly this.`,
+        ...(okPair ? {} : {
+          fix: 'In the Meta dashboard open Instagram > API setup with Instagram login > Business login settings. Copy the Instagram app ID into INSTAGRAM_CLIENT_ID and the Instagram app secret (press Show) into INSTAGRAM_CLIENT_SECRET on the server, then redeploy.',
+        }),
+      });
+    }
+
     const app = await graph(`/${metaConfig.appId}?fields=name`, appToken);
     add({
       id: 'app.credentials', area: 'app', label: 'Meta accepts the app ID and secret',

@@ -327,3 +327,26 @@ internalRouter.get(
     res.json({ accepted: sent.success, from: sender.email, error: sent.success ? null : sent.error ?? null });
   })
 );
+
+/**
+ * The Meta setup check, callable by the database scheduler.
+ *
+ * The same check the platform admin runs from the Platform page, for when a
+ * connection is failing and nobody is signed in to run it. It reports whether
+ * each setting is present and accepted by Meta; never a value.
+ */
+internalRouter.get(
+  '/internal/cron/meta-check',
+  requireScheduler,
+  handler(async (_req, res) => {
+    const { runMetaDiagnostics } = await import('../services/meta/diagnostics.js');
+    const result = await runMetaDiagnostics();
+    res.json({
+      summary: result.summary,
+      checks: result.checks
+        .filter((c) => c.ok !== true)
+        .map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })),
+      passed: result.checks.filter((c) => c.ok === true).map((c) => c.id),
+    });
+  })
+);
