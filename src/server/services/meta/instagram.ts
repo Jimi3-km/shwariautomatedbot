@@ -119,12 +119,12 @@ export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
     response_type: 'code',
     scope: SCOPES.join(','),
     state,
-    // Always ask which account. A phone's browser is usually already signed in
-    // to someone's personal Instagram; without this the wrong account is used
-    // without a word, and the connection then fails as "not a business
-    // account" or connects the wrong page.
-    force_reauth: 'true',
   });
+  // `force_reauth=true` (always ask which account) was tried here on
+  // 22 Nov 2026 and taken out again the same day: every connection recorded
+  // after it went live was signed in, granted all permissions, and then
+  // refused by Instagram's API with "Unsupported request" on the very next
+  // call. The address below is the one that is known to work.
   // The consent window lives on www.instagram.com, not the API host.
   return `${INSTAGRAM_AUTHORIZE_URL}/oauth/authorize?${params}`;
 }

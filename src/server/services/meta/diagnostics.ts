@@ -202,18 +202,18 @@ export async function runMetaDiagnostics(): Promise<MetaDiagnostics> {
     if (present(metaConfig.instagram.clientId) && present(metaConfig.instagram.clientSecret)) {
       const sameAsMeta = metaConfig.instagram.clientSecret === metaConfig.appSecret;
       const sameId = metaConfig.instagram.clientId === metaConfig.appId;
-      const ig = await graph(`/${metaConfig.instagram.clientId}?fields=id,name`, `${metaConfig.instagram.clientId}|${metaConfig.instagram.clientSecret}`);
-      const okPair = ig.ok && !sameAsMeta;
+      // Whether the pair is valid cannot be asked of Meta directly for an
+      // Instagram app (it answers the same for a right and a wrong secret), so
+      // only the one mistake that can be seen from here is reported.
       add({
-        id: 'ig.credentials', area: 'instagram', label: 'Instagram accepts its app ID and secret',
-        ok: sameAsMeta ? false : ig.ok ? true : null,
+        id: 'ig.credentials', area: 'instagram', label: 'Instagram has its own secret, not the Meta app secret',
+        ok: sameAsMeta ? false : true,
         detail: sameAsMeta
           ? 'INSTAGRAM_CLIENT_SECRET holds the same value as META_APP_SECRET. Instagram sign-in has its own secret; with the Meta app secret here, people sign in and are then refused.'
-          : ig.ok ? `The Instagram app ID and secret belong together${sameId ? ' (note: the Instagram app ID is the same as the Meta app ID, which is unusual)' : ''}.`
-          : `Meta did not accept this ID and secret as a pair: ${metaMessage(ig.body)} This check is not conclusive for every app, but a reset or mistyped Instagram app secret gives exactly this.`,
-        ...(okPair ? {} : {
-          fix: 'In the Meta dashboard open Instagram > API setup with Instagram login > Business login settings. Copy the Instagram app ID into INSTAGRAM_CLIENT_ID and the Instagram app secret (press Show) into INSTAGRAM_CLIENT_SECRET on the server, then redeploy.',
-        }),
+          : `A separate secret is set for Instagram${sameId ? ' (note: the Instagram app ID is the same as the Meta app ID, which is unusual)' : ''}.`,
+        ...(sameAsMeta ? {
+          fix: 'In the Meta dashboard open Instagram > API setup with Instagram login > Business login settings. Copy the Instagram app secret (press Show) into INSTAGRAM_CLIENT_SECRET on the server, then redeploy.',
+        } : {}),
       });
     }
 
