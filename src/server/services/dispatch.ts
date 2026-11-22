@@ -1,3 +1,4 @@
+import { tenantLiveness } from './platform.js';
 import { serviceClient } from '../supabase.js';
 import { type ResolvedChannel } from './inbound.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
@@ -61,6 +62,15 @@ export async function dispatchInbound(
     }
   }
 
+  // A business waiting for approval, suspended, or with its agents paused by
+  // the platform keeps receiving its messages (they are in the Inbox) but no
+  // agent answers. The owner can still talk to Shwari while waiting, to set
+  // the business up; nobody is answered once it is suspended.
+  const liveness = await tenantLiveness(event.tenantId);
+  if (liveness.status === 'suspended' || liveness.status === 'cancelled') {
+    return { handledBy: 'none', reason: `business_${liveness.status}` };
+  }
+
   // --- 2. Shwari ------------------------------------------------------------
   // Is this sender the owner of THIS business? Someone who administers one
   // business by chat is an ordinary customer when they message another
@@ -92,6 +102,10 @@ export async function dispatchInbound(
       await reply(event, channel, conversationId, message);
       return { handledBy: 'none', reason: 'shwari_failed' };
     }
+  }
+
+  if (!liveness.live) {
+    return { handledBy: 'none', reason: liveness.agentsPaused ? 'agents_paused' : `business_${liveness.status}` };
   }
 
   // --- 3. a department ------------------------------------------------------

@@ -1,3 +1,4 @@
+import { tenantLiveness } from './platform.js';
 import { serviceClient } from '../supabase.js';
 import { complete, llmConfigured } from '../ai/llm.js';
 import { readSignals, type SignalMessage, type Signals } from '../ai/signals.js';
@@ -168,6 +169,8 @@ export async function planNurture(opts: { limit?: number; budgetMs?: number } = 
     if (Date.now() > deadline || summary.queued >= limit) break;
     // Email is answered by its own route and has no follow-up sender.
     if (!conv.customer_id || conv.channel_type === 'email') continue;
+    // No follow-ups in the name of a business that is not live.
+    if (!(await tenantLiveness(conv.tenant_id)).live) continue;
     summary.considered++;
 
     try {

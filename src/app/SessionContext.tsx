@@ -14,12 +14,26 @@ interface SessionValue {
   /** Currency for this tenant; never assumed, always from the tenant record. */
   currency: string | null;
   canWrite: boolean;
+  /** Owner or manager: settings, agents, channels, catalogue. */
   isAdmin: boolean;
+  /** The owner alone: staff and billing. */
+  isOwner: boolean;
+  /** Runs the platform. */
+  isPlatformAdmin: boolean;
+  /** A platform admin working inside a business they do not belong to. */
+  supportMode: boolean;
+  /** The role as the product words it. */
+  roleLabel: string;
   refresh: () => Promise<void>;
   refreshCounts: () => void;
   switchTenant: (tenantId: string) => void;
   signOut: () => Promise<void>;
 }
+
+/** What the product calls each stored role. */
+export const ROLE_LABELS: Record<Role, string> = {
+  owner: 'Owner', admin: 'Manager', member: 'Staff', viewer: 'Viewer',
+};
 
 const Ctx = createContext<SessionValue | null>(null);
 
@@ -34,13 +48,15 @@ export function SessionProvider({
   const [counts, setCounts] = useState<Counts>({ unread: 0, paymentClaims: 0 });
 
   const refreshCounts = useCallback(() => {
+    // A platform admin with no business open has nothing to count.
+    if (!me.tenant) return;
     getOverview()
       .then((o) => setCounts({
         unread: o.stats.unread_conversations ?? 0,
         paymentClaims: o.stats.payment_claims ?? 0,
       }))
       .catch(() => { /* badge counts are non-critical; stay quiet */ });
-  }, []);
+  }, [me.tenant]);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts, me.tenant?.id]);
   // Refresh badges periodically, but only while the tab is visible.
@@ -61,6 +77,10 @@ export function SessionProvider({
     currency: me.tenant?.currency ?? null,
     canWrite: me.role !== 'viewer',
     isAdmin: me.role === 'owner' || me.role === 'admin',
+    isOwner: me.role === 'owner',
+    isPlatformAdmin: Boolean(me.platform_admin),
+    supportMode: Boolean(me.support_mode),
+    roleLabel: me.support_mode ? 'Platform support' : ROLE_LABELS[me.role] ?? me.role,
     refresh: onReload,
     refreshCounts,
     switchTenant,

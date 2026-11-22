@@ -46,13 +46,34 @@ export interface Tenant {
 export interface Membership {
   tenant_id: string;
   role: Role;
-  tenants?: { business_name: string } | null;
+  tenants?: { business_name: string; status?: string } | null;
 }
 
 export interface TenantUser {
   id: string;
   user_id: string;
   role: Role;
+  created_at: string;
+  email?: string | null;
+}
+
+export interface TeamInvitation {
+  id: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface ActivityEvent {
+  id: number;
+  actor_id: string;
+  actor_type: string;
+  actor_label: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -63,8 +84,12 @@ export interface Me {
     Tenant,
     | 'id' | 'business_name' | 'slug' | 'currency' | 'timezone' | 'agent_name'
     | 'order_prefix' | 'status' | 'business_category' | 'onboarding_completed_at'
-  > | null;
+  > & { agents_paused?: boolean; status_reason?: string | null } | null;
   memberships: Membership[];
+  /** Runs the platform. Decided by the server from the database. */
+  platform_admin?: boolean;
+  /** A platform admin working inside a business they do not belong to. */
+  support_mode?: boolean;
 }
 
 /** Channel as the browser sees it: secrets reduced to booleans. */

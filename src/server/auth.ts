@@ -14,6 +14,23 @@ export interface TenantContext {
   accessToken: string;
   /** RLS-enforcing client scoped to the caller. Use this for all tenant data. */
   db: SupabaseClient;
+  /** Runs the platform (a row in platform_admins). Never set from the app. */
+  platformAdmin: boolean;
+  /**
+   * A platform admin working inside a business they are not a member of.
+   * They act with a manager's reach, and everything they change is logged in
+   * that business's audit trail.
+   */
+  supportMode: boolean;
+}
+
+/** Is this user a platform admin? Read from the database, never from a claim. */
+export async function isPlatformAdminUser(userId: string): Promise<boolean> {
+  const { data, error } = await serviceClient
+    .from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle();
+  // A missing table (migration 0027 not applied) means nobody is one.
+  if (error) return false;
+  return Boolean(data);
 }
 
 declare global {
@@ -78,21 +95,34 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       code: 'MEMBERSHIP_LOOKUP_FAILED',
     });
   }
-  if (!memberships || memberships.length === 0) {
-    return res.status(403).json({ error: 'No tenant is associated with this account', code: 'NO_TENANT' });
-  }
+  const platformAdmin = await isPlatformAdminUser(user.id);
 
   // A user may belong to several tenants. Selection is by an explicit header,
   // but only ever among tenants they actually belong to -- the header can
-  // never introduce a tenant that is not in this list.
+  // never introduce a tenant that is not in this list. The one exception is a
+  // platform admin, who may open any business and then acts in support mode.
   const requested = req.headers['x-tenant-id'];
-  let chosen = memberships[0];
+  let chosen: { tenant_id: string; role: string } | undefined = memberships?.[0];
+  let supportMode = false;
   if (typeof requested === 'string' && requested) {
-    const match = memberships.find((m) => m.tenant_id === requested);
-    if (!match) {
+    const match = (memberships ?? []).find((m) => m.tenant_id === requested);
+    if (match) {
+      chosen = match;
+    } else if (platformAdmin && /^[0-9a-f-]{36}$/i.test(requested)) {
+      const { data: target } = await serviceClient
+        .from('tenants').select('id').eq('id', requested).maybeSingle();
+      if (!target) return res.status(404).json({ error: 'That business does not exist' });
+      chosen = { tenant_id: target.id, role: 'admin' };
+      supportMode = true;
+    } else {
       return res.status(403).json({ error: 'Not a member of the requested tenant' });
     }
-    chosen = match;
+  }
+  if (!chosen) {
+    return res.status(403).json({
+      error: 'No tenant is associated with this account',
+      code: platformAdmin ? 'PLATFORM_NO_TENANT' : 'NO_TENANT',
+    });
   }
 
   req.ctx = {
@@ -102,7 +132,33 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     tenantId: chosen.tenant_id,
     role: chosen.role as Role,
     accessToken: token,
-    db: userClient(token),
+    db: userClient(token, supportMode ? chosen.tenant_id : undefined),
+    platformAdmin,
+    supportMode,
+  };
+  next();
+}
+
+/**
+ * Platform routes: the caller must be a platform admin. No business is
+ * involved, so there is no tenant context and no row-level client.
+ */
+export async function requirePlatformAdmin(req: Request, res: Response, next: NextFunction) {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Unauthorized: missing bearer token' });
+  const { data, error } = await serviceClient.auth.getUser(token);
+  if (error || !data?.user) {
+    return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
+  }
+  if (!(await isPlatformAdminUser(data.user.id))) {
+    // Deliberately the same answer as an unknown route.
+    return res.status(404).json({ error: 'Not found' });
+  }
+  req.authUser = {
+    id: data.user.id,
+    email: data.user.email ?? null,
+    emailVerified: Boolean(data.user.email_confirmed_at),
+    accessToken: token,
   };
   next();
 }
@@ -148,17 +204,9 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
  * Super-admins can view cross-tenant agent turns and audit metrics.
  */
 export function isSuperAdmin(req: Request): boolean {
-  const email = req.ctx?.email || req.authUser?.email;
-  if (!email) return false;
-  // An unconfirmed address proves nothing: anyone can sign up with someone
-  // else's email. Only a confirmed one may match the super-admin list.
-  const verified = req.ctx ? req.ctx.emailVerified : req.authUser?.emailVerified;
-  if (!verified) return false;
-  const superAdminList = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  return superAdminList.includes(email.toLowerCase());
+  // One definition of "runs the platform": the platform_admins table. The old
+  // list of email addresses in an environment variable is no longer read.
+  return Boolean(req.ctx?.platformAdmin);
 }
 
 /** Rejects any request that tries to steer tenancy from the client. */
@@ -182,7 +230,11 @@ export function requireRole(min: Role) {
     const ctx = req.ctx;
     if (!ctx) return res.status(401).json({ error: 'Unauthorized' });
     if (ROLE_RANK[ctx.role] < ROLE_RANK[min]) {
-      return res.status(403).json({ error: `Requires ${min} role or higher; you are ${ctx.role}` });
+      const who = min === 'owner' ? 'the owner' : min === 'admin' ? 'a manager or the owner' : 'staff';
+      return res.status(403).json({
+        error: `Only ${who} can do this. Your role is ${ROLE_LABEL[ctx.role]}.`,
+        code: 'ROLE_TOO_LOW',
+      });
     }
     next();
   };
@@ -190,7 +242,22 @@ export function requireRole(min: Role) {
 
 /** Writes require at least `member`; viewers are read-only. */
 export const requireWrite = requireRole('member');
+/** Manager and above: settings, agents, channels, catalogue, payment details. */
 export const requireAdmin = requireRole('admin');
+/** The owner alone: staff, billing, deleting the business. */
+export const requireOwner = requireRole('owner');
+
+/** For a route that already ran requireAuth: platform admins only. */
+export function platformOnly(req: Request, res: Response, next: NextFunction) {
+  // Deliberately the same answer as an unknown route.
+  if (!req.ctx?.platformAdmin) return res.status(404).json({ error: 'Not found' });
+  next();
+}
+
+/** What the product calls each stored role. */
+export const ROLE_LABEL: Record<Role, string> = {
+  owner: 'Owner', admin: 'Manager', member: 'Staff', viewer: 'Viewer',
+};
 
 /** Wraps an async handler so a rejected promise becomes a 500, not a hang. */
 export function handler(

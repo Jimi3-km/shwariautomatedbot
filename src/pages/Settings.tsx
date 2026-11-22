@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Save, LogOut, Plus, X } from 'lucide-react';
-import { getBusiness, updateBusiness, getTeam, updateTeamMember, getSupabase } from '../lib/api';
+import { getBusiness, updateBusiness, getSupabase } from '../lib/api';
+import { TeamPanel } from '../components/TeamPanel';
 import type { Tenant } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -63,7 +64,7 @@ export function Settings() {
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ maxWidth: 720, margin: '0 auto' }}>
           {tab === 'team' ? (
-            <TeamSection isAdmin={isAdmin} />
+            <TeamPanel />
           ) : tab === 'account' ? (
             <AccountSection />
           ) : (
@@ -277,70 +278,8 @@ function PairEditor({
   );
 }
 
-function TeamSection({ isAdmin }: { isAdmin: boolean }) {
-  const { user, role: myRole } = useSession();
-  const isOwner = myRole === 'owner';
-  const toast = useToast();
-  const state = useAsync(() => getTeam(), []);
-
-  const change = useMutation(async (id: string, role: string) => {
-    await updateTeamMember(id, role);
-    toast.push('success', 'Role updated.');
-    state.reload();
-  });
-
-  if (state.loading && !state.data) return <LoadingState rows={3} />;
-  if (state.error) return <ErrorState message={state.error} onRetry={state.reload} />;
-
-  const members = state.data?.members ?? [];
-
-  return (
-    <Card>
-      <InlineError message={change.error} />
-      <div className="section-label" style={{ marginBottom: 11 }}>People with access</div>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {members.map((m) => (
-          <div key={m.id} style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
-            background: 'var(--surface-2)', borderRadius: 'var(--radius)',
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13 }}>
-                {m.user_id === user.id ? 'You' : 'Team member'}
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                Added {formatDateTime(m.created_at)}
-              </div>
-            </div>
-            {isAdmin && m.user_id !== user.id && (isOwner || m.role !== 'owner') ? (
-              <Select
-                aria-label="Role" value={m.role} disabled={change.busy}
-                onChange={(e) => change.run(m.id, e.target.value)}
-                options={[
-                  // Only an owner can hand out ownership.
-                  ...(isOwner ? [{ value: 'owner', label: 'Owner' }] : []),
-                  { value: 'admin', label: 'Admin' },
-                  { value: 'member', label: 'Member' },
-                  { value: 'viewer', label: 'Viewer' },
-                ]}
-                style={{ height: 30, width: 130, fontSize: 12.5 }}
-              />
-            ) : (
-              <Pill tone="neutral">{m.role}</Pill>
-            )}
-          </div>
-        ))}
-      </div>
-      <p className="field-hint" style={{ marginTop: 12 }}>
-        Owners and admins manage settings and channels. Members handle conversations
-        and can verify payments. Viewers have read-only access.
-      </p>
-    </Card>
-  );
-}
-
 function AccountSection() {
-  const { user, role, signOut } = useSession();
+  const { user, roleLabel, signOut } = useSession();
   const toast = useToast();
 
   const resetPassword = useMutation(async () => {
@@ -357,7 +296,7 @@ function AccountSection() {
       <div className="section-label" style={{ marginBottom: 11 }}>Your account</div>
       <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
         <Row label="Email" value={user.email ?? '—'} />
-        <Row label="Role" value={role} />
+        <Row label="Role" value={roleLabel} />
       </div>
 
       <InlineError message={resetPassword.error} />

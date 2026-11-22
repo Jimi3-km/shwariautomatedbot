@@ -4,8 +4,9 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone,
+  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone, Building2,
 } from 'lucide-react';
+import { setActiveTenant } from '../lib/api';
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -66,6 +67,7 @@ export function AppShell() {
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <TopBar onMenu={() => setDrawerOpen(true)} showMenu={isMobile} />
+        <StatusBanners />
         {/* Pages with their own scrolling region fill this exactly; a page
             without one scrolls here instead of being cut off at the fold. */}
         <main className="app-main" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -110,8 +112,48 @@ function BottomNav({ onMore }: { onMore: () => void }) {
   );
 }
 
+/**
+ * Things everyone in the business should know before anything else: that the
+ * platform is looking at it, or that its agents are not answering and why.
+ */
+function StatusBanners() {
+  const { tenant, supportMode, memberships } = useSession();
+  if (!tenant) return null;
+
+  const leave = () => {
+    // Back to their own business if they have one, otherwise the console.
+    setActiveTenant(memberships[0]?.tenant_id ?? null);
+    window.location.assign('/platform');
+  };
+
+  const status = tenant.status;
+  const notice =
+    status === 'pending'
+      ? "This business is waiting for approval. You can finish setting it up; your agents will start answering customers once it's approved."
+      : status === 'suspended'
+        ? `This business is suspended, so its agents are not answering.${tenant.status_reason ? ` Reason: ${tenant.status_reason}.` : ''} Contact support to have it reactivated.`
+        : tenant.agents_paused
+          ? 'Your agents have been paused by support and are not answering customers. Messages still arrive in your inbox.'
+          : null;
+
+  if (!supportMode && !notice) return null;
+  return (
+    <div role="status">
+      {supportMode && (
+        <div className="shell-banner shell-banner-support">
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <strong>Support mode.</strong> You are inside {tenant.business_name}. Everything you change is recorded in its activity log.
+          </span>
+          <Button size="sm" variant="outline" onClick={leave}>Leave</Button>
+        </div>
+      )}
+      {notice && <div className="shell-banner shell-banner-notice">{notice}</div>}
+    </div>
+  );
+}
+
 function SidebarContent() {
-  const { tenant, counts, isAdmin } = useSession();
+  const { tenant, counts, isAdmin, isPlatformAdmin } = useSession();
 
   return (
     <>
@@ -142,6 +184,16 @@ function SidebarContent() {
             </NavLink>
           );
         })}
+        {isPlatformAdmin && (
+          <NavLink
+            to="/platform"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 4 }}
+          >
+            <Building2 size={16} style={{ flexShrink: 0, color: 'var(--accent)' }} />
+            <span style={{ flex: 1, textAlign: 'left' }}>Platform</span>
+          </NavLink>
+        )}
         {isAdmin && (
           <NavLink
             to="/admin/agent-qa"
@@ -270,7 +322,7 @@ function TenantSwitcher() {
 }
 
 function UserMenu() {
-  const { user, role, signOut } = useSession();
+  const { user, roleLabel, signOut } = useSession();
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px' }}>
@@ -279,7 +331,7 @@ function UserMenu() {
           <div style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {user.email}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'capitalize' }}>{role}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{roleLabel}</div>
         </div>
       </div>
       <button

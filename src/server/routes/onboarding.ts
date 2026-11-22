@@ -236,7 +236,7 @@ function buildPersona(input: {
 onboardingRouter.post(
   '/onboarding/agent',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
 

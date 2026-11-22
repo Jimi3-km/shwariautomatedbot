@@ -41,7 +41,7 @@ const MODE_TONE: Record<BookingMode, 'success' | 'info' | 'neutral'> = {
 };
 
 export function Services() {
-  const { canWrite, currency } = useSession();
+  const { isAdmin: canWrite, currency } = useSession();
   const toast = useToast();
   const [showInactive, setShowInactive] = useState(false);
   const [editing, setEditing] = useState<Service | null>(null);

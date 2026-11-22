@@ -1283,10 +1283,40 @@ const { safeMetaUrl, hopPage } = await import('../../routes/go.js');
 
 await t('being the owner of one business does not make you the owner of another', async () => {
   reset();
-  rows = { 'GET shwari_admins': (path) => (path.includes('tenant_id=eq.tenant-a') ? [{ tenant_id: 'tenant-a', user_id: 'u1' }] : []) };
+  rows = { 'GET shwari_admins': (path) => (path.includes('tenant_id=eq.tenant-a') ? [{ tenant_id: 'tenant-a', user_id: 'u1' }] : []) , 'GET tenant_users': () => [{ role: 'owner' }] };
   assert.deepEqual(await findAdmin('telegram', '7270087282', 'tenant-a'), { tenantId: 'tenant-a', userId: 'u1' });
   assert.equal(await findAdmin('telegram', '7270087282', 'tenant-b'), null, 'on another business they are a customer');
   assert.ok(db.every((r) => r.path.includes('tenant_id=eq.')), 'the lookup must name the business');
+});
+
+await t('Shwari stops taking instructions from someone who is no longer owner or manager', async () => {
+  const linked = { 'GET shwari_admins': () => [{ tenant_id: 'tenant-a', user_id: 'u1' }] };
+  reset();
+  rows = { ...linked, 'GET tenant_users': () => [{ role: 'admin' }] };
+  assert.ok(await findAdmin('telegram', '1', 'tenant-a'), 'a manager is obeyed');
+  reset();
+  rows = { ...linked, 'GET tenant_users': () => [{ role: 'member' }] };
+  assert.equal(await findAdmin('telegram', '1', 'tenant-a'), null, 'demoted to staff: a customer again');
+  reset();
+  rows = { ...linked, 'GET tenant_users': () => [] };
+  assert.equal(await findAdmin('telegram', '1', 'tenant-a'), null, 'removed from the business: a customer again');
+});
+
+const { tenantLiveness, forgetTenantLiveness } = await import('../../services/platform.js');
+
+await t('agents answer only for a business that is live', async () => {
+  const check = async (row) => {
+    reset();
+    forgetTenantLiveness('tenant-x');
+    rows = { 'GET tenants': () => (row ? [row] : []) };
+    return (await tenantLiveness('tenant-x')).live;
+  };
+  assert.equal(await check({ status: 'active', agents_paused: false }), true);
+  assert.equal(await check({ status: 'trial', agents_paused: false }), true);
+  assert.equal(await check({ status: 'pending', agents_paused: false }), false, 'waiting for approval');
+  assert.equal(await check({ status: 'suspended', agents_paused: false }), false, 'suspended');
+  assert.equal(await check({ status: 'active', agents_paused: true }), false, 'paused by the platform');
+  assert.equal(await check(null), true, 'an unreadable status must not silence a business');
 });
 
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {

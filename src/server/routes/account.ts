@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { serviceClient } from '../supabase.js';
-import { requireAuth, requireAdmin, requireUser, handler } from '../auth.js';
+import { requireAuth, requireOwner, requireUser, requirePlatformAdmin, handler, ROLE_LABEL, type Role } from '../auth.js';
+import { logAuditEvent } from '../security/audit.js';
 import { createTenantForUser } from '../services/tenantSetup.js';
 
 export const accountRouter = Router();
@@ -35,7 +36,12 @@ accountRouter.post(
   })
 );
 
-/** Who am I, and which tenants can I act for. */
+/**
+ * Who am I, and which businesses can I act for.
+ *
+ * A platform admin who belongs to no business still has a session: they get
+ * the platform console and no tenant.
+ */
 accountRouter.get(
   '/me',
   requireAuth,
@@ -43,7 +49,7 @@ accountRouter.get(
     const ctx = req.ctx!;
     const { data: memberships } = await serviceClient
       .from('tenant_users')
-      .select('tenant_id, role, tenants(business_name, slug)')
+      .select('tenant_id, role, tenants(business_name, slug, status)')
       .eq('user_id', ctx.userId)
       .order('created_at', { ascending: true })
       .order('tenant_id', { ascending: true });
@@ -52,7 +58,7 @@ accountRouter.get(
       .from('tenants')
       .select(
         'id, business_name, slug, currency, timezone, agent_name, order_prefix, status, ' +
-          'business_category, onboarding_completed_at'
+          'business_category, onboarding_completed_at, agents_paused, status_reason'
       )
       .eq('id', ctx.tenantId)
       .single();
@@ -62,21 +68,28 @@ accountRouter.get(
       role: ctx.role,
       tenant,
       memberships: memberships ?? [],
+      platform_admin: ctx.platformAdmin,
+      support_mode: ctx.supportMode,
     });
   })
 );
 
-/** Team management. */
+/**
+ * The session of a platform admin who is not in any business. requireAuth
+ * answers PLATFORM_NO_TENANT for them; the app then asks here instead.
+ */
 accountRouter.get(
-  '/team',
-  requireAuth,
+  '/platform/me',
+  requirePlatformAdmin,
   handler(async (req, res) => {
-    const { data, error } = await req.ctx!.db
-      .from('tenant_users')
-      .select('id, user_id, role, created_at')
-      .eq('tenant_id', req.ctx!.tenantId);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ members: data ?? [] });
+    res.json({
+      user: { id: req.authUser!.id, email: req.authUser!.email },
+      role: 'admin',
+      tenant: null,
+      memberships: [],
+      platform_admin: true,
+      support_mode: false,
+    });
   })
 );
 
@@ -92,7 +105,7 @@ accountRouter.get(
 accountRouter.patch(
   '/team/:id',
   requireAuth,
-  requireAdmin,
+  requireOwner,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const role = req.body?.role;
@@ -139,6 +152,14 @@ accountRouter.patch(
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Member not found' });
+    void logAuditEvent({
+      tenantId: ctx.tenantId, actorId: ctx.userId, actorType: 'user', actorLabel: ctx.email,
+      action: 'team.role_changed', resourceType: 'team', resourceId: data.id,
+      details: {
+        summary: `Changed a role from ${ROLE_LABEL[target.role as Role] ?? target.role} to ${ROLE_LABEL[role as Role]}`,
+        from: target.role, to: role,
+      },
+    });
     res.json(data);
   })
 );

@@ -1,3 +1,4 @@
+import { tenantLiveness } from './platform.js';
 import { serviceClient } from '../supabase.js';
 import { notify } from './notify.js';
 import { loadToken } from './meta/tokens.js';
@@ -1363,6 +1364,9 @@ export async function publishDuePosts(
     // Held, not failed: the post keeps its approval and goes out once posting
     // is resumed or the Marketing agent is switched back on.
     if (postingStopped(settings.get(post.tenant_id)!)) { summary.held++; continue; }
+    // A business that is waiting for approval, suspended or paused by the
+    // platform publishes nothing. Held, so it goes out once it is live again.
+    if (!(await tenantLiveness(post.tenant_id)).live) { summary.held++; continue; }
 
     if (now.getTime() - Date.parse(post.scheduled_for) > MISSED_AFTER_MS) {
       const done = await failPost(post, 'approved',

@@ -1,6 +1,6 @@
 import { request, qs } from './client';
 import type {
-  Me, TenantUser, Tenant, Overview, Analytics, Onboarding,
+  Me, TenantUser, TeamInvitation, ActivityEvent, Tenant, Overview, Analytics, Onboarding,
   Conversation, ConversationDetail, ConversationMessage,
   Lead, LeadDetail, LeadStage, Product, Order, OrderStatus,
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
@@ -24,7 +24,80 @@ export const getMe = () => request<Me>('/me');
 export const bootstrapTenant = (body: { business_name: string; agent_name?: string; currency?: string; timezone?: string }) =>
   request<{ tenant_id: string; role: string; created: boolean }>('/bootstrap', { method: 'POST', body });
 
-export const getTeam = () => request<{ members: TenantUser[] }>('/team');
+export const getTeam = () => request<{ members: TenantUser[]; invitations: TeamInvitation[] }>('/team');
+
+/** The session of a platform admin who belongs to no business. */
+export const getPlatformMe = () => request<Me>('/platform/me');
+
+export const inviteTeamMember = (email: string, role: string) =>
+  request<{ invitation: TeamInvitation; link: string; emailed: boolean }>(
+    '/team/invitations', { method: 'POST', body: { email, role } }
+  );
+
+export const withdrawInvitation = (id: string) =>
+  request<{ ok: boolean }>(`/team/invitations/${id}`, { method: 'DELETE' });
+
+export const removeTeamMember = (id: string) =>
+  request<{ ok: boolean }>(`/team/${id}`, { method: 'DELETE' });
+
+export const getActivity = () => request<{ events: ActivityEvent[] }>('/audit');
+
+/** What an invitation is for. Works before signing in. */
+export const lookUpInvitation = (token: string) =>
+  request<{ business_name: string; role: string; role_label: string; email: string }>(`/invitations/${token}`);
+
+export const acceptInvitation = (token: string) =>
+  request<{ tenant_id: string; role: string }>(`/invitations/${token}/accept`, { method: 'POST' });
+
+// ---------------------------------------------------------------------------
+// Platform console (platform admins only)
+// ---------------------------------------------------------------------------
+export interface PlatformBusiness {
+  id: string;
+  business_name: string;
+  slug: string;
+  status: string;
+  agents_paused: boolean;
+  status_reason: string | null;
+  business_category: string | null;
+  created_at: string;
+  approved_at: string | null;
+  onboarding_completed_at: string | null;
+  owners: string[];
+  people: number;
+  channels: Array<{ type: string; name: string | null; status: string }>;
+  conversations_7d: number;
+  last_message_at: string | null;
+  payments_waiting: number;
+  open_alerts: number;
+}
+
+export interface PlatformAlert {
+  id: number;
+  kind: string;
+  tenant_id: string | null;
+  summary: string;
+  detail: string | null;
+  seen_count: number;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export const getPlatformOverview = () =>
+  request<{
+    businesses: PlatformBusiness[];
+    alerts: PlatformAlert[];
+    totals: { businesses: number; pending: number; live: number; suspended: number };
+  }>('/platform/overview');
+
+export const setBusinessStatus = (id: string, status: 'active' | 'suspended', reason?: string) =>
+  request<{ id: string; status: string }>(`/platform/tenants/${id}/status`, { method: 'POST', body: { status, reason } });
+
+export const setBusinessAgentsPaused = (id: string, paused: boolean) =>
+  request<{ id: string; agents_paused: boolean }>(`/platform/tenants/${id}/agents`, { method: 'POST', body: { paused } });
+
+export const resolvePlatformAlert = (id: number) =>
+  request<{ ok: boolean }>(`/platform/alerts/${id}/resolve`, { method: 'POST' });
 
 export const updateTeamMember = (id: string, role: string) =>
   request<TenantUser>(`/team/${id}`, { method: 'PATCH', body: { role } });

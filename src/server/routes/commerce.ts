@@ -92,11 +92,15 @@ commerceRouter.post(
     void logAuditEvent({
       tenantId: ctx.tenantId,
       actorId: ctx.userId,
-      actorType: 'user',
+      actorType: ctx.supportMode ? 'platform_admin' : 'user',
+      actorLabel: ctx.email,
       action: `payment.${decision}`,
       resourceType: 'payments',
       resourceId: req.params.id,
-      details: { decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency },
+      details: {
+        summary: `${decision === 'verified' ? 'Verified' : 'Rejected'} a payment of ${data.currency ?? ''} ${data.amount ?? ''}`.trim(),
+        decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency,
+      },
     });
 
     // Keep the lead stage in step with the verification decision.

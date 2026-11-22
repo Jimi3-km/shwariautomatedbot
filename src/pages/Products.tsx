@@ -45,7 +45,7 @@ const emptyForm: FormState = {
  * free-form attributes rather than a fixed set of phone-specific columns.
  */
 export function Products() {
-  const { canWrite, currency } = useSession();
+  const { isAdmin: canWrite, currency } = useSession();
   const toast = useToast();
   const state = useAsync(() => getProducts(), []);
   const [form, setForm] = useState<FormState | null>(null);

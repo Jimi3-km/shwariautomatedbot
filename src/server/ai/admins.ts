@@ -86,7 +86,18 @@ export async function findAdmin(
   const { data } = await q.limit(1);
 
   const row = Array.isArray(data) ? data[0] : null;
-  return row ? { tenantId: row.tenant_id, userId: row.user_id } : null;
+  if (!row) return null;
+
+  // Shwari takes instructions from the owner and managers only. A link made
+  // while someone held that role stops working the moment they lose it or
+  // leave the business; they are then answered like any other customer.
+  const { data: member, error } = await serviceClient
+    .from('tenant_users').select('role')
+    .eq('tenant_id', row.tenant_id).eq('user_id', row.user_id).maybeSingle();
+  if (error) return { tenantId: row.tenant_id, userId: row.user_id };
+  if (!member || !['owner', 'admin'].includes(String(member.role))) return null;
+
+  return { tenantId: row.tenant_id, userId: row.user_id };
 }
 
 /**

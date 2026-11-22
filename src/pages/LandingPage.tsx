@@ -59,10 +59,15 @@ function useScrollUnlock() {
 
 interface LandingPageProps { onSignedIn: () => void; }
 
+/** Arrived on a staff invitation: skip the marketing page. */
+function hasPendingInvite(): boolean {
+  try { return Boolean(localStorage.getItem('shwari.pending_invite')); } catch { return false; }
+}
+
 export function LandingPage({ onSignedIn }: LandingPageProps) {
   // The Instagram OAuth callback lands signed-out users here. Go straight to
   // the auth screen in that case: it finishes the sign-in or shows the error.
-  const [showAuth, setShowAuth] = React.useState(() => hasAuthCallback());
+  const [showAuth, setShowAuth] = React.useState(() => hasAuthCallback() || hasPendingInvite());
   const [menuOpen, setMenuOpen] = React.useState(false);
   useScrollUnlock();
 

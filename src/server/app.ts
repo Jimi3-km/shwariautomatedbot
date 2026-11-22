@@ -23,6 +23,9 @@ import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
 import { adminRouter } from './routes/admin.js';
 import { marketingRouter } from './routes/marketing.js';
+import { teamRouter } from './routes/team.js';
+import { platformRouter } from './routes/platform.js';
+import { recordActivity } from './security/activity.js';
 
 export function createApp() {
   const app = express();
@@ -127,6 +130,12 @@ export function createApp() {
   // 400 rather than having the field quietly ignored.
   app.use('/api', rejectClientTenantId);
 
+  // Every change a signed-in person makes is written to the activity log of
+  // the business it was made in.
+  app.use('/api', recordActivity);
+
+  app.use('/api', platformRouter);
+  app.use('/api', teamRouter);
   app.use('/api', accountRouter);
   app.use('/api', catalogRouter);
   app.use('/api', inboxRouter);

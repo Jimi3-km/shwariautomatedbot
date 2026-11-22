@@ -1546,3 +1546,12 @@ select.field.board-move {
   .disclosure-panel, .disclosure-inner, .disclosure-chev, .agent-acc, .agent-acc-chev > svg,
   .switch-track, .switch-track::after { transition: none; }
 }
+
+/* Shell banners: support mode and a business that is not live. */
+.shell-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 16px; font-size: 12.5px; line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+.shell-banner-support { background: var(--info-bg); color: var(--text); }
+.shell-banner-notice { background: var(--warning-bg, var(--surface-2)); color: var(--text); }

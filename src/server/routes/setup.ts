@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireAdmin, handler } from '../auth.js';
+import { requireAuth, platformOnly, handler } from '../auth.js';
 import { allProviders } from '../channels/providers/index.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
@@ -11,14 +11,14 @@ export const setupRouter = Router();
 /**
  * Test the Meta settings against Meta itself.
  *
- * Admin-only, like the readiness check below, and for the same reason: it is
+ * Platform admins only, like the readiness check below, and for the same reason: it is
  * for the person running the deployment. It reports what is set and whether it
  * matches, never a secret's value.
  */
 setupRouter.get(
   '/setup/meta-check',
   requireAuth,
-  requireAdmin,
+  platformOnly,
   handler(async (_req, res) => {
     res.json(await runMetaDiagnostics());
   })
@@ -32,7 +32,7 @@ setupRouter.get(
 setupRouter.post(
   '/setup/meta-webhook',
   requireAuth,
-  requireAdmin,
+  platformOnly,
   handler(async (req, res) => {
     const object = String(req.body?.object ?? '') as WebhookObject;
     if (!WEBHOOK_OBJECTS.includes(object)) {
@@ -57,7 +57,7 @@ setupRouter.post(
 setupRouter.get(
   '/setup/status',
   requireAuth,
-  requireAdmin,
+  platformOnly,
   handler(async (_req, res) => {
     const origin = widgetOrigin();
 

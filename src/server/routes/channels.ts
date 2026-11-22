@@ -1,3 +1,4 @@
+import { raisePlatformAlert, OUR_SIDE_MESSAGE } from '../services/platform.js';
 import { safeReturnOrigin, requestOrigin } from '../config/origins.js';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -16,13 +17,34 @@ export const channelsRouter = Router();
 
 /** Turns a provider failure into the wording a business owner should read. */
 function sendProviderError(res: Response, e: unknown, fallback: string) {
+  const tenantId = res.req?.ctx?.tenantId ?? null;
   if (e instanceof ProviderError) {
     console.warn(`[channels] ${e.code}: ${e.message}`);
+    if (OUR_SIDE_CODES.has(e.code)) {
+      void raisePlatformAlert({
+        kind: 'channel_setup', tenantId, dedupeKey: `channel_setup:${e.code}:${tenantId ?? 'platform'}`,
+        summary: `A business could not connect a channel because of the platform's own setup (${e.code}).`,
+        detail: e.message,
+      });
+      return res.status(e.status).json({ error: OUR_SIDE_MESSAGE, code: 'PLATFORM_FAULT' });
+    }
     return res.status(e.status).json({ error: e.userMessage, code: e.code });
   }
   console.error('[channels] unexpected provider failure:', e);
+  void raisePlatformAlert({
+    kind: 'channel_fault', tenantId,
+    summary: 'A channel request failed unexpectedly.',
+    detail: e instanceof Error ? e.message : String(e),
+  });
   return res.status(500).json({ error: fallback });
 }
+
+/**
+ * Failures a business can do nothing about: the platform's own configuration
+ * with Meta is missing or wrong. They are told it is on our side, and the
+ * platform admin gets the detail.
+ */
+const OUR_SIDE_CODES = new Set(['PROVIDER_NOT_CONFIGURED', 'WHATSAPP_NO_PERMISSION']);
 
 /**
  * List connected channels.
@@ -299,9 +321,23 @@ channelsRouter.get(
     } catch (e) {
       if (e instanceof ProviderError) {
         console.warn(`[channels] ${providerId} callback failed (${e.code}): ${e.message}`);
+        if (OUR_SIDE_CODES.has(e.code)) {
+          void raisePlatformAlert({
+            kind: 'channel_setup', tenantId: state.tenantId,
+            dedupeKey: `channel_setup:${e.code}:${state.tenantId}`,
+            summary: `A business could not connect ${provider.label} because of the platform's own setup (${e.code}).`,
+            detail: e.message,
+          });
+          return back('platform_fault');
+        }
         return back(e.code === 'PROVIDER_ERROR' ? 'failed' : e.code.toLowerCase());
       }
       console.error(`[channels] ${providerId} callback failed:`, e);
+      void raisePlatformAlert({
+        kind: 'channel_fault', tenantId: state.tenantId,
+        summary: `Connecting ${provider.label} failed unexpectedly.`,
+        detail: e instanceof Error ? e.message : String(e),
+      });
       return back('failed');
     }
   })

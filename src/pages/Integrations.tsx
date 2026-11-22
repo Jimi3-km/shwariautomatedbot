@@ -1,4 +1,3 @@
-import { MetaSetupCheck } from '../components/MetaSetupCheck';
 import React, { useEffect, useState } from 'react';
 import {
   Send, MessageCircle, Instagram, Facebook, Globe, CheckCircle2, ExternalLink, Plug,
@@ -10,7 +9,6 @@ import {
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
 import { FacebookPagePicker } from '../components/FacebookPagePicker';
-import { SetupReadinessPanel } from '../components/SetupReadinessPanel';
 import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -51,8 +49,8 @@ export function Integrations() {
     else if (status === 'expired') toast.push('error', 'That took too long, so we stopped for safety. Please try again.');
     else if (status === 'no_pages') toast.push('error', 'No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
     else if (status === 'page_in_use') toast.push('error', 'That Facebook Page is already connected to another business.');
-    else if (status === 'database_update_needed') toast.push('error', 'The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
-    else if (status === 'whatsapp_no_permission') toast.push('error', 'Facebook signed you in, but the sign-in did not include WhatsApp. The Meta configuration used for WhatsApp has to be a "WhatsApp Embedded Signup" one. Nothing was connected.');
+    else if (status === 'database_update_needed') toast.push('error', "This is a problem on our side, not yours. We've been notified and will fix it. Nothing was connected.");
+    else if (status === 'platform_fault' || status === 'whatsapp_no_permission' || status === 'provider_not_configured') toast.push('error', "This is a problem on our side, not yours. We've been notified and will fix it. Nothing was connected.");
     else if (status === 'whatsapp_no_account') toast.push('error', 'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.');
     else if (status === 'whatsapp_no_number') toast.push('error', 'No WhatsApp number was set up. Finish adding a phone number in the WhatsApp signup, then try again.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
@@ -127,9 +125,14 @@ export function Integrations() {
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
 
-          {/* Renders nothing once the server is fully configured. */}
-          {isAdmin && <SetupReadinessPanel />}
-          {isAdmin && <MetaSetupCheck />}
+          {/* How the platform is wired to Meta is the platform admin's
+              business and lives on the Platform page. Here a business only
+              connects, checks and disconnects its own channels. */}
+          {!isAdmin && (
+            <p className="field-hint" style={{ margin: 0 }}>
+              Only the owner or a manager can connect or disconnect a channel.
+            </p>
+          )}
 
           <div className="section-label">Messaging</div>
 

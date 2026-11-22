@@ -59,7 +59,7 @@ function productPayload(body: any, tenantId: string, currencyFallback: string) {
 catalogRouter.post(
   '/products',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const { data: tenant } = await ctx.db
@@ -81,7 +81,7 @@ catalogRouter.post(
 catalogRouter.put(
   '/products/:id',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const { data: tenant } = await ctx.db
@@ -130,7 +130,7 @@ catalogRouter.put(
 catalogRouter.delete(
   '/products/:id',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     if (req.query.hard === 'true') {
@@ -189,7 +189,7 @@ function allowedModels(): Set<string> {
 catalogRouter.put(
   '/agent',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const b = req.body ?? {};
@@ -404,7 +404,7 @@ catalogRouter.get(
 catalogRouter.post(
   '/services',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     let payload;
@@ -430,7 +430,7 @@ catalogRouter.post(
 catalogRouter.put(
   '/services/:id',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     // Same rule as products: only the fields that were sent change.
@@ -478,7 +478,7 @@ catalogRouter.put(
 catalogRouter.delete(
   '/services/:id',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
 
