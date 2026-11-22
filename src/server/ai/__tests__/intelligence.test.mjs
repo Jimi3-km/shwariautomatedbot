@@ -1330,6 +1330,25 @@ await t('an alert number needs its country code', () => {
   assert.equal(normalisePhone('not a number'), null);
 });
 
+const { alertText, DEFAULT_ALERT_KINDS, ALERT_KINDS } = await import('../../services/alerts.js');
+
+await t('each alert is worded for its reason and says what to do', () => {
+  const pay = alertText('payment_claim', { title: 'Payment to verify', body: 'Jane says she paid KES 2,500.', link: '/payments' });
+  assert.match(pay, /Payment to verify/);
+  assert.match(pay, /Jane says she paid/);
+  assert.match(pay, /Check and verify it: .*\/payments$/);
+  const order = alertText('new_order', { title: 'New order ORD-12', body: 'Jane ordered a wig.' });
+  assert.match(order, /See the order: .*\/orders$/, 'falls back to the place that kind lives');
+  const handoff = alertText('needs_human', { title: 'A customer needs a person' });
+  assert.match(handoff, /Reply in the inbox: .*\/inbox$/);
+  assert.notEqual(pay.split('\n')[0].slice(0, 2), order.split('\n')[0].slice(0, 2), 'a different mark per reason');
+  assert.match(alertText('payment_claim', { title: 'T' }, { bold: true }), /\*T\*/, 'bold on WhatsApp');
+});
+
+await t('every kind of alert is on by default', () => {
+  assert.deepEqual([...DEFAULT_ALERT_KINDS].sort(), [...ALERT_KINDS].sort());
+});
+
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
   assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
   assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));

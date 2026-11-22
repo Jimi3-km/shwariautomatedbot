@@ -125,6 +125,7 @@ export const WIDGET_SOURCE = String.raw`(function () {
     '.msg{max-width:84%;padding:10px 13px;border-radius:16px;font-size:14px;line-height:1.5;',
     'white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}',
     '.row.you .msg{background:' + accent + ';color:#fff;border-bottom-right-radius:5px}',
+    '.pic{display:block;max-width:84%;width:260px;height:auto;margin-top:6px;border-radius:12px;border:1px solid #e7e7ec;background:#fff}',
     '.row.agent .msg{background:#fff;color:#16161a;border:1px solid #e7e7ec;',
     'border-bottom-left-radius:5px}',
     '.time{font-size:10.5px;color:#9a9aa5;margin:3px 4px 0}',
@@ -269,7 +270,7 @@ export const WIDGET_SOURCE = String.raw`(function () {
     if (force || atBottom()) log.scrollTop = log.scrollHeight;
   }
 
-  function addMessage(from, text, at) {
+  function addMessage(from, text, at, image) {
     var stick = atBottom();
     var row = document.createElement('div');
     row.className = 'row ' + (from === 'you' ? 'you' : 'agent');
@@ -278,6 +279,24 @@ export const WIDGET_SOURCE = String.raw`(function () {
     bubble.className = 'msg';
     bubble.textContent = text;          // never innerHTML
     row.appendChild(bubble);
+
+    // A receipt arrives with its picture. It is an <img> element with only a
+    // src and alt set, and the server only ever sends its own receipt address.
+    if (image && /^https:\/\//.test(image)) {
+      var pic = document.createElement('img');
+      pic.className = 'pic';
+      pic.alt = 'Receipt';
+      pic.loading = 'lazy';
+      pic.src = image;
+      pic.onload = function () { scrollDown(stick); };
+      pic.onerror = function () { if (pic.parentNode) pic.parentNode.removeChild(pic); };
+      var link = document.createElement('a');
+      link.href = image;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.appendChild(pic);
+      row.appendChild(link);
+    }
 
     if (at) {
       var time = document.createElement('div');
@@ -374,7 +393,7 @@ export const WIDGET_SOURCE = String.raw`(function () {
           seen[m.id] = true;
 
           if (m.from === 'agent') { showTyping(false); awaitingReply = false; fresh++; }
-          addMessage(m.from, m.text || '', m.at);
+          addMessage(m.from, m.text || '', m.at, m.image);
         }
 
         if (fresh) {

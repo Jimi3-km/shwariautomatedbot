@@ -321,6 +321,7 @@ export const bookAppointment: Tool = {
         startsAt,
         durationMinutes: minutes,
         businessName: tenantRow?.business_name || tenantRow?.name || 'Shwari Services',
+        tenantId: ctx.tenantId,
         notes: str(args, 'notes', { max: 1000 }) || undefined,
       }).catch((e) => console.error('[brevo] booking email error:', e));
     }
@@ -678,6 +679,7 @@ export const recordOrder: Tool = {
         totalAmount: total ?? 0,
         currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
         businessName: tenant?.business_name || 'Shwari Commerce',
+        tenantId: ctx.tenantId,
       }).catch((e) => console.error('[brevo] order receipt email error:', e));
     }
 

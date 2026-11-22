@@ -481,6 +481,14 @@ function MessageBubble({ message }: { message: ConversationDetail['messages'][nu
         }}>
           {message.body}
         </div>
+        {receiptImageOf(message) && (
+          <a href={receiptImageOf(message)!} target="_blank" rel="noreferrer" style={{ display: 'block', marginTop: 6 }}>
+            <img
+              src={receiptImageOf(message)!} alt="Receipt sent to the customer" loading="lazy"
+              style={{ display: 'block', width: 240, maxWidth: '100%', height: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}
+            />
+          </a>
+        )}
       </div>
     </div>
   );
@@ -604,4 +612,16 @@ function Row({ label, value }: { label: string; value: string | null | undefined
       <span style={{ textAlign: 'right', wordBreak: 'break-word' }}>{value || '—'}</span>
     </div>
   );
+}
+
+/** The receipt picture attached to a message, when it is one this site issued. */
+function receiptImageOf(message: { extracted?: unknown }): string | null {
+  const url = (message.extracted as { image_url?: unknown } | null)?.image_url;
+  if (typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.pathname.startsWith('/api/receipts/image/') ? url : null;
+  } catch {
+    return null;
+  }
 }

@@ -3,7 +3,8 @@ import { serviceClient } from '../supabase.js';
 import { requirePlatformAdmin, handler } from '../auth.js';
 import { logAuditEvent } from '../security/audit.js';
 import { forgetTenantLiveness } from '../services/platform.js';
-import { esc, isBrevoConfigured, sendBrevoEmail } from '../services/brevo.js';
+import { esc, isBrevoConfigured, sendBrevoEmail, runEmailDiagnostics, getBrevoSender } from '../services/brevo.js';
+import { rateLimit } from '../channels/webchat/rateLimit.js';
 import { publicApiUrl } from '../config/publicUrl.js';
 
 /**
@@ -160,6 +161,44 @@ platformRouter.post(
       details: { summary: paused ? "The platform paused this business's agents" : "The platform resumed this business's agents" },
     });
     res.json({ id: data.id, agents_paused: paused });
+  })
+);
+
+/** Why is email not arriving? Asks the email service and reads our own record. */
+platformRouter.get(
+  '/platform/email-check',
+  requirePlatformAdmin,
+  handler(async (_req, res) => {
+    res.json(await runEmailDiagnostics());
+  })
+);
+
+/** Send one real email to the platform admin's own address and say what happened. */
+platformRouter.post(
+  '/platform/email-test',
+  requirePlatformAdmin,
+  handler(async (req, res) => {
+    const admin = req.authUser!;
+    if (!admin.email) return res.status(400).json({ error: 'Your account has no email address to send to.' });
+    const limit = rateLimit(`email-test:${admin.id}`, 5, 10 * 60_000);
+    if (!limit.allowed) return res.status(429).json({ error: 'Too many tests in a short time. Try again in a few minutes.' });
+
+    const sender = getBrevoSender();
+    const sent = await sendBrevoEmail({
+      to: [{ email: admin.email }],
+      subject: 'Test email from your platform',
+      htmlContent:
+        `<p>This is a test email sent at ${esc(new Date().toUTCString())}.</p>` +
+        `<p>It was sent from <strong>${esc(sender.email)}</strong>. If you are reading this in your inbox, receipts and booking confirmations can reach your customers. If it landed in spam, the sending domain still needs authenticating.</p>`,
+      textContent: `This is a test email sent at ${new Date().toUTCString()} from ${sender.email}.`,
+      tags: ['platform-test'],
+    });
+    res.json({
+      accepted: sent.success,
+      to: admin.email,
+      from: sender.email,
+      error: sent.success ? null : sent.error ?? 'The email service refused the message.',
+    });
   })
 );
 

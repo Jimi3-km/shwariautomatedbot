@@ -71,3 +71,26 @@ not an address at the business's own domain.
    order by created_at desc limit 5;` shows what was sent.
 4. If an email did not arrive, search the function logs for `[brevo]`. The
    usual causes are an unverified sender and a missing `BREVO_API_KEY`.
+
+## When emails are "sent" but never arrive
+
+The email service accepting a message is not the same as it reaching an inbox.
+The receipts log showed emails as sent while customers received nothing. The
+usual causes, in order:
+
+1. **The sending address is a free mailbox** (`@gmail.com`, `@yahoo.com`,
+   `@outlook.com`). Those providers reject or spam-folder mail that claims to
+   be from them but was sent by another service. Use an address at a domain
+   you own.
+2. **The domain is not authenticated.** Add the domain in Brevo (Senders,
+   Domains & Dedicated IPs > Domains) and add the DKIM, DMARC and Brevo-code
+   DNS records it shows.
+3. **The sender is not confirmed** in Brevo (Senders tab).
+4. **The key is an SMTP key**, not an API key. The platform uses the API; the
+   key must start with `xkeysib-`.
+5. **The customer has no email on file.** No address, no email.
+
+The platform admin's **Platform page > Email check** tests 1 to 4 against Brevo,
+lists what Brevo did with recent messages (delivered, bounced, blocked) and can
+send one real test email. Every attempt is also kept in the `email_log` table
+with what the service answered.

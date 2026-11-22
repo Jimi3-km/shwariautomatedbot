@@ -6,6 +6,7 @@ import { logAuditEvent } from '../security/audit.js';
 import { esc, isBrevoConfigured, sendBrevoEmail } from '../services/brevo.js';
 import { publicApiUrl } from '../config/publicUrl.js';
 import { rateLimit } from '../channels/webchat/rateLimit.js';
+import { normalisePhone, sendInviteByWhatsApp } from '../services/alerts.js';
 
 /**
  * Staff: who is in a business, inviting them, and removing them.
@@ -81,6 +82,12 @@ teamRouter.post(
     if (!INVITABLE.includes(role)) {
       return res.status(400).json({ error: 'Choose Manager, Staff or Viewer.' });
     }
+    // Optional: also send the invitation to their WhatsApp.
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    const phone = rawPhone ? normalisePhone(rawPhone) : null;
+    if (rawPhone && !phone) {
+      return res.status(400).json({ error: 'Enter the WhatsApp number with its country code, for example +254712345678.' });
+    }
     const limit = rateLimit(`invite:${ctx.tenantId}`, 20, 60 * 60_000);
     if (!limit.allowed) {
       return res.status(429).json({ error: 'Too many invitations in the last hour. Try again later.' });
@@ -106,7 +113,7 @@ teamRouter.post(
     const { data: created, error } = await serviceClient
       .from('tenant_invitations')
       .insert({
-        tenant_id: ctx.tenantId, email, role,
+        tenant_id: ctx.tenantId, email, role, phone,
         token_hash: hashToken(token), invited_by: ctx.userId, expires_at: expiresAt,
       })
       .select('id, email, role, expires_at, created_at')
@@ -134,8 +141,18 @@ teamRouter.post(
           `${ctx.email ?? 'The owner'} has invited you to join ${business} as ${ROLE_LABEL[role]}.\n\n` +
           `Accept: ${link}\n\nSign in or create an account with ${email} to accept. The link works for ${INVITE_DAYS} days.`,
         tags: ['team-invitation'],
+        tenantId: ctx.tenantId,
       }).catch(() => ({ success: false }));
       emailed = Boolean(sent.success);
+    }
+
+    // And on WhatsApp, from the business's own number, when one was given.
+    let whatsapp: { sent: boolean; reason?: string } | null = null;
+    if (phone) {
+      const sent = await sendInviteByWhatsApp(ctx.tenantId, phone, {
+        business, role: ROLE_LABEL[role], link, invitedBy: ctx.email ?? 'The owner',
+      });
+      whatsapp = { sent: sent.ok, ...(sent.reason ? { reason: sent.reason } : {}) };
     }
 
     void logAuditEvent({
@@ -146,7 +163,7 @@ teamRouter.post(
 
     // The link goes back to the owner too, so they can pass it on themselves
     // when email is not set up or the message does not arrive.
-    res.status(201).json({ invitation: created, link, emailed });
+    res.status(201).json({ invitation: created, link, emailed, whatsapp });
   })
 );
 

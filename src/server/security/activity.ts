@@ -19,7 +19,7 @@ const SKIP: RegExp[] = [
   /^\/notifications\/read$/,
   /^\/payments\/[^/]+\/verify$/,
   /^\/team(\/|$)/,
-  /^\/alerts\/(recipients|test)/,
+  /^\/alerts\/(recipients|test|telegram-bot)/,
   /^\/invitations\//,
   /^\/shwari\/chat$/,
   /^\/platform\//,

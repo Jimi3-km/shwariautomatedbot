@@ -11,6 +11,7 @@ import {
   PageHeader, Pill, StatTile, useToast, type PillTone,
 } from '../components/ui';
 import { MetaSetupCheck } from '../components/MetaSetupCheck';
+import { EmailCheck } from '../components/EmailCheck';
 import { SetupReadinessPanel } from '../components/SetupReadinessPanel';
 import { formatDate, humanize, relativeTime } from '../lib/format';
 
@@ -224,6 +225,7 @@ export function Platform() {
             <ShieldCheck size={14} /> Platform setup
           </div>
           <SetupReadinessPanel />
+          <EmailCheck />
           <MetaSetupCheck />
         </div>
       </div>

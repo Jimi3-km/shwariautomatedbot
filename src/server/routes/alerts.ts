@@ -3,8 +3,11 @@ import { serviceClient } from '../supabase.js';
 import { requireAuth, requireAdmin, requireOwner, handler } from '../auth.js';
 import { logAuditEvent } from '../security/audit.js';
 import {
-  ALERT_KINDS, alertTemplateStatus, deliverAlert, getAlertSettings, listRecipients, normalisePhone,
+  ALERT_KINDS, AlertSetupError, alertTemplateStatus, confirmTelegramLink, deliverAlert, getAlertSettings,
+  getNotificationBot, listRecipients, normalisePhone, removeNotificationBot, requestAllTemplates,
+  setNotificationBot, startTelegramLink,
 } from '../services/alerts.js';
+import { runInBackground } from '../services/background.js';
 import { rateLimit } from '../channels/webchat/rateLimit.js';
 
 /**
@@ -23,9 +26,10 @@ alertsRouter.get(
   requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
-    const [settings, recipients, channels, links] = await Promise.all([
+    const [settings, recipients, bot, channels, links] = await Promise.all([
       getAlertSettings(ctx.tenantId),
       listRecipients(ctx.tenantId),
+      getNotificationBot(ctx.tenantId),
       serviceClient.from('channels').select('channel_type, display_name')
         .eq('tenant_id', ctx.tenantId).eq('status', 'active').in('channel_type', ['whatsapp', 'telegram']),
       serviceClient.from('shwari_admins').select('id', { count: 'exact', head: true })
@@ -43,9 +47,15 @@ alertsRouter.get(
         connected: Boolean(wa),
         number: wa?.display_name ?? null,
         // Only worth asking WhatsApp when there is someone to alert.
-        template: wa && recipients.length ? await alertTemplateStatus(ctx.tenantId, { create: true }) : null,
+        template: wa && recipients.some((r) => r.channel === 'whatsapp')
+          ? await alertTemplateStatus(ctx.tenantId, { create: true }) : null,
       },
-      telegram: { connected: Boolean(tg), linked_chats: links.count ?? 0 },
+      telegram: {
+        connected: Boolean(tg),
+        linked_chats: links.count ?? 0,
+        // The bot the owner set up for alerts. Its token is never returned.
+        bot: bot ? { username: bot.username, name: bot.name } : null,
+      },
     });
   })
 );
@@ -84,7 +94,7 @@ alertsRouter.post(
     }
     const label = String(req.body?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || null;
 
-    const existing = await listRecipients(ctx.tenantId);
+    const existing = (await listRecipients(ctx.tenantId)).filter((r) => r.channel === 'whatsapp');
     if (existing.some((r) => r.address === address)) {
       return res.status(409).json({ error: 'That number is already on the list.' });
     }
@@ -112,9 +122,9 @@ alertsRouter.post(
       action: 'alerts.recipient_added', resourceType: 'alerts', resourceId: data.id,
       details: { summary: `Added +${address} to receive WhatsApp alerts` },
     });
-    // Ask WhatsApp for the alert template now, so it is approved by the time
-    // the first real alert is due.
-    void alertTemplateStatus(ctx.tenantId, { create: true, fresh: true });
+    // Ask WhatsApp for the alert messages now, so they are approved by the
+    // time the first real alert is due.
+    void runInBackground('alerts', () => requestAllTemplates(ctx.tenantId));
     res.status(201).json(data);
   })
 );
@@ -150,9 +160,84 @@ alertsRouter.delete(
     void logAuditEvent({
       tenantId: ctx.tenantId, actorId: ctx.userId, actorType: 'user', actorLabel: ctx.email,
       action: 'alerts.recipient_removed', resourceType: 'alerts', resourceId: data.id,
-      details: { summary: `Removed +${data.address} from WhatsApp alerts` },
+      details: { summary: 'Removed someone from the alerts' },
     });
     res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Telegram: the owner's notification bot
+// ---------------------------------------------------------------------------
+
+function sendSetupError(res: import('express').Response, e: unknown, fallback: string) {
+  if (e instanceof AlertSetupError) return res.status(400).json({ error: e.message });
+  console.error('[alerts] telegram bot setup failed:', e instanceof Error ? e.message : e);
+  return res.status(500).json({ error: fallback });
+}
+
+/** Set (or replace) the bot that sends this business's alerts. */
+alertsRouter.put(
+  '/alerts/telegram-bot',
+  requireAuth,
+  requireOwner,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    try {
+      const bot = await setNotificationBot(ctx.tenantId, String(req.body?.token ?? ''), ctx.userId);
+      void logAuditEvent({
+        tenantId: ctx.tenantId, actorId: ctx.userId, actorType: 'user', actorLabel: ctx.email,
+        action: 'alerts.telegram_bot_set', resourceType: 'alerts',
+        details: { summary: `Set @${bot.username ?? 'a bot'} as the Telegram notification bot` },
+      });
+      res.json({ bot });
+    } catch (e) {
+      sendSetupError(res, e, 'The bot could not be saved. Please try again.');
+    }
+  })
+);
+
+alertsRouter.delete(
+  '/alerts/telegram-bot',
+  requireAuth,
+  requireOwner,
+  handler(async (req, res) => {
+    const ctx = req.ctx!;
+    await removeNotificationBot(ctx.tenantId);
+    void logAuditEvent({
+      tenantId: ctx.tenantId, actorId: ctx.userId, actorType: 'user', actorLabel: ctx.email,
+      action: 'alerts.telegram_bot_removed', resourceType: 'alerts',
+      details: { summary: 'Removed the Telegram notification bot' },
+    });
+    res.json({ ok: true });
+  })
+);
+
+/** A link to open in Telegram; pressing Start there joins the alerts. */
+alertsRouter.post(
+  '/alerts/telegram-bot/link',
+  requireAuth,
+  requireOwner,
+  handler(async (req, res) => {
+    try {
+      res.json(await startTelegramLink(req.ctx!.tenantId));
+    } catch (e) {
+      sendSetupError(res, e, 'A link could not be created. Please try again.');
+    }
+  })
+);
+
+/** Add whoever has pressed Start since the link was made. */
+alertsRouter.post(
+  '/alerts/telegram-bot/confirm',
+  requireAuth,
+  requireOwner,
+  handler(async (req, res) => {
+    try {
+      res.json(await confirmTelegramLink(req.ctx!.tenantId));
+    } catch (e) {
+      sendSetupError(res, e, "We couldn't check Telegram just now. Please try again.");
+    }
   })
 );
 
@@ -167,11 +252,19 @@ alertsRouter.post(
     if (!limit.allowed) {
       return res.status(429).json({ error: 'Too many tests in a short time. Try again in a few minutes.' });
     }
-    const results = await deliverAlert(
-      ctx.tenantId, 'test',
-      { title: 'Test alert', body: 'This is how alerts from your business will arrive.', link: '/settings' },
-      { force: true }
-    );
+    // A test of a real kind, so it reads exactly as the real thing will.
+    const kind = (ALERT_KINDS as readonly string[]).includes(String(req.body?.kind)) ? String(req.body.kind) : 'test';
+    const SAMPLES: Record<string, { title: string; body: string }> = {
+      payment_claim: { title: 'Payment to verify (test)', body: 'Jane says she paid KES 2,500 for ORD-12 (ref TEST123).' },
+      new_order: { title: 'New order ORD-12 (test)', body: 'Jane ordered 2 x Body wave wig - KES 9,000. Unpaid.' },
+      needs_human: { title: 'A customer needs a person (test)', body: 'Jane asked to speak to someone about a refund.' },
+      payment_verified: { title: 'Payment verified (test)', body: 'KES 2,500 from Jane for ORD-12.' },
+      posts_to_approve: { title: 'Posts ready to approve (test)', body: '5 posts are planned for next week.' },
+      post_failed: { title: 'A post did not go out (test)', body: 'Monday 9:00 - Instagram refused the photo.' },
+      post_published: { title: 'Post published (test)', body: 'Monday 9:00 post went out on Instagram.' },
+      test: { title: 'Test alert', body: 'This is how alerts from your business will arrive.' },
+    };
+    const results = await deliverAlert(ctx.tenantId, kind, SAMPLES[kind], { force: true });
     res.json({ results });
   })
 );

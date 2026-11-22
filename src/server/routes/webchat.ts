@@ -1,3 +1,4 @@
+import { publicApiUrl } from '../config/publicUrl.js';
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -13,6 +14,13 @@ import { runInBackground } from '../services/background.js';
 import { housekeeping } from '../services/followUps.js';
 import { WIDGET_SOURCE } from '../channels/webchat/widget.js';
 import type { NormalizedInboundEvent } from '../channels/meta/types.js';
+
+/** The receipt picture on a message, if it is one of ours. */
+function ownReceiptImage(extracted: unknown): string | null {
+  const url = (extracted as { image_url?: unknown } | null)?.image_url;
+  if (typeof url !== 'string') return null;
+  return url.startsWith(`${publicApiUrl()}/api/receipts/image/`) ? url : null;
+}
 
 export const webchatRouter = Router();
 
@@ -276,7 +284,7 @@ webchatRouter.get(
     const since = String(req.query.since ?? '');
     let q = serviceClient
       .from('conversation_messages')
-      .select('id, sender, body, created_at')
+      .select('id, sender, body, extracted, created_at')
       .eq('tenant_id', channel.tenantId)
       .eq('conversation_id', convo.id)
       .in('sender', ['customer', 'agent', 'staff'])
@@ -298,6 +306,12 @@ webchatRouter.get(
         from: m.sender === 'customer' ? 'you' : 'agent',
         text: m.body,
         at: m.created_at,
+        // A receipt comes with its picture. Only an address this server
+        // issued is ever passed on, so the widget cannot be made to load an
+        // image from anywhere else.
+        ...(ownReceiptImage((m as { extracted?: unknown }).extracted)
+          ? { image: ownReceiptImage((m as { extracted?: unknown }).extracted) }
+          : {}),
       })),
     });
   })

@@ -33,14 +33,18 @@ export function TeamPanel() {
 
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>('member');
-  const [link, setLink] = useState<{ url: string; emailed: boolean; to: string } | null>(null);
+  const [phone, setPhone] = useState('');
+  const [link, setLink] = useState<{
+    url: string; emailed: boolean; to: string; whatsapp: { sent: boolean; reason?: string } | null;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; label: string } | null>(null);
 
   const invite = useMutation(async () => {
-    const result = await inviteTeamMember(email.trim(), role);
-    setLink({ url: result.link, emailed: result.emailed, to: email.trim() });
+    const result = await inviteTeamMember(email.trim(), role, phone.trim() || undefined);
+    setLink({ url: result.link, emailed: result.emailed, to: email.trim(), whatsapp: result.whatsapp });
     setEmail('');
+    setPhone('');
     state.reload();
   });
   const change = useMutation(async (id: string, next: string) => {
@@ -160,6 +164,14 @@ export function TeamPanel() {
                 />
               </Field>
             </div>
+            <div style={{ flex: '2 1 190px', minWidth: 0 }}>
+              <Field label="Their WhatsApp number" hint="Optional. With the country code." htmlFor="invite-phone">
+                <Input
+                  id="invite-phone" type="tel" inputMode="tel" autoComplete="off" placeholder="+254712345678"
+                  value={phone} onChange={(e) => setPhone(e.target.value)}
+                />
+              </Field>
+            </div>
             <div style={{ flex: '1 1 130px', minWidth: 0 }}>
               <Field label="Role" htmlFor="invite-role">
                 <Select
@@ -180,8 +192,12 @@ export function TeamPanel() {
             }}>
               <div>
                 {link.emailed
-                  ? `Invitation emailed to ${link.to}. You can also send them this link yourself:`
-                  : `We couldn't email ${link.to}, so send them this link yourself:`}
+                  ? `Invitation emailed to ${link.to}.`
+                  : `We couldn't email ${link.to}.`}
+                {link.whatsapp && (link.whatsapp.sent
+                  ? ' It was also sent to their WhatsApp.'
+                  : ` WhatsApp: ${link.whatsapp.reason ?? 'not sent.'}`)}
+                {' '}You can also send them this link yourself:
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7 }}>
                 <code style={{ flex: 1, minWidth: 0, fontSize: 11.5, overflowWrap: 'anywhere', fontFamily: 'ui-monospace, monospace' }}>

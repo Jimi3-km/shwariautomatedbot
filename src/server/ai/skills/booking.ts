@@ -37,7 +37,7 @@ export const BOOKING_SKILL: Skill = {
       when: 'you are missing their name or phone number',
       steps: [
         'Ask for it once, save it with save_customer_details, then carry on with the booking in the same turn.',
-        'Offer, once and without insisting, to email the confirmation: "Want the confirmation by email too? Just send your address." If they give one, save it before you book so the confirmation goes out.',
+        'Before you book, ask for an email address for the confirmation: "What email should I send the confirmation to?" Ask once. If they give one, save it with save_customer_details before you book so the confirmation is emailed. If they decline or skip it, book anyway and confirm in the chat only; never hold a booking back for an email.',
       ],
     },
   ],

@@ -29,10 +29,11 @@ export const getTeam = () => request<{ members: TenantUser[]; invitations: TeamI
 /** The session of a platform admin who belongs to no business. */
 export const getPlatformMe = () => request<Me>('/platform/me');
 
-export const inviteTeamMember = (email: string, role: string) =>
-  request<{ invitation: TeamInvitation; link: string; emailed: boolean }>(
-    '/team/invitations', { method: 'POST', body: { email, role } }
-  );
+export const inviteTeamMember = (email: string, role: string, phone?: string) =>
+  request<{
+    invitation: TeamInvitation; link: string; emailed: boolean;
+    whatsapp: { sent: boolean; reason?: string } | null;
+  }>('/team/invitations', { method: 'POST', body: { email, role, ...(phone ? { phone } : {}) } });
 
 export const withdrawInvitation = (id: string) =>
   request<{ ok: boolean }>(`/team/invitations/${id}`, { method: 'DELETE' });
@@ -95,6 +96,25 @@ export const setBusinessStatus = (id: string, status: 'active' | 'suspended', re
 
 export const setBusinessAgentsPaused = (id: string, paused: boolean) =>
   request<{ id: string; agents_paused: boolean }>(`/platform/tenants/${id}/agents`, { method: 'POST', body: { paused } });
+
+export interface EmailCheckItem {
+  id: string;
+  label: string;
+  ok: boolean | null;
+  detail: string;
+  fix?: string;
+}
+
+export const getEmailCheck = () =>
+  request<{
+    checks: EmailCheckItem[];
+    sender: { name: string; email: string };
+    recent: Array<{ at: string; kind: string; recipient: string; ok: boolean; error: string | null }>;
+    events: Array<{ at: string; event: string; to: string; reason: string | null; subject: string | null }>;
+  }>('/platform/email-check');
+
+export const sendTestEmail = () =>
+  request<{ accepted: boolean; to: string; from: string; error: string | null }>('/platform/email-test', { method: 'POST' });
 
 export const resolvePlatformAlert = (id: number) =>
   request<{ ok: boolean }>(`/platform/alerts/${id}/resolve`, { method: 'POST' });
@@ -296,7 +316,7 @@ export interface AppNotification {
 // ---------------------------------------------------------------------------
 export interface AlertRecipient {
   id: string;
-  channel: 'whatsapp';
+  channel: 'whatsapp' | 'telegram';
   address: string;
   label: string | null;
   active: boolean;
@@ -317,8 +337,21 @@ export interface AlertsConfig {
   telegram_enabled: boolean;
   recipients: AlertRecipient[];
   whatsapp: { connected: boolean; number: string | null; template: string | null };
-  telegram: { connected: boolean; linked_chats: number };
+  telegram: { connected: boolean; linked_chats: number; bot: { username: string | null; name: string | null } | null };
 }
+
+/** Set the bot that sends alerts. The token is checked and stored by the server; it is never read back. */
+export const setAlertTelegramBot = (token: string) =>
+  request<{ bot: { username: string | null; name: string | null } }>('/alerts/telegram-bot', { method: 'PUT', body: { token } });
+
+export const removeAlertTelegramBot = () =>
+  request<{ ok: boolean }>('/alerts/telegram-bot', { method: 'DELETE' });
+
+export const startAlertTelegramLink = () =>
+  request<{ url: string; code: string }>('/alerts/telegram-bot/link', { method: 'POST' });
+
+export const confirmAlertTelegramLink = () =>
+  request<{ added: string[] }>('/alerts/telegram-bot/confirm', { method: 'POST' });
 
 export const getAlerts = () => request<AlertsConfig>('/alerts');
 
@@ -334,8 +367,8 @@ export const setAlertRecipientActive = (id: string, active: boolean) =>
 export const removeAlertRecipient = (id: string) =>
   request<{ ok: boolean }>(`/alerts/recipients/${id}`, { method: 'DELETE' });
 
-export const sendTestAlert = () =>
-  request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST' });
+export const sendTestAlert = (kind?: string) =>
+  request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST', body: kind ? { kind } : {} });
 
 export const getNotifications = () =>
   request<{ notifications: AppNotification[]; unread: number }>('/notifications');

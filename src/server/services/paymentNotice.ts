@@ -138,12 +138,22 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
     // --- the receipt by email, when there is an address ---------------------
     const email = String(payment.customer_email || (lead as any)?.email || '').trim();
     if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && isBrevoConfigured() && business && (input.resend || !payment.receipt_sent_at)) {
-      const sent = await sendBrevoEmail({
+      const receiptEmail = {
         to: [{ email, name: (lead as any)?.customer_name || undefined }],
         subject: `Your receipt from ${(business as any).business_name || 'us'}${(order as any)?.order_ref ? ` - ${(order as any).order_ref}` : ''}`,
         htmlContent: renderReceiptHtml({ business, payment, order: order ?? null, lead: lead ?? null }),
         tags: ['receipt'],
-      } as any).catch(() => ({ success: false }));
+        tenantId: input.tenantId,
+      };
+      // The same picture the customer gets in chat, attached. If the email
+      // service cannot fetch it, the receipt still goes without it.
+      const picture = receiptImageUrl(input.paymentId);
+      let sent: any = picture
+        ? await sendBrevoEmail({ ...receiptEmail, attachments: [{ url: picture, name: 'receipt.png' }] } as any).catch(() => ({ success: false }))
+        : { success: false };
+      if (!sent?.success) {
+        sent = await sendBrevoEmail(receiptEmail as any).catch(() => ({ success: false }));
+      }
       result.receipt_emailed = Boolean((sent as any)?.success);
     }
 
