@@ -170,7 +170,27 @@ interface RequestOptions {
  * query string: the server derives tenancy from the token and rejects any
  * client-supplied tenant_id outright.
  */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/**
+ * Reads already on their way, by address. Several parts of a page ask for the
+ * same thing at the same moment (the menu and the page both want the overview;
+ * a remount asks again), and each used to become its own request. The second
+ * asker now shares the first one's answer. Only plain reads are shared, and
+ * only while in flight: nothing is cached once it has arrived.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+export function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? 'GET';
+  if (method !== 'GET' || options.signal || options.body !== undefined) return send<T>(path, options);
+  const key = `${activeTenantId ?? ''} ${path}`;
+  const existing = inFlight.get(key);
+  if (existing) return existing as Promise<T>;
+  const started = send<T>(path, options).finally(() => { inFlight.delete(key); });
+  inFlight.set(key, started);
+  return started;
+}
+
+async function send<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { data } = await getSupabase().auth.getSession();
   const token = data.session?.access_token;
 

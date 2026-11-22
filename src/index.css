@@ -4,12 +4,19 @@
 /* ─────────────────────────────────────────
    Reset & Base
    ───────────────────────────────────────── */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/* In the base layer on purpose. Written outside a layer, this reset outranked
+   every Tailwind spacing class (p-4, px-5, mt-2 ...), because unlayered rules
+   beat layered ones: cards, dialogs and page headers all rendered with no
+   padding at all. Inside the base layer it still resets the browser's
+   defaults, and the utility classes win as they should. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 :root {

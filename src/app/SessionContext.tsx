@@ -106,7 +106,9 @@ export function SessionProvider({
         paymentClaims: o.stats.payment_claims ?? 0,
       }))
       .catch(() => { /* badge counts are non-critical; stay quiet */ });
-  }, [me.tenant]);
+    // Keyed on the business, not the object: a fresh /me must not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me.tenant?.id]);
 
   useEffect(() => { refreshCounts(); }, [refreshCounts, me.tenant?.id]);
   // Refresh badges periodically, but only while the tab is visible.

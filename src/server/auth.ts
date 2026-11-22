@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { serviceClient, userClient } from './supabase.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -24,13 +25,55 @@ export interface TenantContext {
   supportMode: boolean;
 }
 
+/**
+ * Short-lived memory of answers that every request needs and that barely
+ * change. Each dashboard page makes several requests at once, and each used to
+ * verify the same token with the auth service and look up the same rows again,
+ * one after another. Entries live for seconds, so a sign-out, a removed member
+ * or a changed role still takes effect almost at once.
+ */
+const SHORT_MS = 20_000;
+function remember<V>(store: Map<string, { at: number; value: V }>, key: string, ttl: number, load: () => Promise<V>): Promise<V> {
+  const hit = store.get(key);
+  if (hit && Date.now() - hit.at < ttl) return Promise.resolve(hit.value);
+  return load().then((value) => {
+    if (store.size > 2000) store.clear();
+    store.set(key, { at: Date.now(), value });
+    return value;
+  });
+}
+
+const adminCache = new Map<string, { at: number; value: boolean }>();
+
 /** Is this user a platform admin? Read from the database, never from a claim. */
-export async function isPlatformAdminUser(userId: string): Promise<boolean> {
-  const { data, error } = await serviceClient
-    .from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle();
-  // A missing table (migration 0027 not applied) means nobody is one.
-  if (error) return false;
-  return Boolean(data);
+export function isPlatformAdminUser(userId: string): Promise<boolean> {
+  return remember(adminCache, userId, 60_000, async () => {
+    const { data, error } = await serviceClient
+      .from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle();
+    // A missing table (migration 0027 not applied) means nobody is one.
+    if (error) return false;
+    return Boolean(data);
+  });
+}
+
+type VerifiedUser = { id: string; email: string | null; emailConfirmed: boolean };
+const userCache = new Map<string, { at: number; value: VerifiedUser | null }>();
+
+/** Who a token belongs to, verified with the auth service. Only a hash of the token is kept. */
+async function verifiedUser(token: string): Promise<VerifiedUser | null> {
+  const key = createHash('sha256').update(token).digest('base64');
+  const hit = userCache.get(key);
+  if (hit && Date.now() - hit.at < SHORT_MS) return hit.value;
+  const { data, error } = await serviceClient.auth.getUser(token);
+  const value = error || !data?.user
+    ? null
+    : { id: data.user.id, email: data.user.email ?? null, emailConfirmed: Boolean(data.user.email_confirmed_at) };
+  // A refusal is not remembered: the next attempt asks again.
+  if (value) {
+    if (userCache.size > 2000) userCache.clear();
+    userCache.set(key, { at: Date.now(), value });
+  }
+  return value;
 }
 
 declare global {
@@ -65,21 +108,25 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Unauthorized: missing bearer token' });
   }
 
-  const { data, error } = await serviceClient.auth.getUser(token);
-  if (error || !data?.user) {
+  const verified = await verifiedUser(token);
+  if (!verified) {
     return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
   }
-  const user = data.user;
+  const user = { id: verified.id, email: verified.email, email_confirmed_at: verified.emailConfirmed ? 'yes' : null };
 
   // Tenant membership is read with the service client because a user who is
-  // not yet a member of any tenant cannot see tenant_users under RLS.
-  const { data: memberships, error: mErr } = await serviceClient
-    .from('tenant_users')
-    .select('tenant_id, role, created_at')
-    .eq('user_id', user.id)
-    // Deterministic default: the oldest membership, with the id as tie-break.
-    .order('created_at', { ascending: true })
-    .order('tenant_id', { ascending: true });
+  // not yet a member of any tenant cannot see tenant_users under RLS. Asked
+  // for alongside the platform-admin check rather than after it.
+  const [{ data: memberships, error: mErr }, platformAdmin] = await Promise.all([
+    serviceClient
+      .from('tenant_users')
+      .select('tenant_id, role, created_at')
+      .eq('user_id', user.id)
+      // Deterministic default: the oldest membership, with the id as tie-break.
+      .order('created_at', { ascending: true })
+      .order('tenant_id', { ascending: true }),
+    isPlatformAdminUser(user.id),
+  ]);
 
   if (mErr) {
     // This was previously swallowed, which made a 42501 "permission denied for
@@ -95,8 +142,6 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       code: 'MEMBERSHIP_LOOKUP_FAILED',
     });
   }
-  const platformAdmin = await isPlatformAdminUser(user.id);
-
   // A user may belong to several tenants. Selection is by an explicit header,
   // but only ever among tenants they actually belong to -- the header can
   // never introduce a tenant that is not in this list. The one exception is a
