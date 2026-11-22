@@ -10,7 +10,11 @@ import {
   fetchProfile,
   sendInstagramMessage,
   subscribeToMessages,
+  diagnoseInstagramAccess,
+  formatInstagramTrace,
   InstagramOAuthError,
+  type InstagramDiagnosis,
+  type TokenShape,
 } from '../../services/meta/instagram.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
 import { chunkText, withRetry, lastInboundAt, windowIsOpen, TEXT_LIMITS } from '../outbound.js';
@@ -90,40 +94,55 @@ export const instagramProvider: ChannelProvider = {
     // for different reasons and need different fixes.
     let step = 'exchange the sign-in code';
     let shortToken: string | null = null;
+    let shape: TokenShape | undefined;
+    let diagnosis: InstagramDiagnosis | null = null;
     try {
       const shortLived = await exchangeCodeForToken(code, metaConfig.instagram.connectRedirectUri);
       shortToken = shortLived.accessToken;
+      shape = shortLived.shape;
       granted = shortLived.permissions ?? null;
       step = 'get a long-lived token';
-      longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+      try {
+        longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+      } catch (e) {
+        // Ask again several ways with the same token. If one of them is
+        // answered, the connection goes ahead with it and the record says
+        // which; if none is, the record holds what each was told.
+        diagnosis = await diagnoseInstagramAccess(shortLived.accessToken);
+        if (!diagnosis.longLived) throw e;
+        longLived = diagnosis.longLived;
+        console.warn(
+          `[providers/instagram] the usual long-lived exchange was refused but ${diagnosis.longLived.via} worked: `
+          + formatInstagramTrace(shape, diagnosis.probes)
+        );
+      }
       step = 'read the account';
       profile = await fetchProfile(longLived.accessToken);
     } catch (e) {
       const meta = e instanceof InstagramOAuthError
         ? `Meta error ${e.metaCode ?? 'n/a'} (HTTP ${e.httpStatus ?? 'n/a'}): ${e.message}`
         : e instanceof Error ? e.message : String(e);
-      console.error(`[providers/instagram] could not ${step}: ${meta}`);
 
       // Instagram signed the person in and handed over a token, then refused
-      // to let this app use it. That is not a fault in the sign-in: Meta is
-      // saying this app may not act for this account. While the Meta app is in
-      // Development mode that means the account is not an Instagram tester of
-      // the app (or has not accepted the invite); otherwise the account is not
-      // a Business or Creator account, or did not grant the basic permission.
+      // to let this app use it. Meta gives the same answer for several causes
+      // (an account without a role on an app in Development mode, an account
+      // that is not Business or Creator, an app without approved access), so
+      // no cause is claimed here: the trace below is what tells them apart.
       const refused = step !== 'exchange the sign-in code';
-      let canRead = false;
-      if (refused && shortToken) {
-        // One more look with the first token, to tell "cannot upgrade the
-        // token" from "cannot use this account at all".
-        canRead = await fetchProfile(shortToken).then(() => true).catch(() => false);
+      // The same few calls made several ways with the first token, so this one
+      // attempt says what Instagram refuses and how. No token is recorded.
+      if (refused && shortToken && !diagnosis) {
+        diagnosis = await diagnoseInstagramAccess(shortToken).catch(() => null);
       }
+      const trace = refused ? formatInstagramTrace(shape, diagnosis?.probes ?? []) : '';
+      console.error(`[providers/instagram] could not ${step}: ${meta}${trace ? `; trace: ${trace}` : ''}`);
       const grantedList = granted?.join(', ') || 'none reported';
       if (refused) {
         throw new ProviderError(
           'Instagram signed you in but did not let this app use the account.',
           {
             status: 502, code: 'INSTAGRAM_ACCESS_REFUSED',
-            detail: `could not ${step}; ${meta}; account readable with the first token: ${canRead ? 'yes' : 'no'}; granted: ${grantedList}`,
+            detail: `could not ${step}; ${meta}; granted: ${grantedList}; trace: ${trace}`,
           }
         );
       }

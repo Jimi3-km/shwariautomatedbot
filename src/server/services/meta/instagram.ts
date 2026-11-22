@@ -3,6 +3,8 @@ import {
   INSTAGRAM_AUTHORIZE_URL,
   INSTAGRAM_GRAPH_URL,
   INSTAGRAM_OAUTH_URL,
+  META_GRAPH_URL,
+  META_GRAPH_VERSION,
   metaConfig,
 } from '../../config/meta.js';
 
@@ -51,6 +53,24 @@ export interface InstagramToken {
   expiresAt: Date | null;
   /** What the person actually granted, when Meta says. Null when it did not. */
   permissions?: string[] | null;
+  /** What the answer looked like, with no value from it. For diagnosis only. */
+  shape?: TokenShape;
+}
+
+/**
+ * The form of Instagram's answer to the code exchange. Names and lengths only:
+ * nothing here can be used to act for the account.
+ */
+export interface TokenShape {
+  /** The names of the fields at the top of the answer. */
+  topLevelKeys: string[];
+  dataIsArray: boolean;
+  userIdPresent: boolean;
+  /** Last four digits of the account id, to tell one account from another. */
+  userIdTail: string | null;
+  /** First four characters: an Instagram token starts IGAA, a Facebook one EAA. */
+  tokenPrefix: string;
+  tokenLength: number;
 }
 
 export class InstagramOAuthError extends Error {
@@ -189,11 +209,20 @@ export async function exchangeCodeForToken(
   if (!grant?.access_token) {
     throw new InstagramOAuthError('Instagram did not return an access token');
   }
+  const userId = String(grant.user_id ?? '');
   return {
     accessToken: grant.access_token,
-    userId: String(grant.user_id ?? ''),
+    userId,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     permissions: readPermissions(grant.permissions),
+    shape: {
+      topLevelKeys: Object.keys(json ?? {}).map((k) => k.slice(0, 30)).slice(0, 12),
+      dataIsArray: Array.isArray(json.data),
+      userIdPresent: userId !== '',
+      userIdTail: userId ? userId.slice(-4) : null,
+      tokenPrefix: grant.access_token.slice(0, 4),
+      tokenLength: grant.access_token.length,
+    },
   };
 }
 
@@ -249,7 +278,7 @@ export async function refreshLongLivedToken(
 
 export async function fetchProfile(accessToken: string): Promise<InstagramProfile> {
   const params = new URLSearchParams({
-    fields: 'id,user_id,username,account_type,profile_picture_url',
+    fields: PROFILE_FIELDS,
     access_token: accessToken,
   });
   const res = await fetch(`${INSTAGRAM_GRAPH_URL}/me?${params}`);
@@ -269,6 +298,156 @@ export async function fetchProfile(accessToken: string): Promise<InstagramProfil
     accountType: json.account_type,
     profilePictureUrl: json.profile_picture_url,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Diagnosis: what Instagram answers to each way of using a fresh token
+// ---------------------------------------------------------------------------
+
+/** One call made while diagnosing, with nothing secret in it. */
+export interface InstagramProbe {
+  /** Method, host and path. Never the query string, which carries the token. */
+  call: string;
+  /** HTTP status, or null when the call never got an answer. */
+  status: number | null;
+  ok: boolean;
+  code?: string;
+  subcode?: string;
+  type?: string;
+  fbtrace?: string;
+  message?: string;
+  /** A few safe facts from a successful answer (a username, a yes or no). */
+  note?: string;
+}
+
+export interface InstagramDiagnosis {
+  probes: InstagramProbe[];
+  /** Set when one of the ways of asking for a long-lived token worked. */
+  longLived: { accessToken: string; expiresAt: Date; via: string } | null;
+}
+
+const PROFILE_FIELDS = 'id,user_id,username,account_type,profile_picture_url';
+
+/**
+ * Make the same few calls several ways with one short-lived token, so a single
+ * failed connection says which of them Instagram refuses and how.
+ *
+ * Meta answers a refused account, a wrong path and a missing role with the
+ * same words ("Unsupported request"), and each real attempt needs a person to
+ * sign in. So one attempt compares: the long-lived exchange with and without
+ * an API version, reading the account with a short and a full field list, and
+ * what Meta itself says the token is.
+ *
+ * Nothing returned here contains a token, a code or a secret.
+ */
+export async function diagnoseInstagramAccess(shortLivedToken: string): Promise<InstagramDiagnosis> {
+  const secrets = [shortLivedToken, metaConfig.instagram.clientSecret, metaConfig.appSecret].filter(Boolean);
+  const clean = (text: unknown): string => {
+    let s = String(text ?? '');
+    for (const secret of secrets) s = s.split(secret).join('[removed]');
+    return s.slice(0, 180);
+  };
+
+  let longLived: InstagramDiagnosis['longLived'] = null;
+
+  const run = async (
+    call: string,
+    url: string,
+    onSuccess?: (json: Record<string, unknown>) => string | undefined
+  ): Promise<InstagramProbe> => {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.ok && !json.error) {
+        return { call, status: res.status, ok: true, note: onSuccess ? clean(onSuccess(json) ?? '') || undefined : undefined };
+      }
+      const err = (json.error ?? {}) as Record<string, unknown>;
+      return {
+        call, status: res.status, ok: false,
+        code: err.code != null ? clean(err.code) : undefined,
+        subcode: err.error_subcode != null ? clean(err.error_subcode) : undefined,
+        type: err.type != null ? clean(err.type) : undefined,
+        fbtrace: err.fbtrace_id != null ? clean(err.fbtrace_id) : undefined,
+        message: clean(err.message ?? json.error_message ?? 'no error body'),
+      };
+    } catch (e) {
+      return { call, status: null, ok: false, message: clean(e instanceof Error ? e.message : e) };
+    }
+  };
+
+  const exchange = (path: string) => {
+    const params = new URLSearchParams({
+      grant_type: 'ig_exchange_token',
+      client_secret: metaConfig.instagram.clientSecret,
+      access_token: shortLivedToken,
+    });
+    const call = `GET graph.instagram.com${path}`;
+    return run(call, `${INSTAGRAM_GRAPH_URL}${path}?${params}`, (json) => {
+      if (typeof json.access_token === 'string' && json.access_token && !longLived) {
+        const seconds = typeof json.expires_in === 'number' ? json.expires_in : 5_184_000;
+        longLived = { accessToken: json.access_token, expiresAt: new Date(Date.now() + seconds * 1000), via: call };
+      }
+      return `long-lived token ${typeof json.access_token === 'string' ? 'returned' : 'missing'}`;
+    });
+  };
+
+  const me = (path: string, fields: string) => {
+    const params = new URLSearchParams({ fields, access_token: shortLivedToken });
+    return run(`GET graph.instagram.com${path} fields=${fields}`, `${INSTAGRAM_GRAPH_URL}${path}?${params}`, (json) =>
+      `username=${String(json.username ?? 'n/a')} account_type=${String(json.account_type ?? 'n/a')}`
+    );
+  };
+
+  /** What Meta says the token is: valid or not, and which app it belongs to. */
+  const inspect = async (): Promise<InstagramProbe | null> => {
+    if (!metaConfig.appId || !metaConfig.appSecret) return null;
+    const params = new URLSearchParams({
+      input_token: shortLivedToken,
+      access_token: `${metaConfig.appId}|${metaConfig.appSecret}`,
+    });
+    return run('GET graph.facebook.com/debug_token', `${META_GRAPH_URL}/debug_token?${params}`, (json) => {
+      const d = (json.data ?? {}) as Record<string, unknown>;
+      const appId = String(d.app_id ?? '');
+      const app = !appId ? 'not stated'
+        : appId === metaConfig.instagram.clientId ? 'the Instagram app'
+        : appId === metaConfig.appId ? 'the Meta app'
+        : 'a different app';
+      const scopes = Array.isArray(d.scopes) ? d.scopes.join(',') : 'n/a';
+      const err = (d.error ?? {}) as Record<string, unknown>;
+      return `valid=${String(d.is_valid ?? 'n/a')} type=${String(d.type ?? 'n/a')} app=${app} scopes=${scopes}`
+        + (err.message ? ` error=${String(err.code ?? '')} ${String(err.message)}` : '');
+    });
+  };
+
+  const probes = await Promise.all([
+    exchange('/access_token'),
+    exchange(`/${META_GRAPH_VERSION}/access_token`),
+    me('/me', 'user_id,username'),
+    me('/me', PROFILE_FIELDS),
+    me(`/${META_GRAPH_VERSION}/me`, 'user_id,username'),
+    inspect(),
+  ]);
+
+  return { probes: probes.filter((p): p is InstagramProbe => p !== null), longLived };
+}
+
+/** A diagnosis and the token's form as one line of text for the record. */
+export function formatInstagramTrace(shape: TokenShape | undefined, probes: InstagramProbe[]): string {
+  const head = shape
+    ? `token prefix=${shape.tokenPrefix} len=${shape.tokenLength}; answer keys=[${shape.topLevelKeys.join(',')}] `
+      + `data_array=${shape.dataIsArray ? 'yes' : 'no'} user_id=${shape.userIdPresent ? `present(..${shape.userIdTail})` : 'absent'}`
+    : 'token form not recorded';
+  const lines = probes.map((p) => {
+    if (p.ok) return `${p.call} -> ${p.status} ok${p.note ? ` (${p.note})` : ''}`;
+    const parts = [
+      p.code ? `code ${p.code}` : null,
+      p.subcode ? `subcode ${p.subcode}` : null,
+      p.type ?? null,
+      p.fbtrace ? `fbtrace ${p.fbtrace}` : null,
+    ].filter(Boolean).join(', ');
+    return `${p.call} -> ${p.status ?? 'no answer'}${parts ? ` [${parts}]` : ''} ${p.message ?? ''}`.trim();
+  });
+  return [head, ...lines].join(' | ');
 }
 
 /** Outbound Instagram DM. Used once a tenant has connected their account. */

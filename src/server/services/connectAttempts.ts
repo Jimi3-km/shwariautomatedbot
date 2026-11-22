@@ -102,7 +102,8 @@ export async function recordConnectFinish(input: {
     const d = classifyUserAgent(input.userAgent);
     const patch = {
       outcome: input.outcome.slice(0, 60),
-      detail: input.detail ? input.detail.slice(0, 400) : null,
+      // Long enough for the full trace of a refused Instagram connection.
+      detail: input.detail ? input.detail.slice(0, 4000) : null,
       return_device: d.device,
       return_browser: d.browser,
       finished_at: new Date().toISOString(),
