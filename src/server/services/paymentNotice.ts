@@ -144,6 +144,7 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
         htmlContent: renderReceiptHtml({ business, payment, order: order ?? null, lead: lead ?? null }),
         tags: ['receipt'],
         tenantId: input.tenantId,
+        senderName: (business as any).business_name || undefined,
       };
       // The same picture the customer gets in chat, attached. If the email
       // service cannot fetch it, the receipt still goes without it.

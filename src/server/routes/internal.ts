@@ -292,3 +292,33 @@ internalRouter.get(
     });
   })
 );
+
+/**
+ * Send one real test email to the platform admin, callable by the scheduler.
+ * The same thing the "Send me a test email" button does, for when nobody is
+ * signed in. It only ever writes to a platform admin's own address.
+ */
+internalRouter.get(
+  '/internal/cron/email-test',
+  requireScheduler,
+  handler(async (_req, res) => {
+    const { sendBrevoEmail, resolveSender, esc } = await import('../services/brevo.js');
+    const { data: admins } = await serviceClient.from('platform_admins').select('user_id').limit(1);
+    const adminId = admins?.[0]?.user_id;
+    const { data: user } = adminId ? await serviceClient.auth.admin.getUserById(adminId) : { data: null };
+    const to = user?.user?.email;
+    if (!to) return res.status(409).json({ error: 'No platform admin with an email address.' });
+
+    const sender = await resolveSender();
+    const sent = await sendBrevoEmail({
+      to: [{ email: to }],
+      subject: 'Test email from your platform',
+      htmlContent:
+        `<p>This is a test email sent at ${esc(new Date().toUTCString())} from <strong>${esc(sender.email)}</strong>.</p>` +
+        '<p>If you are reading this, receipts and booking confirmations can reach your customers.</p>',
+      textContent: `This is a test email sent at ${new Date().toUTCString()} from ${sender.email}.`,
+      tags: ['platform-test'],
+    });
+    res.json({ accepted: sent.success, from: sender.email, error: sent.success ? null : sent.error ?? null });
+  })
+);

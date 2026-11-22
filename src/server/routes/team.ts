@@ -142,6 +142,7 @@ teamRouter.post(
           `Accept: ${link}\n\nSign in or create an account with ${email} to accept. The link works for ${INVITE_DAYS} days.`,
         tags: ['team-invitation'],
         tenantId: ctx.tenantId,
+        senderName: business,
       }).catch(() => ({ success: false }));
       emailed = Boolean(sent.success);
     }

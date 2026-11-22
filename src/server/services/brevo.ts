@@ -50,6 +50,8 @@ export interface SendEmailOptions {
   tags?: string[];
   /** The business this email is for, so the attempt is kept against it. */
   tenantId?: string | null;
+  /** The name shown as the sender, usually the business's. The address stays the platform's. */
+  senderName?: string;
   /** Files the email service fetches and attaches, by public address. */
   attachments?: Array<{ url: string; name: string }>;
 }
@@ -71,6 +73,60 @@ export function getBrevoSender(): EmailRecipient {
   };
 }
 
+/** Mailbox providers that reject mail sent in their name by another service. */
+const FREE_MAILBOX = /@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud|me|proton|protonmail|gmx|zoho)\./i;
+
+let resolvedSender: { at: number; value: EmailRecipient } | null = null;
+const SENDER_CACHE_MS = 10 * 60_000;
+
+/**
+ * The address email is actually sent from.
+ *
+ * Brevo refuses any message whose sender is not one it has confirmed, and it
+ * does so after accepting the request, so the failure is silent. The address
+ * configured on the server was the SMTP login (something@smtp-brevo.com),
+ * which is never a valid sender, and every receipt was dropped.
+ *
+ * So the configured address is checked against the account's confirmed
+ * senders. If it is not one of them, a confirmed sender is used instead,
+ * preferring an address at an authenticated domain over a free mailbox.
+ */
+export async function resolveSender(): Promise<EmailRecipient> {
+  if (resolvedSender && Date.now() - resolvedSender.at < SENDER_CACHE_MS) return resolvedSender.value;
+
+  const configured = getBrevoSender();
+  let value = configured;
+  try {
+    const [senders, domains] = await Promise.all([brevoGet('/senders'), brevoGet('/senders/domains')]);
+    const list: Array<{ email?: string; name?: string; active?: boolean }> =
+      Array.isArray(senders.body?.senders) ? senders.body.senders : [];
+    const active = list.filter((s) => s?.active && typeof s.email === 'string');
+    if (senders.ok && active.length) {
+      const isConfirmed = active.some((s) => s.email!.toLowerCase() === configured.email.toLowerCase());
+      if (!isConfirmed) {
+        const authed = new Set(
+          (Array.isArray(domains.body?.domains) ? domains.body.domains : [])
+            .filter((d: any) => d?.authenticated)
+            .map((d: any) => String(d.domain_name).toLowerCase())
+        );
+        const domainOf = (e: string) => e.split('@')[1]?.toLowerCase() ?? '';
+        const best =
+          active.find((s) => authed.has(domainOf(s.email!))) ??
+          active.find((s) => !FREE_MAILBOX.test(s.email!)) ??
+          active[0];
+        console.warn(
+          `[brevo] the configured sender ${configured.email} is not confirmed in Brevo; sending from ${best.email} instead. ` +
+            'Set BREVO_SENDER_EMAIL to a confirmed sender to choose it.'
+        );
+        value = { name: configured.name, email: best.email! };
+      }
+    }
+  } catch { /* keep the configured sender; the send will report the failure */ }
+
+  resolvedSender = { at: Date.now(), value };
+  return value;
+}
+
 /**
  * Generic email dispatcher via Brevo API v3.
  */
@@ -81,7 +137,11 @@ export async function sendBrevoEmail(options: SendEmailOptions): Promise<BrevoSe
     return { success: false, error: 'BREVO_API_KEY not configured' };
   }
 
-  const sender = options.sender || getBrevoSender();
+  const base = options.sender || (await resolveSender());
+  // The customer should see who the email is from: the business, not the platform.
+  const sender = options.senderName
+    ? { ...base, name: options.senderName.replace(/[\r\n<>"]+/g, ' ').trim().slice(0, 70) || base.name }
+    : base;
 
   const payload: Record<string, unknown> = {
     sender,
@@ -197,8 +257,17 @@ export async function runEmailDiagnostics(): Promise<{
   events: Array<{ at: string; event: string; to: string; reason: string | null; subject: string | null }>;
 }> {
   const checks: EmailCheck[] = [];
-  const sender = getBrevoSender();
+  const configured = getBrevoSender();
+  resolvedSender = null; // always a fresh look when someone is diagnosing
+  const sender = process.env.BREVO_API_KEY ? await resolveSender() : configured;
   const senderDomain = sender.email.split('@')[1]?.toLowerCase() ?? '';
+  if (sender.email.toLowerCase() !== configured.email.toLowerCase()) {
+    checks.push({
+      id: 'sender_config', label: 'The sending address set on the server is valid', ok: false,
+      detail: `BREVO_SENDER_EMAIL is ${configured.email}, which Brevo has not confirmed as a sender${/smtp-brevo\.com$/i.test(configured.email) ? ' (it is the SMTP login, not an email address you can send from)' : ''}. Until now every email was dropped for this reason. The platform is now sending from ${sender.email}, a sender Brevo has confirmed.`,
+      fix: `To choose the address yourself, set BREVO_SENDER_EMAIL on the server to a sender confirmed in Brevo (Senders, Domains & Dedicated IPs > Senders) and redeploy.`,
+    });
+  }
 
   // --- the key ---------------------------------------------------------------
   if (!process.env.BREVO_API_KEY) {
@@ -415,6 +484,7 @@ export async function sendAppointmentConfirmation(opts: {
     textContent: `Hi ${cName},\n\nYour appointment for ${opts.serviceName} is confirmed for ${formattedDate} (${opts.durationMinutes} mins).\n\nRegards,\n${bName}`,
     tags: ['appointment-confirmation'],
     tenantId: opts.tenantId,
+    senderName: opts.businessName,
   });
 }
 
@@ -513,6 +583,7 @@ export async function sendOrderReceipt(opts: {
     textContent: `Hi ${cName},\n\nThank you for your order (${orderRef}). Total: ${currency} ${opts.totalAmount.toLocaleString()}.\n\nRegards,\n${bName}`,
     tags: ['order-receipt'],
     tenantId: opts.tenantId,
+    senderName: opts.businessName,
   });
 }
 
