@@ -57,6 +57,7 @@ export function Integrations() {
     else if (status === 'whatsapp_no_account') toast.push('error', 'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.');
     else if (status === 'whatsapp_no_number') toast.push('error', 'No WhatsApp number was set up. Finish adding a phone number in the WhatsApp signup, then try again.');
     else if (status === 'account_in_use') toast.push('error', 'That account is already connected to another business on this platform. Disconnect it there first, then connect it here.');
+    else if (status === 'instagram_access_refused') toast.push('error', "Instagram signed you in but did not let this app use the account. Check that it is a Business or Creator account. If it is, this is on our side: the account needs adding to the app's approved list, and we've been notified.");
     else if (status === 'instagram_exchange_failed') toast.push('error', 'Instagram did not complete the sign-in. Try again; if it keeps happening, check that the account is a Business or Creator account.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
   }, []);

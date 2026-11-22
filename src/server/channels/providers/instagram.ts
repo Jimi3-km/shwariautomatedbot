@@ -86,20 +86,50 @@ export const instagramProvider: ChannelProvider = {
     let profile;
     let longLived;
     let granted: string[] | null = null;
+    // Each step is named, because "it failed" is useless: the three steps fail
+    // for different reasons and need different fixes.
+    let step = 'exchange the sign-in code';
+    let shortToken: string | null = null;
     try {
       const shortLived = await exchangeCodeForToken(code, metaConfig.instagram.connectRedirectUri);
+      shortToken = shortLived.accessToken;
       granted = shortLived.permissions ?? null;
+      step = 'get a long-lived token';
       longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+      step = 'read the account';
       profile = await fetchProfile(longLived.accessToken);
     } catch (e) {
-      if (e instanceof InstagramOAuthError) {
-        console.error(`[providers/instagram] Meta error (${e.metaCode ?? 'n/a'}): ${e.message}`);
-      } else {
-        console.error('[providers/instagram] token exchange failed:', e);
+      const meta = e instanceof InstagramOAuthError
+        ? `Meta error ${e.metaCode ?? 'n/a'} (HTTP ${e.httpStatus ?? 'n/a'}): ${e.message}`
+        : e instanceof Error ? e.message : String(e);
+      console.error(`[providers/instagram] could not ${step}: ${meta}`);
+
+      // Instagram signed the person in and handed over a token, then refused
+      // to let this app use it. That is not a fault in the sign-in: Meta is
+      // saying this app may not act for this account. While the Meta app is in
+      // Development mode that means the account is not an Instagram tester of
+      // the app (or has not accepted the invite); otherwise the account is not
+      // a Business or Creator account, or did not grant the basic permission.
+      const refused = step !== 'exchange the sign-in code';
+      let canRead = false;
+      if (refused && shortToken) {
+        // One more look with the first token, to tell "cannot upgrade the
+        // token" from "cannot use this account at all".
+        canRead = await fetchProfile(shortToken).then(() => true).catch(() => false);
+      }
+      const grantedList = granted?.join(', ') || 'none reported';
+      if (refused) {
+        throw new ProviderError(
+          'Instagram signed you in but did not let this app use the account.',
+          {
+            status: 502, code: 'INSTAGRAM_ACCESS_REFUSED',
+            detail: `could not ${step}; ${meta}; account readable with the first token: ${canRead ? 'yes' : 'no'}; granted: ${grantedList}`,
+          }
+        );
       }
       throw new ProviderError(
         "Instagram couldn't be connected. Please try again.",
-        { status: 502, code: 'INSTAGRAM_EXCHANGE_FAILED' }
+        { status: 502, code: 'INSTAGRAM_EXCHANGE_FAILED', detail: `could not ${step}; ${meta}` }
       );
     }
 

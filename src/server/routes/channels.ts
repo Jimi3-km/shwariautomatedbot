@@ -343,6 +343,14 @@ channelsRouter.get(
       if (e instanceof ProviderError) {
         console.warn(`[channels] ${providerId} callback failed (${e.code}): ${e.message}`);
         const why = `${e.code}: ${e.message}`;
+        if (e.code === 'INSTAGRAM_ACCESS_REFUSED') {
+          void raisePlatformAlert({
+            kind: 'instagram_access', tenantId: state.tenantId,
+            dedupeKey: `instagram_access:${state.tenantId}`,
+            summary: 'Instagram signed a business in but refused this app access to the account.',
+            detail: `${e.message} Usual causes: the Meta app is in Development mode and the Instagram account is not an accepted Instagram tester; or the account is not a Business or Creator account; or the app lacks approved access to instagram_business_basic.`,
+          });
+        }
         if (OUR_SIDE_CODES.has(e.code)) {
           void raisePlatformAlert({
             kind: 'channel_setup', tenantId: state.tenantId,

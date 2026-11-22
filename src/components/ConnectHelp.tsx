@@ -75,6 +75,7 @@ const RESULT: Record<string, { ok: boolean; title: string; body: string }> = {
   whatsapp_no_account: { ok: false, title: 'No WhatsApp Business account was shared', body: 'In the sign-up, choose or create a WhatsApp Business account and add a phone number before finishing.' },
   whatsapp_no_number: { ok: false, title: 'No WhatsApp number was set up', body: 'Finish adding a phone number in the WhatsApp sign-up, then try again.' },
   account_in_use: { ok: false, title: 'That account is already in use', body: 'It is connected to another business on this platform. Disconnect it there first, then connect it here.' },
+  instagram_access_refused: { ok: false, title: 'Instagram did not allow access', body: "Instagram signed you in but did not let this app use the account. Check that it is a Business or Creator account. If it is, this is on our side: the account needs adding to the app's approved list, and we've been notified." },
   instagram_exchange_failed: { ok: false, title: 'Instagram did not complete the sign-in', body: 'Try again. If it keeps happening, check that the account is a Business or Creator account.' },
   platform_fault: { ok: false, title: 'A problem on our side', body: "This is not your doing. We've been notified and will fix it. Nothing was connected." },
 };

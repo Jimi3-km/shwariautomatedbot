@@ -144,6 +144,8 @@ async function readMetaError(res: Response, fallback: string): Promise<never> {
   } catch {
     /* non-JSON error body */
   }
+  // The subcode is what tells one "Unsupported request" from another.
+  if (subcode) detail = `${detail} (subcode ${subcode})`;
   const err = new InstagramOAuthError(detail, res.status === 400 ? 400 : 502, code);
   err.httpStatus = res.status;
   err.metaSubcode = subcode;
