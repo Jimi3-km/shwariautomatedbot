@@ -35,27 +35,69 @@ interface NavEntry {
   badge?: keyof ActivityCounts;
   /** Shown only to owners and admins: the server rejects everyone else. */
   adminOnly?: boolean;
+  /** Shown only to the people who run the platform. */
+  platformOnly?: boolean;
 }
 
-const NAV: NavEntry[] = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/shwari', label: 'Shwari', icon: Sparkles, adminOnly: true },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'inbox' },
-  { to: '/leads', label: 'Leads', icon: Users, badge: 'leads' },
-  { to: '/products', label: 'Products', icon: Package },
-  { to: '/services', label: 'Services', icon: Wrench },
-  { to: '/marketing', label: 'Marketing', icon: Megaphone, badge: 'marketing' },
-  { to: '/orders', label: 'Orders', icon: ShoppingCart, badge: 'orders' },
-  { to: '/appointments', label: 'Appointments', icon: CalendarDays, badge: 'appointments' },
-  { to: '/support', label: 'Support', icon: LifeBuoy, badge: 'support' },
-  { to: '/invoices', label: 'Invoices', icon: FileText, badge: 'invoices' },
-  { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'payments' },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/agents', label: 'AI team', icon: Bot },
-  { to: '/agent', label: 'AI agent settings', icon: SlidersHorizontal, adminOnly: true },
-  { to: '/integrations', label: 'Integrations', icon: Plug },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+interface NavGroup {
+  /** Shown as the group's heading; the first group has none and never closes. */
+  id: string;
+  label?: string;
+  items: NavEntry[];
+}
+
+/**
+ * The menu, grouped by what a person is doing rather than listed end to end:
+ * talking to customers, getting paid, what is on sale, growing, the AI team,
+ * and setting things up. Each group opens and closes and remembers which.
+ */
+const NAV_GROUPS: NavGroup[] = [
+  { id: 'home', items: [
+    { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+    { to: '/shwari', label: 'Shwari', icon: Sparkles, adminOnly: true },
+  ] },
+  { id: 'customers', label: 'Customers', items: [
+    { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'inbox' },
+    { to: '/leads', label: 'Leads', icon: Users, badge: 'leads' },
+    { to: '/appointments', label: 'Appointments', icon: CalendarDays, badge: 'appointments' },
+    { to: '/support', label: 'Support', icon: LifeBuoy, badge: 'support' },
+  ] },
+  { id: 'sales', label: 'Sales', items: [
+    { to: '/orders', label: 'Orders', icon: ShoppingCart, badge: 'orders' },
+    { to: '/invoices', label: 'Invoices', icon: FileText, badge: 'invoices' },
+    { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'payments' },
+  ] },
+  { id: 'catalogue', label: 'Catalogue', items: [
+    { to: '/products', label: 'Products', icon: Package },
+    { to: '/services', label: 'Services', icon: Wrench },
+  ] },
+  { id: 'growth', label: 'Growth', items: [
+    { to: '/marketing', label: 'Marketing', icon: Megaphone, badge: 'marketing' },
+    { to: '/analytics', label: 'Analytics', icon: BarChart3 },
+  ] },
+  { id: 'ai', label: 'AI team', items: [
+    { to: '/agents', label: 'Agents', icon: Bot },
+    { to: '/agent', label: 'Agent settings', icon: SlidersHorizontal, adminOnly: true },
+    { to: '/admin/agent-qa', label: 'Agent QA', icon: ShieldCheck, adminOnly: true },
+  ] },
+  { id: 'setup', label: 'Setup', items: [
+    { to: '/integrations', label: 'Integrations', icon: Plug },
+    { to: '/settings', label: 'Settings', icon: SettingsIcon },
+  ] },
+  { id: 'platform', label: 'Platform', items: [
+    { to: '/platform', label: 'All businesses', icon: Building2, badge: 'platform', platformOnly: true },
+  ] },
 ];
+
+const NAV_CLOSED_KEY = 'shwari.nav.closed';
+function readClosed(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(NAV_CLOSED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 export function AppShell() {
   const isMobile = useIsMobile();
@@ -184,6 +226,15 @@ function StatusBanners() {
 
 function SidebarContent() {
   const { tenant, activity, isAdmin, isPlatformAdmin } = useSession();
+  const { pathname } = useLocation();
+  const [closed, setClosed] = useState<string[]>(readClosed);
+  const toggleGroup = (id: string) => {
+    setClosed((current) => {
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      try { localStorage.setItem(NAV_CLOSED_KEY, JSON.stringify(next)); } catch { /* remembered for this visit only */ }
+      return next;
+    });
+  };
 
   return (
     <>
@@ -191,42 +242,41 @@ function SidebarContent() {
         <TenantSwitcher />
       </div>
 
-      <nav className="scroll-y" style={{ flex: 1, padding: '0 8px 8px' }}>
-        {NAV.filter((n) => !n.adminOnly || isAdmin).map(({ to, label, icon: Icon, end, badge }) => {
-          const count = badge ? activity[badge] : 0;
+      <nav className="scroll-y" style={{ flex: 1, padding: '0 8px 8px' }} aria-label="Main">
+        {NAV_GROUPS.map((group) => {
+          const items = group.items.filter((n) => (!n.adminOnly || isAdmin) && (!n.platformOnly || isPlatformAdmin));
+          if (!items.length) return null;
+          const here = items.some((n) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(`${n.to}/`)));
+          // The group you are in is always open, whatever was remembered.
+          const open = !group.label || here || !closed.includes(group.id);
+          const news = items.reduce((sum, n) => sum + (n.badge ? activity[n.badge] : 0), 0);
           return (
-            <NavLink
-              key={to} to={to} end={end}
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}
-            >
-              <Icon size={16} style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
-              <NavDot count={count} />
-            </NavLink>
+            <div key={group.id} className="nav-group">
+              {group.label && (
+                <button
+                  type="button" className="nav-group-head" aria-expanded={open}
+                  onClick={() => toggleGroup(group.id)}
+                >
+                  <span style={{ flex: 1, textAlign: 'left' }}>{group.label}</span>
+                  {/* A closed group still says there is something new inside it. */}
+                  {!open && <NavDot count={news} />}
+                  <ChevronDown size={13} className="nav-group-chevron" data-open={open} />
+                </button>
+              )}
+              {open && items.map(({ to, label, icon: Icon, end, badge }) => (
+                <NavLink
+                  key={to} to={to} end={end}
+                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}
+                >
+                  <Icon size={16} style={{ flexShrink: 0 }} />
+                  <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+                  <NavDot count={badge ? activity[badge] : 0} />
+                </NavLink>
+              ))}
+            </div>
           );
         })}
-        {isPlatformAdmin && (
-          <NavLink
-            to="/platform"
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 4 }}
-          >
-            <Building2 size={16} style={{ flexShrink: 0, color: 'var(--accent)' }} />
-            <span style={{ flex: 1, textAlign: 'left' }}>Platform</span>
-            <NavDot count={activity.platform} />
-          </NavLink>
-        )}
-        {isAdmin && (
-          <NavLink
-            to="/admin/agent-qa"
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 4 }}
-          >
-            <ShieldCheck size={16} style={{ flexShrink: 0, color: 'var(--accent)' }} />
-            <span style={{ flex: 1, textAlign: 'left' }}>Agent QA</span>
-          </NavLink>
-        )}
       </nav>
 
       <div style={{ padding: 8, borderTop: '1px solid var(--border)' }}>

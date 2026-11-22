@@ -8,7 +8,8 @@ import { useAsync, useDebounced, useIsMobile, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FilterChip, InlineError, Input, LoadingState,
-  Modal, PageHeader, Pill, Select, StatTile, TableWrap, Textarea, useToast, type PillTone,
+  Modal, PageHeader, Pill, Select, StatTile, TableWrap, Textarea, useToast, ActionMenu,
+  type MenuItem, type PillTone,
 } from '../components/ui';
 import { formatDate, formatMoney } from '../lib/format';
 
@@ -64,31 +65,33 @@ export function Invoices() {
   const summary = state.data?.summary;
   const cur = invoices[0]?.currency ?? currency ?? '';
 
-  const actions = (inv: Invoice) => (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
-      {inv.pdf_url && (
-        <a className="btn btn-sm btn-subtle" href={inv.pdf_url} target="_blank" rel="noreferrer" aria-label={`Open invoice ${inv.invoice_no} as a PDF`}>
-          <FileDown size={13} /> PDF
-        </a>
-      )}
-      {canWrite && (inv.status === 'draft' || inv.status === 'sent') && (
-        <Button size="sm" variant={inv.status === 'draft' ? 'solid' : 'outline'} icon={<Send size={13} />}
-          loading={send.busy} onClick={() => send.run(inv)}>
-          {inv.status === 'draft' ? 'Send' : 'Send again'}
-        </Button>
-      )}
-      {canWrite && (inv.status === 'draft' || inv.status === 'sent') && (
-        <Button size="sm" variant="success" icon={<BadgeCheck size={13} />} onClick={() => setPaying(inv)}>
-          Mark paid
-        </Button>
-      )}
-      {canWrite && (inv.status === 'draft' || inv.status === 'sent') && (
-        <Button size="sm" variant="subtle" icon={<Ban size={13} />} aria-label={`Cancel invoice ${inv.invoice_no}`} onClick={() => setVoiding(inv)}>
-          Cancel
-        </Button>
-      )}
-    </div>
-  );
+  // One main action per row: send a draft, or confirm payment once it is
+  // with the customer. Everything else sits behind the menu, so a row stays
+  // one line tall.
+  const actions = (inv: Invoice) => {
+    const open = inv.status === 'draft' || inv.status === 'sent';
+    const more: MenuItem[] = [
+      ...(inv.pdf_url ? [{ label: 'Open PDF', icon: <FileDown size={14} />, href: inv.pdf_url }] : []),
+      ...(canWrite && inv.status === 'sent' ? [{ label: 'Send again', icon: <Send size={14} />, onSelect: () => { void send.run(inv); } }] : []),
+      ...(canWrite && inv.status === 'draft' ? [{ label: 'Mark paid', icon: <BadgeCheck size={14} />, onSelect: () => setPaying(inv) }] : []),
+      ...(canWrite && open ? [{ label: 'Cancel invoice', icon: <Ban size={14} />, tone: 'danger' as const, onSelect: () => setVoiding(inv) }] : []),
+    ];
+    return (
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
+        {canWrite && inv.status === 'draft' && (
+          <Button size="sm" variant="accent" icon={<Send size={13} />} loading={send.busy} onClick={() => send.run(inv)}>
+            Send
+          </Button>
+        )}
+        {canWrite && inv.status === 'sent' && (
+          <Button size="sm" variant="success" icon={<BadgeCheck size={13} />} onClick={() => setPaying(inv)}>
+            Mark paid
+          </Button>
+        )}
+        <ActionMenu items={more} label={`More actions for invoice ${inv.invoice_no}`} />
+      </div>
+    );
+  };
 
   return (
     <>

@@ -2,7 +2,7 @@ import React, {
   createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, CheckCircle2, ChevronDown, Info, Loader2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, Info, Loader2, MoreHorizontal, X } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Button
@@ -244,6 +244,86 @@ export function Switch({ checked, onChange, label, disabled, busy }: {
     >
       <span className="switch-track" aria-hidden />
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Action menu
+// ---------------------------------------------------------------------------
+export interface MenuItem {
+  label: string;
+  icon?: React.ReactNode;
+  onSelect?: () => void;
+  /** Opens this address in a new tab instead of running onSelect. */
+  href?: string;
+  tone?: 'danger';
+  disabled?: boolean;
+}
+
+/**
+ * The less-used actions on a row, behind one button, so a table row shows its
+ * main action and stays one line tall. Closes on Escape, on a click outside,
+ * and after a choice; arrow keys move between the items.
+ */
+export function ActionMenu({ items, label = 'More actions' }: { items: MenuItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEscape(open, () => setOpen(false));
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+    };
+  }, [open]);
+
+  const onKeys = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const els = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])'));
+    if (!els.length) return;
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    els[(i + (e.key === 'ArrowDown' ? 1 : els.length - 1) + els.length) % els.length].focus();
+  };
+
+  if (!items.length) return null;
+  return (
+    <div ref={root} className="action-menu">
+      <button
+        type="button" className="btn btn-sm btn-subtle action-menu-trigger"
+        aria-haspopup="menu" aria-expanded={open} aria-label={label}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="action-menu-list" role="menu" onKeyDown={onKeys}>
+          {items.map((item) => item.href ? (
+            <a
+              key={item.label} role="menuitem" className="action-menu-item" href={item.href}
+              target="_blank" rel="noreferrer" onClick={() => setOpen(false)}
+            >
+              {item.icon}<span>{item.label}</span>
+            </a>
+          ) : (
+            <button
+              key={item.label} type="button" role="menuitem" disabled={item.disabled}
+              aria-disabled={item.disabled || undefined}
+              className={`action-menu-item ${item.tone === 'danger' ? 'is-danger' : ''}`}
+              onClick={() => { setOpen(false); item.onSelect?.(); }}
+            >
+              {item.icon}<span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

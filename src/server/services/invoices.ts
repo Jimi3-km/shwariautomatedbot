@@ -217,6 +217,24 @@ export function invoiceDocData(business: any, inv: any): ReceiptImageData {
 const money = (n: unknown, currency: string) =>
   `${currency} ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/**
+ * The connection to send through for a conversation.
+ *
+ * A conversation remembers the channel it started on. When that channel has
+ * since been disconnected and connected again (a new row), the old one cannot
+ * send, and the message failed with "not connected" although the business is
+ * connected. So the conversation's own channel is used only while it is still
+ * active; otherwise the business's current connection of the same kind.
+ */
+export async function liveChannelId(tenantId: string, channelType: string, preferred: string | null | undefined): Promise<string | null> {
+  const { data } = await serviceClient.from('channels').select('id, created_at')
+    .eq('tenant_id', tenantId).eq('channel_type', channelType).eq('status', 'active')
+    .order('created_at', { ascending: false });
+  const active = data ?? [];
+  if (preferred && active.some((c) => c.id === preferred)) return preferred;
+  return active[0]?.id ?? null;
+}
+
 export interface SendInvoiceResult {
   sent: boolean;
   chat: { sent: boolean; channel?: string; file?: boolean; reason?: string };
@@ -279,12 +297,7 @@ export async function sendInvoice(tenantId: string, invoiceId: string): Promise<
       result.chat = { sent: true, channel: 'webchat', file: Boolean(pdf) };
     } else {
       const provider = getProvider(conv.channel_type);
-      let channelId = conv.channel_id;
-      if (!channelId) {
-        const { data: ch } = await serviceClient.from('channels').select('id')
-          .eq('tenant_id', tenantId).eq('channel_type', conv.channel_type).eq('status', 'active').limit(1);
-        channelId = ch?.[0]?.id ?? null;
-      }
+      const channelId = await liveChannelId(tenantId, conv.channel_type, conv.channel_id);
       if (!provider || !channelId) {
         result.chat.reason = 'That channel is no longer connected.';
       } else {

@@ -1,3 +1,4 @@
+import { liveChannelId } from './invoices.js';
 import { sendDocumentToCustomer } from '../channels/media.js';
 import { receiptImageUrl, receiptPdfUrl } from './receiptImage.js';
 import { sendImageToCustomer } from '../channels/media.js';
@@ -307,7 +308,8 @@ async function sendInChat(
   if (conv.channel_type === 'webchat') return { notified: true, channel: 'webchat', text, image: Boolean(imageUrl) };
 
   const provider = getProvider(conv.channel_type);
-  const channelId = conv.channel_id ?? (await activeChannel(input.tenantId, conv.channel_type));
+  // The conversation's own channel only while it is still connected.
+  const channelId = await liveChannelId(input.tenantId, conv.channel_type, conv.channel_id);
   if (!provider || !channelId) {
     await markFailed(input.tenantId, (row as any)?.id, extracted, 'That channel is no longer connected.');
     return { notified: false, reason: 'That channel is no longer connected.', text };
