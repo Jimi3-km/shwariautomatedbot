@@ -1668,4 +1668,5 @@ select.field.board-move {
 .action-menu-item:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 768px) { .action-menu-item { min-height: 44px; } }
 /* A table that scrolls sideways must not clip a menu opened in its last rows. */
-.card[data-scroll="x"]:has(.action-menu-list) { overflow: visible; }
+/* !important because the table wrapper sets its overflow inline. */
+.card[data-scroll="x"]:has(.action-menu-list) { overflow: visible !important; }
