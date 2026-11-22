@@ -291,6 +291,52 @@ export interface AppNotification {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Alerts to the owner's phone
+// ---------------------------------------------------------------------------
+export interface AlertRecipient {
+  id: string;
+  channel: 'whatsapp';
+  address: string;
+  label: string | null;
+  active: boolean;
+  last_sent_at: string | null;
+  last_error: string | null;
+}
+
+export interface AlertDelivery {
+  channel: 'whatsapp' | 'telegram';
+  to: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface AlertsConfig {
+  kinds: string[];
+  all_kinds: string[];
+  telegram_enabled: boolean;
+  recipients: AlertRecipient[];
+  whatsapp: { connected: boolean; number: string | null; template: string | null };
+  telegram: { connected: boolean; linked_chats: number };
+}
+
+export const getAlerts = () => request<AlertsConfig>('/alerts');
+
+export const updateAlerts = (body: { kinds?: string[]; telegram_enabled?: boolean }) =>
+  request<{ kinds: string[]; telegram: boolean }>('/alerts', { method: 'PUT', body });
+
+export const addAlertRecipient = (phone: string, label: string) =>
+  request<AlertRecipient>('/alerts/recipients', { method: 'POST', body: { phone, label } });
+
+export const setAlertRecipientActive = (id: string, active: boolean) =>
+  request<AlertRecipient>(`/alerts/recipients/${id}`, { method: 'PATCH', body: { active } });
+
+export const removeAlertRecipient = (id: string) =>
+  request<{ ok: boolean }>(`/alerts/recipients/${id}`, { method: 'DELETE' });
+
+export const sendTestAlert = () =>
+  request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST' });
+
 export const getNotifications = () =>
   request<{ notifications: AppNotification[]; unread: number }>('/notifications');
 

@@ -423,3 +423,81 @@ export async function sendWhatsAppTemplate(
     signal: AbortSignal.timeout(15_000),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Message templates
+// ---------------------------------------------------------------------------
+
+export interface WhatsAppTemplateState {
+  /** APPROVED, PENDING, REJECTED, PAUSED, DISABLED; null when it does not exist. */
+  status: string | null;
+  language: string | null;
+}
+
+/** Does a template with this name exist on the account, and is it approved? */
+export async function getTemplateState(
+  wabaId: string,
+  accessToken: string,
+  name: string
+): Promise<WhatsAppTemplateState> {
+  const json = await graph<{ data?: Array<{ name: string; status?: string; language?: string }> }>(
+    `/${wabaId}/message_templates?${new URLSearchParams({ name, fields: 'name,status,language', access_token: accessToken })}`,
+    { signal: AbortSignal.timeout(12_000) }
+  );
+  // The name filter is a "contains" match, so pick the exact one.
+  const exact = (json.data ?? []).filter((t) => t.name === name);
+  const best = exact.find((t) => t.status === 'APPROVED') ?? exact[0];
+  return { status: best?.status ?? null, language: best?.language ?? null };
+}
+
+/**
+ * Ask WhatsApp to approve a utility template with a text body.
+ *
+ * `body` uses {{1}}, {{2}}… placeholders and `examples` gives one sample value
+ * for each, which WhatsApp requires in order to review it.
+ */
+export async function createTextTemplate(
+  wabaId: string,
+  accessToken: string,
+  template: { name: string; language: string; body: string; examples: string[] }
+): Promise<{ status: string | null }> {
+  const json = await graph<{ id?: string; status?: string }>(`/${wabaId}/message_templates`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({
+      name: template.name,
+      language: template.language,
+      category: 'UTILITY',
+      components: [{ type: 'BODY', text: template.body, example: { body_text: [template.examples] } }],
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { status: json.status ?? null };
+}
+
+/** Send an approved template whose body takes several text values. */
+export async function sendWhatsAppTemplateValues(
+  accessToken: string,
+  phoneNumberId: string,
+  to: string,
+  template: { name: string; language: string },
+  values: string[]
+): Promise<void> {
+  // Template values may not contain newlines, tabs or long runs of spaces.
+  const clean = (v: string) => v.replace(/\s+/g, ' ').trim().slice(0, 900) || '-';
+  await graph(`/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        components: [{ type: 'body', parameters: values.map((v) => ({ type: 'text', text: clean(v) })) }],
+      },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+}

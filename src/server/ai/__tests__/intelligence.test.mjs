@@ -1319,6 +1319,17 @@ await t('agents answer only for a business that is live', async () => {
   assert.equal(await check(null), true, 'an unreadable status must not silence a business');
 });
 
+const { normalisePhone } = await import('../../services/alerts.js');
+
+await t('an alert number needs its country code', () => {
+  assert.equal(normalisePhone('+254 712 345 678'), '254712345678');
+  assert.equal(normalisePhone('00254712345678'), '254712345678');
+  assert.equal(normalisePhone('254-712-345678'), '254712345678');
+  assert.equal(normalisePhone('0712345678'), null, 'a national number: the country cannot be guessed');
+  assert.equal(normalisePhone('12345'), null);
+  assert.equal(normalisePhone('not a number'), null);
+});
+
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
   assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
   assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));

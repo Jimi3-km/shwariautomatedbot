@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CreditCard, LifeBuoy, MessageSquare, ShoppingCart, BadgeCheck, Megaphone } from 'lucide-react';
+import { Bell, CreditCard, LifeBuoy, MessageSquare, ShoppingCart, BadgeCheck, Megaphone, X } from 'lucide-react';
 import { getNotifications, markNotificationsRead, type AppNotification } from '../lib/api';
 import { useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
+import { showDesktopAlert } from '../lib/desktopAlerts';
 
 /**
  * The bell: a dropdown of what has happened, rather than a link to one page.
@@ -49,14 +50,47 @@ export function NotificationsBell() {
   const [loaded, setLoaded] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // Pop-ups: what has arrived since this tab last looked. The first load
+  // only records what is already there, so opening the dashboard does not
+  // replay old news.
+  const [popups, setPopups] = useState<AppNotification[]>([]);
+  const seen = useRef<Set<string> | null>(null);
+  const navRef = useRef(navigate);
+  navRef.current = navigate;
+
+  const dismiss = useCallback((id: string) => setPopups((p) => p.filter((n) => n.id !== id)), []);
+
   const load = useCallback(() => {
     getNotifications()
-      .then((r) => { setItems(r.notifications); setUnread(r.unread); setLoaded(true); })
+      .then((r) => {
+        setItems(r.notifications); setUnread(r.unread); setLoaded(true);
+        if (seen.current === null) {
+          seen.current = new Set(r.notifications.map((n) => n.id));
+          return;
+        }
+        const fresh = r.notifications.filter((n) => !n.read_at && !seen.current!.has(n.id));
+        for (const n of r.notifications) seen.current.add(n.id);
+        if (!fresh.length) return;
+        setPopups((p) => [...fresh.reverse(), ...p].slice(0, 4));
+        for (const n of fresh) {
+          setTimeout(() => dismiss(n.id), 12_000);
+          if (document.hidden) {
+            showDesktopAlert(n.title, n.body, () => { if (n.link) navRef.current(n.link); });
+          }
+        }
+      })
       .catch(() => setLoaded(true));
-  }, []);
+  }, [dismiss]);
 
   useEffect(() => { load(); }, [load]);
-  useVisiblePolling(load, 30_000, true);
+  // Checked often, and in the background too: a payment waiting to be
+  // verified should not sit unseen for half a minute.
+  useEffect(() => {
+    const timer = setInterval(load, 15_000);
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [load]);
 
   // Close on a click anywhere else, and on Escape.
   useEffect(() => {
@@ -94,6 +128,33 @@ export function NotificationsBell() {
 
   return (
     <div ref={rootRef} style={{ position: 'relative' }}>
+      {popups.length > 0 && (
+        <div className="notice-stack" role="region" aria-label="New notifications" aria-live="polite">
+          {popups.map((n) => {
+            const Icon = ICONS[n.kind] ?? Bell;
+            return (
+              <div key={n.id} className="notice-card">
+                <button
+                  type="button" className="notice-main"
+                  onClick={() => { dismiss(n.id); if (n.link) navigate(n.link); }}
+                >
+                  <span className="notification-icon" style={{ color: TONE[n.kind] ?? 'var(--text-2)' }}>
+                    <Icon size={16} />
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                    <span className="notice-title">{n.title}</span>
+                    {n.body && <span className="notice-body">{n.body}</span>}
+                    {n.link && <span className="notice-action">View</span>}
+                  </span>
+                </button>
+                <button type="button" className="notice-close" aria-label="Dismiss" onClick={() => dismiss(n.id)}>
+                  <X size={14} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <button
         type="button"
         onClick={toggle}

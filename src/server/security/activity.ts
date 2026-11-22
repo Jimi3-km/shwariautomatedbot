@@ -19,6 +19,7 @@ const SKIP: RegExp[] = [
   /^\/notifications\/read$/,
   /^\/payments\/[^/]+\/verify$/,
   /^\/team(\/|$)/,
+  /^\/alerts\/(recipients|test)/,
   /^\/invitations\//,
   /^\/shwari\/chat$/,
   /^\/platform\//,
@@ -71,6 +72,7 @@ const SUMMARY: Record<string, string> = {
   'PUT /posting-settings': 'Changed the posting settings',
   'PATCH /posting-settings': 'Changed the posting settings',
   'POST /onboarding/complete': 'Finished setting up the business',
+  'PUT /alerts': 'Changed which alerts are sent',
 };
 
 export function recordActivity(req: Request, res: Response, next: NextFunction) {

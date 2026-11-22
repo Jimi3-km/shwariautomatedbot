@@ -1555,3 +1555,36 @@ select.field.board-move {
 }
 .shell-banner-support { background: var(--info-bg); color: var(--text); }
 .shell-banner-notice { background: var(--warning-bg, var(--surface-2)); color: var(--text); }
+
+/* Pop-up notifications: news that arrives while the dashboard is open. */
+.notice-stack {
+  position: fixed; top: 64px; right: 16px; z-index: 900;
+  display: grid; gap: 8px; width: min(360px, calc(100vw - 32px));
+}
+.notice-card {
+  display: flex; align-items: flex-start; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  animation: notice-in 0.22s ease-out;
+}
+.notice-main {
+  flex: 1; min-width: 0; display: flex; gap: 10px; align-items: flex-start;
+  padding: 11px 6px 11px 12px; background: none; border: 0; color: inherit;
+  cursor: pointer; font: inherit; border-radius: var(--radius);
+}
+.notice-main:focus-visible, .notice-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.notice-title { display: block; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.notice-body { display: block; font-size: 12.5px; color: var(--text-2); line-height: 1.45; margin-top: 2px; overflow-wrap: anywhere; }
+.notice-action { display: inline-block; font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 5px; }
+.notice-close {
+  flex-shrink: 0; margin: 6px 6px 0 0; width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm);
+}
+.notice-close:hover { color: var(--text); background: var(--surface-2); }
+@keyframes notice-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@media (max-width: 768px) {
+  .notice-stack { top: 58px; right: 12px; left: 12px; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .notice-card { animation: none; } }

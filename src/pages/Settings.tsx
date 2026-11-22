@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Save, LogOut, Plus, X } from 'lucide-react';
 import { getBusiness, updateBusiness, getSupabase } from '../lib/api';
 import { TeamPanel } from '../components/TeamPanel';
+import { AlertsPanel } from '../components/AlertsPanel';
 import type { Tenant } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -65,6 +66,8 @@ export function Settings() {
         <div style={{ maxWidth: 720, margin: '0 auto' }}>
           {tab === 'team' ? (
             <TeamPanel />
+          ) : tab === 'notifications' ? (
+            <AlertsPanel />
           ) : tab === 'account' ? (
             <AccountSection />
           ) : (
@@ -194,30 +197,6 @@ function BusinessForm({
               pairs={form.contact_info} disabled={ro}
               onChange={(v) => set('contact_info', v)}
               placeholderKey="phone" placeholderValue="+254…" />
-          </div>
-        </Card>
-      )}
-
-      {tab === 'notifications' && (
-        <Card>
-          <div style={{ display: 'grid', gap: 12 }}>
-            <Field label="Send alerts via">
-              <Select
-                value={form.notification_channel} disabled={ro}
-                onChange={(e) => set('notification_channel', e.target.value)}
-                options={[
-                  { value: 'telegram', label: 'Telegram' },
-                  { value: 'whatsapp', label: 'WhatsApp' },
-                ]}
-              />
-            </Field>
-            <Field
-              label="Send alerts to"
-              hint="Your chat ID on that channel. New leads and payment claims are sent here."
-            >
-              <Input value={form.notification_target} disabled={ro}
-                onChange={(e) => set('notification_target', e.target.value)} />
-            </Field>
           </div>
         </Card>
       )}

@@ -1,3 +1,5 @@
+import { runInBackground } from './background.js';
+import { deliverAlert } from './alerts.js';
 import { serviceClient } from '../supabase.js';
 
 /**
@@ -45,7 +47,14 @@ export async function notify(input: NotifyInput): Promise<boolean> {
       link: input.link ?? null,
       ref_id: input.refId ?? null,
     });
-    if (!error) return true;
+    if (!error) {
+      // The same news goes to the owner's phone. Sent after the response, so
+      // a slow WhatsApp call never holds up the thing being announced.
+      void runInBackground('alerts', () =>
+        deliverAlert(input.tenantId, input.kind, { title: input.title, body: input.body, link: input.link })
+      );
+      return true;
+    }
     if (error.code === '23505') return false; // already announced
     if (missing(error)) { available = false; return false; }
     // 23514: the kind is newer than the table's check constraint (migration
