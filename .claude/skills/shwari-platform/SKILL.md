@@ -138,6 +138,44 @@ it is about, where it may be posted, an approval state, and how often it may
 be reused. The agent chooses what to post from approved items; it writes
 captions only as drafts for approval, grounded in the catalogue.
 
+## Accounts and access
+
+Decided 22 Nov 2026. Two levels that never mix.
+
+**Platform admin.** Runs the platform; is not a member of any business. The
+flag lives on the user and is granted in the database only, never in the app.
+Sees every business, including its customer conversations, at all times.
+Owns everything technical: Meta configuration and the setup check, webhooks,
+the model, email delivery, the scheduler. Can approve, suspend or reactivate
+a business, pause its agents and disconnect a broken channel. Every platform
+admin action inside a business is written to that business's audit log.
+
+**Business roles.** One owner per business, who invites staff by email.
+
+| Role | Can | Cannot |
+|---|---|---|
+| Owner | Everything in their business: staff, billing, delete | See another business |
+| Manager | Connect channels, configure agents, payment details, catalogue, approve posts, verify payments | Add or remove staff, billing, delete |
+| Staff | Inbox replies, take over from an agent, leads, orders, bookings, verify payments | Settings, agents, channels, payment details |
+| Viewer | Read reports, orders, payments, receipts | Change anything or reply to a customer |
+
+Rules:
+
+- A business user never sees an environment variable, a callback address or a
+  Meta dashboard instruction. On Integrations they get Connect, Check and
+  Disconnect. A platform-side fault reads "This is a problem on our side;
+  we've been notified", and the platform admin gets the detail.
+- Whoever verifies a payment, replies to a customer or changes a setting is
+  recorded by name.
+- Channels are connected by the owner or a manager.
+- One person may belong to several businesses and switches between them.
+- A new business signs up freely but stays pending, with agents off, until the
+  platform admin approves it.
+- Shwari takes instructions on Telegram from the owner and managers only.
+- Removing a person cuts their access at once. Invitations expire.
+- Access is enforced on the server and in database policies; hiding a button
+  is never the control.
+
 ## Build conventions
 
 - **Stack:** React 19 + Vite + Tailwind 4; Express on Vercel (`api/index.ts`);

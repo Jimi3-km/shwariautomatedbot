@@ -58,6 +58,35 @@ back for a false claim more than once in 200 turns.
 
 ---
 
+## Phase A - Accounts and access (before taking on real businesses)
+
+Decided 22 Nov 2026; the rules are in the platform skill file under
+"Accounts and access". Built in this order, each step shippable on its own:
+
+1. **Platform admin.** A flag on the user set in the database; a server check
+   for it; move the Meta setup check, webhook switch and readiness page behind
+   it. Business users see only Connect, Check and Disconnect.
+2. **Business roles.** Relabel the four existing roles (owner, manager, staff,
+   viewer), apply the table to every route and database policy, and hide what
+   a role cannot use.
+3. **Staff invitations.** Invite by email with an expiring link, change a
+   role, remove a person, transfer ownership. A Team page under Settings.
+4. **Platform console.** List of businesses with channel health, volumes and
+   flags; open any business and its conversations; approve, suspend, pause
+   agents, disconnect a channel.
+5. **Sign-up approval.** New businesses are pending until approved; the
+   platform admin is notified.
+6. **Audit log.** Who did what, for staff and for platform admin actions;
+   names on replies and payment verifications.
+7. **Platform-fault notices.** A fault on our side notifies the platform admin
+   with the detail and shows the business a plain message.
+
+Open: billing and plan limits per business; whether owners can see the log of
+platform admin visits (recommended, and worth stating in the privacy terms
+since the platform admin can read customer conversations).
+
+---
+
 ## Phase 1 - Marketing agent: publishing
 
 *The agent posts; it does not yet talk.*
