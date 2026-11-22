@@ -15,6 +15,7 @@ const LandingPage = lazy(() => import('./pages/LandingPage').then((m) => ({ defa
 const Onboarding = lazy(() => import('./pages/Onboarding').then((m) => ({ default: m.Onboarding })));
 const Platform = lazy(() => import('./pages/Platform').then((m) => ({ default: m.Platform })));
 const ConnectResult = lazy(() => import('./components/ConnectHelp').then((m) => ({ default: m.ConnectResult })));
+const LegalPage = lazy(() => import('./pages/Legal').then((m) => ({ default: m.LegalPage })));
 
 /**
  * Did this browser arrive from the end of a channel sign-in? The server sends
@@ -53,6 +54,7 @@ function clearInvite(): void {
 }
 captureInvite();
 import type { Me } from './types';
+import { legalRoute } from './pages/legalRoute';
 
 type Status = 'booting' | 'signed-out' | 'recovery' | 'onboarding' | 'ready' | 'error';
 
@@ -213,7 +215,12 @@ export default function App() {
   }, []);
 
   let content: React.ReactNode;
-  if (status === 'booting') {
+  // Privacy, terms and data deletion are public pages: shown to anyone, at
+  // once, without waiting to find out whether they are signed in.
+  const legal = legalRoute();
+  if (legal) {
+    content = <LegalPage kind={legal} />;
+  } else if (status === 'booting') {
     content = <Centered><LoadingState label="Starting…" /></Centered>;
   } else if (status === 'error') {
     content = (

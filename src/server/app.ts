@@ -29,6 +29,7 @@ import { alertsRouter } from './routes/alerts.js';
 import { receiptSettingsRouter } from './routes/receiptSettings.js';
 import { activityRouter } from './routes/activity.js';
 import { invoicesRouter } from './routes/invoices.js';
+import { dataDeletionRouter, metaRemovalRouter } from './routes/dataDeletion.js';
 import { recordActivity } from './security/activity.js';
 
 export function createApp() {
@@ -102,7 +103,16 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ supabase_url: SUPABASE_URL, supabase_anon_key: SUPABASE_ANON_KEY });
+    res.json({
+      supabase_url: SUPABASE_URL,
+      supabase_anon_key: SUPABASE_ANON_KEY,
+      // Who operates the service and how to reach them, for the public
+      // privacy, terms and data-deletion pages. Not secrets.
+      legal: {
+        operator: (process.env.LEGAL_OPERATOR_NAME ?? '').trim() || null,
+        contact_email: (process.env.LEGAL_CONTACT_EMAIL ?? '').trim() || null,
+      },
+    });
   });
 
   // Instagram OAuth is a pre-authentication browser redirect flow: there is no
@@ -118,6 +128,9 @@ export function createApp() {
    * a dashboard session, and none may be reached by a browser, so each does its
    * own check rather than borrowing requireAuth.
    */
+  // Meta's "this person removed your app" and "delete this person's data"
+  // calls. Signed by Meta; mounted here so the body arrives as raw bytes.
+  app.use('/api', metaRemovalRouter);
   app.use('/api', metaWebhookRouter);
   app.use('/api', telegramWebhookRouter);
   app.use('/api', brevoWebhookRouter);
@@ -129,6 +142,10 @@ export function createApp() {
    * against the channel's own secret, and rate-limits every route.
    */
   app.use('/api', webchatRouter);
+
+  // Asking for data to be deleted, and following such a request, are open to
+  // anyone: the person asking may have no account here at all.
+  app.use('/api', dataDeletionRouter);
 
   // Applied before every router: a client that tries to steer tenancy gets a
   // 400 rather than having the field quietly ignored.

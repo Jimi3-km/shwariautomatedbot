@@ -544,6 +544,11 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
       <footer className="lp-footer">
         <div className="lp-w lp-footer-row">
           <div className="lp-brand"><Bot size={20} aria-hidden="true" /><span>Shwari</span></div>
+          <nav className="lp-footer-links" aria-label="Legal">
+            <a href="/privacy">Privacy</a>
+            <a href="/terms">Terms</a>
+            <a href="/data-deletion">Delete your data</a>
+          </nav>
           <p>&copy; {new Date().getFullYear()} Shwari. All rights reserved.</p>
         </div>
       </footer>

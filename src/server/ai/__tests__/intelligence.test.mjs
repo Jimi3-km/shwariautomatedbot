@@ -1426,6 +1426,35 @@ await t('a browser inside another app is told apart from a real one', () => {
   assert.equal(stateOf('not a url'), null);
 });
 
+const { readSignedRequest } = await import('../../routes/dataDeletion.js');
+const nodeCrypto = await import('node:crypto');
+
+await t('a removal or deletion call from Meta is only believed when its signature checks out', () => {
+  const enc = (v) => Buffer.from(v).toString('base64url');
+  const sign = (payload, secret) => {
+    const body = enc(JSON.stringify(payload));
+    const sig = nodeCrypto.createHmac('sha256', secret).update(body).digest('base64url');
+    return `${sig}.${body}`;
+  };
+  const payload = { algorithm: 'HMAC-SHA256', user_id: '17841400000000000', issued_at: 1795000000 };
+  const good = sign(payload, 'app-secret');
+
+  assert.equal(readSignedRequest(good, ['app-secret']).user_id, '17841400000000000');
+  assert.equal(readSignedRequest(good, ['other', 'app-secret']).user_id, '17841400000000000', 'the Instagram secret is tried as well');
+  assert.equal(readSignedRequest(good, ['wrong-secret']), null, 'signed with a different secret');
+  assert.equal(readSignedRequest(good, ['']), null, 'an unset secret verifies nothing');
+
+  // The payload swapped for another, keeping the old signature.
+  const [sig] = good.split('.');
+  const forged = `${sig}.${enc(JSON.stringify({ ...payload, user_id: 'someone-else' }))}`;
+  assert.equal(readSignedRequest(forged, ['app-secret']), null, 'a changed payload must not verify');
+
+  assert.equal(readSignedRequest(sign({ ...payload, algorithm: 'none' }, 'app-secret'), ['app-secret']), null, 'only HMAC-SHA256 is accepted');
+  assert.equal(readSignedRequest('no-dot-here', ['app-secret']), null);
+  assert.equal(readSignedRequest(undefined, ['app-secret']), null);
+  assert.equal(readSignedRequest('x'.repeat(9000), ['app-secret']), null);
+});
+
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
   assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
   assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));
