@@ -54,7 +54,7 @@ accountRouter.get(
       .order('created_at', { ascending: true })
       .order('tenant_id', { ascending: true });
 
-    const { data: tenant } = await ctx.db
+    const { data: tenant, error: tenantErr } = await ctx.db
       .from('tenants')
       .select(
         'id, business_name, slug, currency, timezone, agent_name, order_prefix, status, ' +
@@ -62,6 +62,14 @@ accountRouter.get(
       )
       .eq('id', ctx.tenantId)
       .single();
+
+    // The caller belongs to this business, so failing to read it is a fault,
+    // never "no business yet". Answering with an empty tenant sent every user
+    // back into the setup wizard when a column could not be read.
+    if (tenantErr || !tenant) {
+      console.error('[account] /me could not read the business:', tenantErr?.code, tenantErr?.message);
+      return res.status(500).json({ error: 'Your business could not be loaded. Please try again.', code: 'TENANT_READ_FAILED' });
+    }
 
     res.json({
       user: { id: ctx.userId, email: ctx.email },
