@@ -1407,6 +1407,25 @@ await t('a paid invoice says so', () => {
   assert.ok(!svg.includes('HOW TO PAY'), 'nothing left to pay');
 });
 
+const { classifyUserAgent, stateOf } = await import('../../services/connectAttempts.js');
+
+await t('a browser inside another app is told apart from a real one', () => {
+  const IOS = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)';
+  assert.deepEqual(classifyUserAgent(`${IOS} Version/17.5 Mobile/15E148 Safari/604.1`), { device: 'ios', browser: 'safari' });
+  assert.deepEqual(classifyUserAgent(`${IOS} CriOS/125.0 Mobile/15E148 Safari/604.1`), { device: 'ios', browser: 'chrome' });
+  assert.deepEqual(classifyUserAgent(`${IOS} Mobile/21F90 Instagram 334.0.4.32.98 (iPhone15,2; iOS 17_5)`), { device: 'ios', browser: 'in_app:instagram' });
+  assert.deepEqual(classifyUserAgent(`${IOS} Mobile/21F90 [FBAN/FBIOS;FBAV/465.0.0;FBBV/1]`), { device: 'ios', browser: 'in_app:facebook' });
+  assert.deepEqual(classifyUserAgent(`${IOS} Mobile/15E148`), { device: 'ios', browser: 'in_app:webview' }, 'no "Safari" on iOS means a web view');
+  const AND = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko)';
+  assert.deepEqual(classifyUserAgent(`${AND} Chrome/125.0 Mobile Safari/537.36`), { device: 'android', browser: 'chrome' });
+  assert.deepEqual(classifyUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0 Mobile Safari/537.36'), { device: 'android', browser: 'in_app:webview' });
+  assert.deepEqual(classifyUserAgent(`${AND} SamsungBrowser/25.0 Chrome/121.0 Mobile Safari/537.36`), { device: 'android', browser: 'samsung' });
+  assert.equal(classifyUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36').device, 'desktop');
+  assert.equal(classifyUserAgent(undefined).device, 'other');
+  assert.equal(stateOf('https://www.instagram.com/oauth/authorize?client_id=1&state=abc.def'), 'abc.def');
+  assert.equal(stateOf('not a url'), null);
+});
+
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
   assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
   assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));

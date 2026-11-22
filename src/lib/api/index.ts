@@ -116,6 +116,23 @@ export const getEmailCheck = () =>
 export const sendTestEmail = () =>
   request<{ accepted: boolean; to: string; from: string; error: string | null }>('/platform/email-test', { method: 'POST' });
 
+export interface ConnectAttempt {
+  id: number;
+  business_name: string | null;
+  provider: string;
+  start_device: string;
+  start_browser: string;
+  return_device: string | null;
+  return_browser: string | null;
+  outcome: string;
+  detail: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** Recent attempts to connect a channel, for diagnosing "it didn't work on my phone". */
+export const getConnectAttempts = () => request<{ attempts: ConnectAttempt[] }>('/platform/connect-attempts');
+
 export const resolvePlatformAlert = (id: number) =>
   request<{ ok: boolean }>(`/platform/alerts/${id}/resolve`, { method: 'POST' });
 

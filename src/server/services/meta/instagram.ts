@@ -119,6 +119,11 @@ export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
     response_type: 'code',
     scope: SCOPES.join(','),
     state,
+    // Always ask which account. A phone's browser is usually already signed in
+    // to someone's personal Instagram; without this the wrong account is used
+    // without a word, and the connection then fails as "not a business
+    // account" or connects the wrong page.
+    force_reauth: 'true',
   });
   // The consent window lives on www.instagram.com, not the API host.
   return `${INSTAGRAM_AUTHORIZE_URL}/oauth/authorize?${params}`;

@@ -1,3 +1,6 @@
+import { detectInAppBrowser, type InAppBrowser } from '../lib/inAppBrowser';
+import { OpenInBrowserDialog } from '../components/ConnectHelp';
+import { getFacebookPages } from '../lib/api';
 import React, { useEffect, useState } from 'react';
 import {
   Send, MessageCircle, Instagram, Facebook, Globe, CheckCircle2, ExternalLink, Plug,
@@ -71,9 +74,25 @@ export function Integrations() {
 
   /** OAuth providers hand back a URL for the browser to follow. */
   const beginOAuth = useMutation(async (provider: ProviderId) => {
+    // Meta's sign-in does not work inside another app's built-in browser.
+    const inApp = detectInAppBrowser();
+    if (inApp) { setConfirming(null); setWrongBrowser(inApp); return; }
     const result = await startChannelConnect(provider);
     if (result.mode === 'oauth') window.location.href = `/api/go?to=${encodeURIComponent(result.authorize_url)}`;
   });
+  const [wrongBrowser, setWrongBrowser] = useState<InAppBrowser | null>(null);
+
+  // A Facebook sign-in finished in another browser leaves a Page still to be
+  // chosen. This browser never saw the return, so it asks.
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    getFacebookPages()
+      .then((r) => { if (!cancelled && r.pages.length > 0) setPickingPage(true); })
+      .catch(() => { /* nothing waiting */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const providerInfo = (id: ProviderId): ChannelProviderInfo | undefined =>
     providers.data?.providers.find((p) => p.id === id);
@@ -218,6 +237,8 @@ export function Integrations() {
         onClose={() => setConfirming(null)}
         onConfirm={() => confirming && beginOAuth.run(confirming)}
       />
+
+      <OpenInBrowserDialog browser={wrongBrowser} onClose={() => setWrongBrowser(null)} />
 
       <FacebookPagePicker
         open={pickingPage}

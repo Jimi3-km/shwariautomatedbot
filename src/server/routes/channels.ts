@@ -1,3 +1,4 @@
+import { recordConnectFinish, recordConnectStart, stateOf } from '../services/connectAttempts.js';
 import { raisePlatformAlert, OUR_SIDE_MESSAGE } from '../services/platform.js';
 import { safeReturnOrigin, requestOrigin } from '../config/origins.js';
 import { Router } from 'express';
@@ -236,7 +237,15 @@ channelsRouter.post(
     try {
       // Remember which of our addresses they are on, so the return leg brings
       // them back to it rather than to the domain Meta redirects to.
-      res.json(await provider.connect({ ...req.ctx!, returnTo: safeReturnOrigin(requestOrigin(req)) }));
+      const started = await provider.connect({ ...req.ctx!, returnTo: safeReturnOrigin(requestOrigin(req)) });
+      if (started.mode === 'oauth') {
+        // Written down now, so an attempt that never comes back is still visible.
+        void recordConnectStart({
+          tenantId: req.ctx!.tenantId, provider: provider.id,
+          state: stateOf(started.authorize_url), userAgent: req.get('user-agent'),
+        });
+      }
+      res.json(started);
     } catch (e) {
       sendProviderError(res, e, "We couldn't start that connection. Please try again.");
     }
@@ -296,14 +305,23 @@ channelsRouter.get(
     const state = params.state ? verifyOAuthState(params.state) : null;
     const home = safeReturnOrigin(state?.returnTo) ?? '';
 
-    const back = (status: string) =>
-      res.redirect(302, `${home}/integrations?connect=${encodeURIComponent(providerId)}&status=${status}`);
+    const back = (status: string, detail?: string) => {
+      // How it ended, and in which browser Meta sent the person back.
+      void recordConnectFinish({
+        state: params.state, provider: providerId, tenantId: state?.tenantId ?? null,
+        outcome: status, detail: detail ?? null, userAgent: req.get('user-agent'),
+      });
+      return res.redirect(302, `${home}/integrations?connect=${encodeURIComponent(providerId)}&status=${status}`);
+    };
 
     if (!provider?.callback) return back('unknown');
 
     if (params.error) {
       console.log(`[channels] ${providerId} authorization declined: ${params.error}`);
-      return back(params.error === 'access_denied' ? 'cancelled' : 'failed');
+      return back(
+        params.error === 'access_denied' ? 'cancelled' : 'failed',
+        [params.error, params.error_reason, params.error_description].filter(Boolean).join(' / ')
+      );
     }
 
     if (!state || state.provider !== providerId) {
@@ -321,6 +339,7 @@ channelsRouter.get(
     } catch (e) {
       if (e instanceof ProviderError) {
         console.warn(`[channels] ${providerId} callback failed (${e.code}): ${e.message}`);
+        const why = `${e.code}: ${e.message}`;
         if (OUR_SIDE_CODES.has(e.code)) {
           void raisePlatformAlert({
             kind: 'channel_setup', tenantId: state.tenantId,
@@ -328,9 +347,9 @@ channelsRouter.get(
             summary: `A business could not connect ${provider.label} because of the platform's own setup (${e.code}).`,
             detail: e.message,
           });
-          return back('platform_fault');
+          return back('platform_fault', why);
         }
-        return back(e.code === 'PROVIDER_ERROR' ? 'failed' : e.code.toLowerCase());
+        return back(e.code === 'PROVIDER_ERROR' ? 'failed' : e.code.toLowerCase(), why);
       }
       console.error(`[channels] ${providerId} callback failed:`, e);
       void raisePlatformAlert({
@@ -338,7 +357,7 @@ channelsRouter.get(
         summary: `Connecting ${provider.label} failed unexpectedly.`,
         detail: e instanceof Error ? e.message : String(e),
       });
-      return back('failed');
+      return back('failed', e instanceof Error ? e.message : String(e));
     }
   })
 );

@@ -14,6 +14,19 @@ import {
 const LandingPage = lazy(() => import('./pages/LandingPage').then((m) => ({ default: m.LandingPage })));
 const Onboarding = lazy(() => import('./pages/Onboarding').then((m) => ({ default: m.Onboarding })));
 const Platform = lazy(() => import('./pages/Platform').then((m) => ({ default: m.Platform })));
+const ConnectResult = lazy(() => import('./components/ConnectHelp').then((m) => ({ default: m.ConnectResult })));
+
+/**
+ * Did this browser arrive from the end of a channel sign-in? The server sends
+ * it to /integrations?connect=<channel>&status=<how it ended>.
+ */
+function connectReturn(): { provider: string; status: string } | null {
+  if (!window.location.pathname.startsWith('/integrations')) return null;
+  const q = new URLSearchParams(window.location.search);
+  const provider = q.get('connect');
+  const status = q.get('status');
+  return provider && status && /^[a-z_]{2,40}$/.test(status) && /^[a-z]{2,20}$/.test(provider) ? { provider, status } : null;
+}
 
 /**
  * A staff invitation arrives as ?invite=<token>. It is taken out of the
@@ -61,6 +74,8 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inviteNote, setInviteNote] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  // Read once, before anything rewrites the address bar.
+  const [returned, setReturned] = useState(connectReturn);
 
   // Say what the invitation is for before the person has signed in.
   useEffect(() => {
@@ -205,6 +220,16 @@ export default function App() {
       <Centered>
         <ErrorState message={error ?? 'Unknown error'} onRetry={() => window.location.reload()} />
       </Centered>
+    );
+  } else if (status === 'signed-out' && returned) {
+    // A phone often finishes Meta's sign-in in a different browser from the
+    // one the dashboard is open in. Showing the public home page there looked
+    // like a failure even when the channel had connected.
+    content = (
+      <ConnectResult
+        provider={returned.provider} status={returned.status}
+        onSignIn={() => { window.history.replaceState({}, '', '/'); setReturned(null); }}
+      />
     );
   } else if (status === 'signed-out') {
     content = <LandingPage onSignedIn={loadSession} />;

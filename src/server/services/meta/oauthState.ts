@@ -14,7 +14,10 @@ import { metaConfig } from '../../config/meta.js';
  * no tenant because no session exists yet at that point.
  */
 
-const MAX_AGE_MS = 10 * 60 * 1000; // short-lived by design
+// Short-lived by design, but long enough for a phone: signing in to Meta
+// there can mean finding a password, a code by text and switching accounts,
+// which ran past the previous ten minutes and ended in "that took too long".
+const MAX_AGE_MS = 30 * 60 * 1000;
 const SEPARATOR = '~';
 
 export interface OAuthStatePayload {

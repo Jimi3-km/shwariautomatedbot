@@ -202,6 +202,25 @@ platformRouter.post(
   })
 );
 
+/** Recent attempts to connect a channel: what device, what browser, how it ended. */
+platformRouter.get(
+  '/platform/connect-attempts',
+  requirePlatformAdmin,
+  handler(async (_req, res) => {
+    const { data, error } = await serviceClient
+      .from('connect_attempts')
+      .select('id, tenant_id, provider, start_device, start_browser, return_device, return_browser, outcome, detail, started_at, finished_at')
+      .order('started_at', { ascending: false }).limit(40);
+    if (error) return res.json({ attempts: [] });
+    const ids = [...new Set((data ?? []).map((a) => a.tenant_id).filter(Boolean))];
+    const { data: names } = ids.length
+      ? await serviceClient.from('tenants').select('id, business_name').in('id', ids)
+      : { data: [] as Array<{ id: string; business_name: string }> };
+    const nameOf = new Map((names ?? []).map((t) => [t.id, t.business_name]));
+    res.json({ attempts: (data ?? []).map((a) => ({ ...a, business_name: a.tenant_id ? nameOf.get(a.tenant_id) ?? null : null })) });
+  })
+);
+
 /** Mark a platform fault as dealt with. */
 platformRouter.post(
   '/platform/alerts/:id/resolve',

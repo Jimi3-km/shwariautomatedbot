@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Building2, Check, LogIn, Pause, Play, ShieldCheck } from 'lucide-react';
 import {
-  getPlatformOverview, setBusinessStatus, setBusinessAgentsPaused, resolvePlatformAlert,
+  getPlatformOverview, setBusinessStatus, setBusinessAgentsPaused, resolvePlatformAlert, getConnectAttempts,
   type PlatformBusiness,
 } from '../lib/api';
 import { useAsync, useMutation } from '../hooks';
@@ -224,6 +224,7 @@ export function Platform() {
           <div className="section-label" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <ShieldCheck size={14} /> Platform setup
           </div>
+          <ConnectAttempts />
           <SetupReadinessPanel />
           <EmailCheck />
           <MetaSetupCheck />
@@ -240,5 +241,65 @@ export function Platform() {
         onCancel={() => setSuspending(null)}
       />
     </>
+  );
+}
+
+const OUTCOME_TONE: Record<string, PillTone> = { connected: 'success', pick_page: 'success', started: 'warning', cancelled: 'neutral' };
+const browserName = (b: string | null) =>
+  !b ? '' : b.startsWith('in_app:') ? `inside ${b.slice(7).replace('_', ' ')}` : b;
+
+/**
+ * Recent attempts to connect a channel: where each started, where Meta sent
+ * the person back, and how it ended. "Started" with nothing after it means
+ * they never came back from Meta's pages.
+ */
+function ConnectAttempts() {
+  const state = useAsync(() => getConnectAttempts(), []);
+  const [open, setOpen] = useState(false);
+  const attempts = state.data?.attempts ?? [];
+  const troubled = attempts.filter((a) => a.outcome !== 'connected' && a.outcome !== 'pick_page' && a.outcome !== 'cancelled').length;
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Channel connection attempts</span>
+            {attempts.length > 0 && (troubled > 0
+              ? <Pill tone="warning" dot>{troubled} did not finish</Pill>
+              : <Pill tone="success" dot>All finished</Pill>)}
+          </div>
+          <p className="field-hint" style={{ marginTop: 3 }}>
+            Each time a business tries to connect Instagram, Facebook or WhatsApp: the device, the browser, and how it ended.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => { setOpen((v) => !v); if (!open) state.reload(); }}>
+          {open ? 'Hide' : 'Show'}
+        </Button>
+      </div>
+      {open && (
+        <div style={{ display: 'grid', gap: 6, marginTop: 12 }}>
+          {state.loading && !state.data && <LoadingState rows={2} />}
+          {!state.loading && attempts.length === 0 && <p className="field-hint">No attempts recorded yet.</p>}
+          {attempts.map((a) => {
+            const switched = a.return_browser && (a.return_browser !== a.start_browser || a.return_device !== a.start_device) && a.start_browser !== 'unknown';
+            return (
+              <div key={a.id} style={{
+                display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap',
+                padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', fontSize: 12.5, lineHeight: 1.5,
+              }}>
+                <Pill tone={OUTCOME_TONE[a.outcome] ?? 'danger'}>{a.outcome === 'started' ? 'never came back' : humanize(a.outcome)}</Pill>
+                <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <strong>{a.business_name ?? 'Unknown business'}</strong> · {humanize(a.provider)} · {a.start_device} {browserName(a.start_browser)}
+                  {switched && <> → came back in {a.return_device} {browserName(a.return_browser)}</>}
+                  {a.detail && <span style={{ color: 'var(--text-3)' }}> · {a.detail}</span>}
+                </span>
+                <span style={{ color: 'var(--text-3)' }}>{relativeTime(a.started_at)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }

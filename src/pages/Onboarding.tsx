@@ -1,3 +1,5 @@
+import { detectInAppBrowser, type InAppBrowser } from '../lib/inAppBrowser';
+import { OpenInBrowserDialog } from '../components/ConnectHelp';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2, MessageSquare, Sparkles, Rocket, Check, ArrowRight, ArrowLeft,
@@ -344,7 +346,12 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     else setError("We couldn't finish connecting. Please try again.");
   }, []);
 
+  const [wrongBrowser, setWrongBrowser] = useState<InAppBrowser | null>(null);
   const start = useMutation(async (provider: ProviderId, label: string) => {
+    // Meta's sign-in does not work inside another app's built-in browser.
+    // Telegram and web chat need no sign-in elsewhere, so they are unaffected.
+    const inApp = provider === 'telegram' || provider === 'webchat' ? null : detectInAppBrowser();
+    if (inApp) { setWrongBrowser(inApp); return; }
     const result = await startChannelConnect(provider);
 
     if (result.mode === 'oauth') {
@@ -371,6 +378,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
 
   return (
     <Card>
+      <OpenInBrowserDialog browser={wrongBrowser} onClose={() => setWrongBrowser(null)} />
       <StepHeader
         title="Connect where your customers message you"
         subtitle="Connect at least one. You can add the others any time."
