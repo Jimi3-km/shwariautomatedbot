@@ -132,7 +132,7 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
           <Reveal>
             <div className="lp-metrics">
               <div><strong>4</strong><span>Messaging channels</span></div>
-              <div><strong>5</strong><span>Specialized agents</span></div>
+              <div><strong>6</strong><span>Specialized agents</span></div>
               <div><strong>24/7</strong><span>Always online</span></div>
             </div>
           </Reveal>
@@ -163,9 +163,9 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
         <div className="lp-w">
           <Reveal>
             <p className="lp-label">AI Workforce</p>
-            <h2 className="lp-h2">Five agents. Zero configuration.</h2>
+            <h2 className="lp-h2">Six agents. Zero configuration.</h2>
             <p className="lp-desc">
-              Your AI team — Shwari, Sales, Support, Bookings, and Orders & Payments —
+              Your AI team — Shwari, Sales, Support, Bookings, Orders & Payments, and Marketing —
               comes pre-trained. Tell Shwari about your business and they all adapt.
             </p>
           </Reveal>
