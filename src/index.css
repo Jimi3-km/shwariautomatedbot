@@ -1158,7 +1158,9 @@ select.field { appearance: none; cursor: pointer; padding-right: 30px; }
 .app-main > [style*="flex: 1"] { flex-shrink: 1; }
 
 /* Cards never grow wider than their column, and long words wrap inside them. */
-.card { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+/* break-word, not anywhere: "anywhere" lets a card shrink below the width of
+   its longest word and then splits ordinary words ("WhatsA pp"). */
+.card { min-width: 0; max-width: 100%; overflow-wrap: break-word; }
 .card > img, .card > video { max-width: 100%; height: auto; }
 
 /* Grid children must be allowed to shrink, or one long title widens a column
@@ -1623,4 +1625,10 @@ select.field.board-move {
 @media (max-width: 560px) {
   .invoice-line { grid-template-columns: minmax(0, 1fr) 64px 32px; }
   .invoice-line > :nth-child(1) { grid-column: 1 / -1; }
+}
+
+/* Figures at the top of a page: as many as fit on a wide screen, two abreast
+   on a phone so none is left alone on a row. */
+@media (max-width: 720px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }

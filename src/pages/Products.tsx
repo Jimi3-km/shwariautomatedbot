@@ -106,7 +106,7 @@ export function Products() {
       <PageHeader
         title="Products"
         subtitle="Your AI agent quotes only from this catalogue and can never invent a price."
-        actions={canWrite && <Button variant="solid" size="sm" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
+        actions={canWrite && <Button variant="accent" size="sm" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
       />
 
       <InlineError message={archive.error ?? restore.error} />
@@ -131,7 +131,7 @@ export function Products() {
             icon={<Package size={26} />}
             title="Your catalogue is empty"
             body="Add your first product so your AI agent can answer customer questions accurately and quote real prices."
-            action={canWrite && <Button variant="solid" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
+            action={canWrite && <Button variant="accent" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
           />
         ) : (
           <div style={{

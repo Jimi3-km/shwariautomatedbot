@@ -96,7 +96,7 @@ export function Invoices() {
         title="Invoices"
         subtitle="Bill customers, send the invoice as a PDF, and confirm when it is paid."
         actions={canWrite && (
-          <Button variant="solid" size="sm" icon={<Plus size={14} />} onClick={() => setCreating(true)}>New invoice</Button>
+          <Button variant="accent" size="sm" icon={<Plus size={14} />} onClick={() => setCreating(true)}>New invoice</Button>
         )}
       />
 
@@ -104,7 +104,7 @@ export function Invoices() {
         <div style={{ display: 'grid', gap: 14 }}>
           <InlineError message={send.error ?? cancel.error} />
 
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             <StatTile label="Awaiting payment" value={formatMoney(summary?.outstanding ?? 0, cur)}
               hint={`${summary?.outstanding_count ?? 0} invoice${summary?.outstanding_count === 1 ? '' : 's'}`} />
             <StatTile label="Overdue" value={formatMoney(summary?.overdue ?? 0, cur)} tone={summary?.overdue_count ? 'danger' : undefined}
@@ -134,7 +134,7 @@ export function Invoices() {
               title={status || query ? 'No invoices match' : 'No invoices yet'}
               body={status || query ? 'Try a different filter or search.' : 'Raise an invoice for a customer and send it to their chat and email as a PDF.'}
               action={canWrite && !status && !query
-                ? <Button variant="solid" icon={<Plus size={14} />} onClick={() => setCreating(true)}>New invoice</Button>
+                ? <Button variant="accent" icon={<Plus size={14} />} onClick={() => setCreating(true)}>New invoice</Button>
                 : undefined}
             />
           ) : isMobile ? (

@@ -372,6 +372,7 @@ function TopBar({ onMenu, showMenu }: { onMenu: () => void; showMenu: boolean })
   const navigate = useNavigate();
   const { counts } = useSession();
   const [query, setQuery] = useState('');
+  const onInbox = useLocation().pathname.startsWith('/inbox');
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -393,7 +394,8 @@ function TopBar({ onMenu, showMenu }: { onMenu: () => void; showMenu: boolean })
         </button>
       )}
 
-      <form onSubmit={submit} style={{ flex: 1, maxWidth: 400, position: 'relative' }}>
+      {/* The Inbox has its own search box; showing a second one above it is noise. */}
+      <form onSubmit={submit} style={{ flex: 1, maxWidth: 400, position: 'relative', visibility: onInbox ? 'hidden' : 'visible' }} aria-hidden={onInbox || undefined}>
         <Search size={14} style={{
           position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)',
         }} />

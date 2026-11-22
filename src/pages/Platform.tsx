@@ -85,7 +85,7 @@ export function Platform() {
         <div style={{ display: 'grid', gap: 16, maxWidth: 980, margin: '0 auto' }}>
           <InlineError message={setStatus.error ?? setPaused.error ?? resolve.error} />
 
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+          <div className="stat-grid" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             <StatTile label="Businesses" value={totals?.businesses ?? 0} />
             <StatTile label="Waiting for approval" value={totals?.pending ?? 0} />
             <StatTile label="Live" value={totals?.live ?? 0} />

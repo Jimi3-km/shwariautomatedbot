@@ -9,7 +9,7 @@ import {
   Avatar, EmptyState, ErrorState, FilterChip, InlineError, LoadingState,
   PageHeader, Pill, Select, TableWrap,
 } from '../components/ui';
-import { formatDateTime, formatMoney, humanize, relativeTime } from '../lib/format';
+import { formatDateTime, formatMoney, humanize, relativeTime, customerLabel } from '../lib/format';
 
 const STAGE_TONE: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
   won: 'success', payment_verified: 'success', payment_claimed: 'warning',
@@ -100,9 +100,9 @@ function LeadsBoard({ leads, stages, canWrite, currency, onOpen, onMove }: {
                     onDragEnd={() => { setDragging(null); setOver(null); }}
                   >
                     <button type="button" className="board-card-main" onClick={() => onOpen(l)}>
-                      <Avatar name={l.customer_name ?? l.customer_id} seed={l.customer_id} size={28} />
+                      <Avatar name={customerLabel(l)} seed={l.customer_id} size={28} />
                       <span style={{ flex: 1, minWidth: 0 }}>
-                        <span className="board-card-name">{l.customer_name || l.customer_id}</span>
+                        <span className="board-card-name">{customerLabel(l)}</span>
                         <span className="board-card-sub">
                           {[l.product_model, l.product_storage].filter(Boolean).join(' ') || humanize((l as any).intent ?? '') || 'No product yet'}
                         </span>
@@ -126,7 +126,7 @@ function LeadsBoard({ leads, stages, canWrite, currency, onOpen, onMove }: {
                       <span>{relativeTime(l.last_contact)}</span>
                       {canWrite && stages.length > 0 && (
                         <Select
-                          aria-label={`Move ${l.customer_name ?? l.customer_id} to another stage`}
+                          aria-label={`Move ${customerLabel(l)} to another stage`}
                           value={l.stage ?? 'new'}
                           onChange={(e) => onMove(l, e.target.value)}
                           options={stages.map((s) => ({ value: s, label: humanize(s) }))}
@@ -282,9 +282,9 @@ export function Leads() {
             {leads.map((l) => (
               <button key={l.id} onClick={() => navigate(`/leads/${l.id}`)}
                 className="card p-3" style={{ textAlign: 'left', display: 'flex', gap: 10 }}>
-                <Avatar name={l.customer_name ?? l.customer_id} seed={l.customer_id} size={34} />
+                <Avatar name={customerLabel(l)} seed={l.customer_id} size={34} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 500 }}>{l.customer_name || l.customer_id}</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 500 }}>{customerLabel(l)}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 1 }}>
                     {l.product_model || 'No product yet'}
                   </div>
@@ -313,10 +313,10 @@ export function Leads() {
                       onClick={() => navigate(`/leads/${l.id}`)}>
                     <td className="primary">
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Avatar name={l.customer_name ?? l.customer_id} seed={l.customer_id} size={26} />
+                        <Avatar name={customerLabel(l)} seed={l.customer_id} size={26} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }}>
-                            {l.customer_name || '—'}
+                            {customerLabel(l)}
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{l.customer_id}</div>
                         </div>
@@ -337,7 +337,7 @@ export function Leads() {
                     <td onClick={(e) => e.stopPropagation()}>
                       {canWrite && stages.length > 0 ? (
                         <Select
-                          aria-label={`Stage for ${l.customer_name ?? l.customer_id}`}
+                          aria-label={`Stage for ${customerLabel(l)}`}
                           value={l.stage ?? 'new'}
                           onChange={(e) => changeStage(l, e.target.value)}
                           options={stages.map((s) => ({ value: s, label: humanize(s) }))}
