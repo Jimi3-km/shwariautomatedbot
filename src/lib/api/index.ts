@@ -41,7 +41,7 @@ export const withdrawInvitation = (id: string) =>
 export const removeTeamMember = (id: string) =>
   request<{ ok: boolean }>(`/team/${id}`, { method: 'DELETE' });
 
-export const getActivity = () => request<{ events: ActivityEvent[] }>('/audit');
+export const getActivityLog = () => request<{ events: ActivityEvent[] }>('/audit');
 
 /** What an invitation is for. Works before signing in. */
 export const lookUpInvitation = (token: string) =>
@@ -126,6 +126,15 @@ export const updateTeamMember = (id: string, role: string) =>
 // Dashboard
 // ---------------------------------------------------------------------------
 export const getOverview = () => request<Overview>('/overview');
+
+/** What is new on each page, for the numbered dots in the menu. */
+export interface ActivityCounts {
+  orders: number; leads: number; appointments: number; support: number;
+  inbox: number; payments: number; marketing: number; platform: number;
+}
+
+export const getActivity = (since: Partial<Record<'orders' | 'leads' | 'appointments' | 'support', string>>) =>
+  request<ActivityCounts>(`/activity${qs(since)}`);
 export const getAnalytics = (days = 30) => request<Analytics>(`/analytics${qs({ days })}`);
 export const getOnboarding = () => request<Onboarding>('/onboarding');
 
@@ -369,6 +378,48 @@ export const removeAlertRecipient = (id: string) =>
 
 export const sendTestAlert = (kind?: string) =>
   request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST', body: kind ? { kind } : {} });
+
+// ---------------------------------------------------------------------------
+// Receipt design
+// ---------------------------------------------------------------------------
+export interface ReceiptSettings {
+  letterhead_url: string | null;
+  logo_url: string | null;
+  display_name: string | null;
+  tagline: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  tax_label: string | null;
+  tax_id: string | null;
+  footer_note: string | null;
+  accent: string | null;
+  show_stamp: boolean;
+}
+
+export interface ReceiptSettingsResponse {
+  business_name?: string;
+  /** What the owner has set. */
+  settings: ReceiptSettings;
+  /** What a receipt prints, with gaps filled from the business's own details. */
+  effective: ReceiptSettings;
+}
+
+export const getReceiptSettings = () => request<ReceiptSettingsResponse>('/receipt-settings');
+
+export const updateReceiptSettings = (body: Partial<ReceiptSettings>) =>
+  request<ReceiptSettingsResponse>('/receipt-settings', { method: 'PUT', body });
+
+export const uploadReceiptImage = (kind: 'logo' | 'letterhead', file: File) => {
+  const form = new FormData();
+  form.append('kind', kind);
+  form.append('file', file);
+  return request<ReceiptSettingsResponse>('/receipt-settings/image', { method: 'POST', body: form });
+};
+
+export const previewReceipt = (draft?: Partial<ReceiptSettings>) =>
+  request<{ image: string }>('/receipt-settings/preview', { method: 'POST', body: draft ?? {} });
 
 export const getNotifications = () =>
   request<{ notifications: AppNotification[]; unread: number }>('/notifications');

@@ -3,6 +3,7 @@ import { Save, LogOut, Plus, X } from 'lucide-react';
 import { getBusiness, updateBusiness, getSupabase } from '../lib/api';
 import { TeamPanel } from '../components/TeamPanel';
 import { AlertsPanel } from '../components/AlertsPanel';
+import { ReceiptDesignPanel } from '../components/ReceiptDesignPanel';
 import type { Tenant } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -37,6 +38,7 @@ const TABS = [
   { id: 'business', label: 'Business' },
   { id: 'delivery', label: 'Delivery' },
   { id: 'payments', label: 'Payments' },
+  { id: 'receipts', label: 'Receipts' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'team', label: 'Team' },
   { id: 'account', label: 'Account' },
@@ -63,11 +65,13 @@ export function Settings() {
       </div>
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
-        <div style={{ maxWidth: 720, margin: '0 auto' }}>
+        <div style={{ maxWidth: tab === 'receipts' ? 1120 : 720, margin: '0 auto' }}>
           {tab === 'team' ? (
             <TeamPanel />
           ) : tab === 'notifications' ? (
             <AlertsPanel />
+          ) : tab === 'receipts' ? (
+            <ReceiptDesignPanel />
           ) : tab === 'account' ? (
             <AccountSection />
           ) : (

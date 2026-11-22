@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Copy, Mail, Trash2, UserPlus } from 'lucide-react';
 import {
-  getTeam, updateTeamMember, inviteTeamMember, withdrawInvitation, removeTeamMember, getActivity,
+  getTeam, updateTeamMember, inviteTeamMember, withdrawInvitation, removeTeamMember, getActivityLog,
 } from '../lib/api';
 import { useAsync, useMutation } from '../hooks';
 import { useSession, ROLE_LABELS } from '../app/SessionContext';
@@ -250,7 +250,7 @@ export function TeamPanel() {
 
 /** Who did what in this business, most recent first. */
 function ActivityLog() {
-  const state = useAsync(() => getActivity(), []);
+  const state = useAsync(() => getActivityLog(), []);
   const [open, setOpen] = useState(false);
   const events = state.data?.events ?? [];
 

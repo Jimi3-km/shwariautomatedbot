@@ -1174,7 +1174,7 @@ const RECEIPT = {
 
 await t('the receipt image carries the verified figures and escapes what customers typed', async () => {
   const svg = receiptSvg(RECEIPT);
-  for (const expected of ['Glamour Crown Wigs', 'KRY-MWOL7LGD', 'KES 28,000', 'UJJ66AH7ZG', 'Westlands Pride', 'Payment verified']) {
+  for (const expected of ['Glamour Crown Wigs', 'KRY-MWOL7LGD', 'KES 28,000', 'UJJ66AH7ZG', 'Westlands Pride', 'VERIFIED', 'TOTAL PAID', 'RECEIPT']) {
     assert.ok(svg.includes(expected), `missing ${expected}`);
   }
   assert.ok(!svg.includes('<b>') && svg.includes('Jensen &lt;b&gt;'), 'customer text must be escaped');

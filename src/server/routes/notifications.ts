@@ -109,7 +109,7 @@ notificationsRouter.get(
         ? serviceClient.from('orders').select('order_ref, items, delivery_location').eq('tenant_id', payment.tenant_id).eq('id', payment.order_id).maybeSingle()
         : Promise.resolve({ data: null } as any),
       payment.lead_id !== null && payment.lead_id !== undefined
-        ? serviceClient.from('leads').select('customer_name').eq('tenant_id', payment.tenant_id).eq('id', payment.lead_id).maybeSingle()
+        ? serviceClient.from('leads').select('customer_name, phone').eq('tenant_id', payment.tenant_id).eq('id', payment.lead_id).maybeSingle()
         : Promise.resolve({ data: null } as any),
     ]);
 

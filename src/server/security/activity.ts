@@ -20,6 +20,7 @@ const SKIP: RegExp[] = [
   /^\/payments\/[^/]+\/verify$/,
   /^\/team(\/|$)/,
   /^\/alerts\/(recipients|test|telegram-bot)/,
+  /^\/receipt-settings\/preview$/,
   /^\/invitations\//,
   /^\/shwari\/chat$/,
   /^\/platform\//,
@@ -73,6 +74,8 @@ const SUMMARY: Record<string, string> = {
   'PATCH /posting-settings': 'Changed the posting settings',
   'POST /onboarding/complete': 'Finished setting up the business',
   'PUT /alerts': 'Changed which alerts are sent',
+  'PUT /receipt-settings': 'Changed how receipts look',
+  'POST /receipt-settings/image': 'Changed the receipt letterhead or logo',
 };
 
 export function recordActivity(req: Request, res: Response, next: NextFunction) {

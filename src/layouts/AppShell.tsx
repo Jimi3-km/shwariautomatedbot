@@ -6,7 +6,22 @@ import {
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
   Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone, Building2,
 } from 'lucide-react';
-import { setActiveTenant } from '../lib/api';
+import { setActiveTenant, type ActivityCounts } from '../lib/api';
+import type { SeenPage } from '../app/SessionContext';
+
+/** Opening one of these pages clears its dot. */
+const SEEN_BY_PATH: Record<string, SeenPage> = {
+  '/orders': 'orders', '/leads': 'leads', '/appointments': 'appointments', '/support': 'support',
+};
+
+function NavDot({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="nav-dot" aria-label={`${count} new`}>
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
 import { Avatar, Drawer, Button } from '../components/ui';
 import { useIsMobile } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -16,7 +31,8 @@ interface NavEntry {
   label: string;
   icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   end?: boolean;
-  badge?: 'unread' | 'claims';
+  /** Which count from the activity feed shows as this page's dot. */
+  badge?: keyof ActivityCounts;
   /** Shown only to owners and admins: the server rejects everyone else. */
   adminOnly?: boolean;
 }
@@ -24,15 +40,15 @@ interface NavEntry {
 const NAV: NavEntry[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/shwari', label: 'Shwari', icon: Sparkles, adminOnly: true },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'unread' },
-  { to: '/leads', label: 'Leads', icon: Users },
+  { to: '/inbox', label: 'Inbox', icon: InboxIcon, badge: 'inbox' },
+  { to: '/leads', label: 'Leads', icon: Users, badge: 'leads' },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/services', label: 'Services', icon: Wrench },
-  { to: '/marketing', label: 'Marketing', icon: Megaphone },
-  { to: '/orders', label: 'Orders', icon: ShoppingCart },
-  { to: '/appointments', label: 'Appointments', icon: CalendarDays },
-  { to: '/support', label: 'Support', icon: LifeBuoy },
-  { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'claims' },
+  { to: '/marketing', label: 'Marketing', icon: Megaphone, badge: 'marketing' },
+  { to: '/orders', label: 'Orders', icon: ShoppingCart, badge: 'orders' },
+  { to: '/appointments', label: 'Appointments', icon: CalendarDays, badge: 'appointments' },
+  { to: '/support', label: 'Support', icon: LifeBuoy, badge: 'support' },
+  { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'payments' },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/agents', label: 'AI team', icon: Bot },
   { to: '/agent', label: 'AI agent settings', icon: SlidersHorizontal, adminOnly: true },
@@ -48,6 +64,13 @@ export function AppShell() {
   // Close the mobile drawer when navigation happens, rather than on any click
   // inside it: a blanket click handler also swallowed the business switcher.
   useEffect(() => { setDrawerOpen(false); }, [location.pathname, location.search]);
+
+  // Opening a page clears its "new" dot.
+  const { markSeen } = useSession();
+  useEffect(() => {
+    const page = SEEN_BY_PATH[location.pathname];
+    if (page) markSeen(page);
+  }, [location.pathname, markSeen]);
 
   return (
     <div className="app-shell" style={{ display: 'flex', background: 'var(--bg)' }}>
@@ -84,15 +107,18 @@ export function AppShell() {
  * menu. The drawer still holds everything; this saves the two taps it costs.
  */
 function BottomNav({ onMore }: { onMore: () => void }) {
-  const { counts, isAdmin } = useSession();
+  const { activity, isAdmin } = useSession();
   const items: Array<{ to: string; label: string; icon: NavEntry['icon']; end?: boolean; count?: number }> = [
     { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
-    { to: '/inbox', label: 'Inbox', icon: InboxIcon, count: counts.unread },
+    { to: '/inbox', label: 'Inbox', icon: InboxIcon, count: activity.inbox },
     isAdmin
       ? { to: '/shwari', label: 'Shwari', icon: Sparkles }
-      : { to: '/leads', label: 'Leads', icon: Users },
-    { to: '/orders', label: 'Orders', icon: ShoppingCart },
+      : { to: '/leads', label: 'Leads', icon: Users, count: activity.leads },
+    { to: '/orders', label: 'Orders', icon: ShoppingCart, count: activity.orders },
   ];
+  // Everything else lives behind "More", so its dot says there is news there.
+  const elsewhere = activity.payments + activity.appointments + activity.support + activity.marketing
+    + (isAdmin ? activity.leads : 0) + activity.platform;
   return (
     <nav className="bottom-nav" aria-label="Main">
       {items.map(({ to, label, icon: Icon, end, count }) => (
@@ -105,7 +131,10 @@ function BottomNav({ onMore }: { onMore: () => void }) {
         </NavLink>
       ))}
       <button type="button" className="bottom-nav-item" onClick={onMore} aria-label="Open the full menu">
-        <Menu size={19} />
+        <span style={{ position: 'relative', display: 'inline-flex' }}>
+          <Menu size={19} />
+          {elsewhere > 0 && <span className="bottom-nav-badge">{elsewhere > 9 ? '9+' : elsewhere}</span>}
+        </span>
         <span>More</span>
       </button>
     </nav>
@@ -153,7 +182,7 @@ function StatusBanners() {
 }
 
 function SidebarContent() {
-  const { tenant, counts, isAdmin, isPlatformAdmin } = useSession();
+  const { tenant, activity, isAdmin, isPlatformAdmin } = useSession();
 
   return (
     <>
@@ -163,7 +192,7 @@ function SidebarContent() {
 
       <nav className="scroll-y" style={{ flex: 1, padding: '0 8px 8px' }}>
         {NAV.filter((n) => !n.adminOnly || isAdmin).map(({ to, label, icon: Icon, end, badge }) => {
-          const count = badge === 'unread' ? counts.unread : badge === 'claims' ? counts.paymentClaims : 0;
+          const count = badge ? activity[badge] : 0;
           return (
             <NavLink
               key={to} to={to} end={end}
@@ -172,15 +201,7 @@ function SidebarContent() {
             >
               <Icon size={16} style={{ flexShrink: 0 }} />
               <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
-              {count > 0 && (
-                <span style={{
-                  minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-                  background: 'var(--accent)', color: '#fff', fontSize: 11,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600,
-                }}>
-                  {count > 99 ? '99+' : count}
-                </span>
-              )}
+              <NavDot count={count} />
             </NavLink>
           );
         })}
@@ -192,6 +213,7 @@ function SidebarContent() {
           >
             <Building2 size={16} style={{ flexShrink: 0, color: 'var(--accent)' }} />
             <span style={{ flex: 1, textAlign: 'left' }}>Platform</span>
+            <NavDot count={activity.platform} />
           </NavLink>
         )}
         {isAdmin && (
