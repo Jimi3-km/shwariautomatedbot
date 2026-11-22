@@ -270,3 +270,25 @@ internalRouter.get(
     res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning, mistakes });
   })
 );
+
+/**
+ * The email diagnosis, callable by the database scheduler.
+ *
+ * The platform admin runs the same check from the Platform page. This lets it
+ * be run without a signed-in browser when email has stopped arriving. It
+ * reports the state of the sending account, never a key.
+ */
+internalRouter.get(
+  '/internal/cron/email-check',
+  requireScheduler,
+  handler(async (_req, res) => {
+    const { runEmailDiagnostics } = await import('../services/brevo.js');
+    const result = await runEmailDiagnostics();
+    // Addresses of customers are not needed to diagnose the account.
+    res.json({
+      sender: result.sender,
+      checks: result.checks.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })),
+      events: result.events.map((e) => ({ at: e.at, event: e.event, to: e.to.replace(/^[^@]*/, '***'), reason: e.reason })),
+    });
+  })
+);
