@@ -107,7 +107,7 @@ export function Invoices() {
         <div style={{ display: 'grid', gap: 14 }}>
           <InlineError message={send.error ?? cancel.error} />
 
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+          <div className="stat-grid" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             <StatTile label="Awaiting payment" value={formatMoney(summary?.outstanding ?? 0, cur)}
               hint={`${summary?.outstanding_count ?? 0} invoice${summary?.outstanding_count === 1 ? '' : 's'}`} />
             <StatTile label="Overdue" value={formatMoney(summary?.overdue ?? 0, cur)} tone={summary?.overdue_count ? 'danger' : undefined}

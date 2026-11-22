@@ -439,7 +439,10 @@ function TopBar({ onMenu, showMenu }: { onMenu: () => void; showMenu: boolean })
       gap: 10, padding: '0 14px', borderBottom: '1px solid var(--border)', background: 'var(--surface)',
     }}>
       {showMenu && (
-        <button onClick={onMenu} aria-label="Open navigation" style={{ color: 'var(--text-2)' }}>
+        <button
+          onClick={onMenu} aria-label="Open navigation" className="btn-icon"
+          style={{ color: 'var(--text-2)', width: 40, height: 40, flexShrink: 0, marginLeft: -6 }}
+        >
           <Menu size={19} />
         </button>
       )}
@@ -451,7 +454,7 @@ function TopBar({ onMenu, showMenu }: { onMenu: () => void; showMenu: boolean })
         }} />
         <input
           value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search conversations…"
+          placeholder={showMenu ? 'Search…' : 'Search conversations…'}
           className="field" style={{ paddingLeft: 30, height: 34 }}
           aria-label="Search conversations"
         />

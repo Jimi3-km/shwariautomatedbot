@@ -255,8 +255,8 @@ function ListEditor({
           {!disabled && (
             <button
               onClick={() => onChange(items.filter((_, j) => j !== i))}
-              aria-label="Remove"
-              style={{ color: 'var(--text-3)', padding: 5 }}
+              aria-label="Remove" className="btn-icon"
+              style={{ color: 'var(--text-3)', width: 36, height: 36, flexShrink: 0 }}
             >
               <X size={14} />
             </button>

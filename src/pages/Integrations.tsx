@@ -311,13 +311,15 @@ function ConnectedChannelRow({
   });
 
   return (
+    // Wraps on a phone: the name keeps a readable width and the buttons drop
+    // to their own line, rather than the name being squeezed to one letter.
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px',
+      display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', flexWrap: 'wrap',
       background: 'var(--surface-2)', borderRadius: 'var(--radius)', marginBottom: 6,
     }}>
       <CheckCircle2 size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13 }}>{channel.display_name || channel.channel_account_id}</div>
+      <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+        <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{channel.display_name || channel.channel_account_id}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
           Connected {formatDateTime(channel.created_at)}
         </div>

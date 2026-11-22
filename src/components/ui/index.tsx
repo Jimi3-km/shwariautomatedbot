@@ -537,7 +537,7 @@ export function StatTile({ label, value, tone, hint }: {
   return (
     <div className="card p-3.5">
       <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color, letterSpacing: '-0.02em' }}>{value}</div>
+      <div className="stat-value" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color, letterSpacing: '-0.02em' }}>{value}</div>
       {hint && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{hint}</div>}
     </div>
   );
