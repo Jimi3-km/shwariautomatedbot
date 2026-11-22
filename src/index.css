@@ -2135,3 +2135,6 @@ select.field.board-move {
 .lp-footer-links a { font-size: 13.5px; color: inherit; opacity: 0.8; text-decoration: none; padding: 6px 0; }
 .lp-footer-links a:hover { opacity: 1; text-decoration: underline; }
 @media (max-width: 480px) { .legal-form.legal-inline { grid-template-columns: minmax(0, 1fr); } }
+/* The reset removes list markers; the legal pages are documents and need them. */
+.legal-body ul { list-style: disc; }
+.legal-body ol { list-style: decimal; }
