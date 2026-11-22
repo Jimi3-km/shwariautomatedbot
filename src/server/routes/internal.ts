@@ -1,3 +1,4 @@
+import { announceOverdueInvoices } from '../services/invoices.js';
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -267,7 +268,11 @@ internalRouter.get(
       return null;
     });
     const mistakes = await learnFromOwnMistakes().catch(() => null);
-    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning, mistakes });
+    const overdue = await announceOverdueInvoices().catch((e) => {
+      console.error('[internal] overdue invoices pass failed:', e instanceof Error ? e.message : e);
+      return 0;
+    });
+    res.json({ ok: true, instagram_tokens: instagram, webhook_events: prune, learning, mistakes, overdue_invoices: overdue });
   })
 );
 

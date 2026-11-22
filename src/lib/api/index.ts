@@ -130,7 +130,7 @@ export const getOverview = () => request<Overview>('/overview');
 /** What is new on each page, for the numbered dots in the menu. */
 export interface ActivityCounts {
   orders: number; leads: number; appointments: number; support: number;
-  inbox: number; payments: number; marketing: number; platform: number;
+  inbox: number; payments: number; marketing: number; invoices: number; platform: number;
 }
 
 export const getActivity = (since: Partial<Record<'orders' | 'leads' | 'appointments' | 'support', string>>) =>
@@ -312,7 +312,8 @@ export const getOnboardingState = () => request<OnboardingState>('/onboarding/st
 export interface AppNotification {
   id: string;
   kind: 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human'
-    | 'posts_to_approve' | 'post_published' | 'post_failed';
+    | 'posts_to_approve' | 'post_published' | 'post_failed'
+    | 'invoice_paid' | 'invoice_overdue';
   title: string;
   body: string;
   link: string | null;
@@ -378,6 +379,87 @@ export const removeAlertRecipient = (id: string) =>
 
 export const sendTestAlert = (kind?: string) =>
   request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST', body: kind ? { kind } : {} });
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+export interface Invoice {
+  id: string;
+  invoice_no: string;
+  lead_id: number | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  items: Array<{ name: string; qty: number; price: number }>;
+  subtotal: number;
+  discount: number;
+  tax_label: string | null;
+  tax_rate: number;
+  tax_amount: number;
+  total: number;
+  currency: string;
+  status: 'draft' | 'sent' | 'paid' | 'void';
+  /** As shown: a sent invoice past its due date reads as overdue. */
+  display_status: 'draft' | 'sent' | 'overdue' | 'paid' | 'void';
+  issue_date: string;
+  due_date: string | null;
+  notes: string | null;
+  sent_at: string | null;
+  sent_via: string | null;
+  paid_at: string | null;
+  pdf_url: string | null;
+  created_at: string;
+}
+
+export interface InvoiceDelivery {
+  sent: boolean;
+  chat: { sent: boolean; channel?: string; file?: boolean; reason?: string };
+  email: { sent: boolean; reason?: string };
+}
+
+export interface InvoiceSettings {
+  prefix: string;
+  due_days: number;
+  terms: string | null;
+  tax_label: string | null;
+  tax_rate: number;
+  auto_on_booking: boolean;
+}
+
+export const getInvoices = (filters: { status?: string; search?: string } = {}) =>
+  request<{
+    invoices: Invoice[];
+    total: number;
+    summary: { outstanding: number; outstanding_count: number; overdue: number; overdue_count: number; paid_this_month: number };
+  }>(`/invoices${qs(filters)}`);
+
+export const getInvoiceOptions = () =>
+  request<{
+    customers: Array<{ id: number; customer_name: string; email: string | null; phone: string | null; channel_type: string | null }>;
+    catalogue: Array<{ name: string; price: number | null; kind: 'service' | 'product' }>;
+    settings: InvoiceSettings;
+    currency: string;
+  }>('/invoices/options');
+
+export const createInvoice = (body: {
+  lead_id: number | null; customer_name?: string; customer_email?: string;
+  items: Array<{ name: string; qty: number; price: number }>;
+  discount?: number; due_date?: string; notes?: string; send?: boolean;
+}) => request<{ invoice: Invoice; delivery: InvoiceDelivery | null }>('/invoices', { method: 'POST', body });
+
+export const sendInvoice = (id: string) =>
+  request<{ invoice: Invoice; delivery: InvoiceDelivery }>(`/invoices/${id}/send`, { method: 'POST' });
+
+export const markInvoicePaid = (id: string, body: { method: string; reference?: string }) =>
+  request<{ invoice: Invoice; payment_id: string }>(`/invoices/${id}/mark-paid`, { method: 'POST', body });
+
+export const voidInvoice = (id: string) =>
+  request<{ invoice: Invoice }>(`/invoices/${id}/void`, { method: 'POST' });
+
+export const getInvoiceSettings = () => request<{ settings: InvoiceSettings }>('/invoice-settings');
+
+export const updateInvoiceSettings = (body: Partial<InvoiceSettings>) =>
+  request<{ settings: InvoiceSettings }>('/invoice-settings', { method: 'PUT', body });
 
 // ---------------------------------------------------------------------------
 // Receipt design

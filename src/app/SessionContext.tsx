@@ -10,7 +10,7 @@ export type SeenPage = 'orders' | 'leads' | 'appointments' | 'support';
 const SEEN_PAGES: SeenPage[] = ['orders', 'leads', 'appointments', 'support'];
 
 const NO_ACTIVITY: ActivityCounts = {
-  orders: 0, leads: 0, appointments: 0, support: 0, inbox: 0, payments: 0, marketing: 0, platform: 0,
+  orders: 0, leads: 0, appointments: 0, support: 0, inbox: 0, payments: 0, marketing: 0, invoices: 0, platform: 0,
 };
 
 /**

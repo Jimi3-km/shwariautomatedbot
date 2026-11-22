@@ -262,6 +262,8 @@ alertsRouter.post(
       posts_to_approve: { title: 'Posts ready to approve (test)', body: '5 posts are planned for next week.' },
       post_failed: { title: 'A post did not go out (test)', body: 'Monday 9:00 - Instagram refused the photo.' },
       post_published: { title: 'Post published (test)', body: 'Monday 9:00 post went out on Instagram.' },
+      invoice_paid: { title: 'Invoice INV-00017 paid (test)', body: 'Jane paid KES 16,240.00.' },
+      invoice_overdue: { title: 'Invoice INV-00017 overdue (test)', body: 'Jane owes KES 16,240.00, due 29 Nov.' },
       test: { title: 'Test alert', body: 'This is how alerts from your business will arrive.' },
     };
     const results = await deliverAlert(ctx.tenantId, kind, SAMPLES[kind], { force: true });

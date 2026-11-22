@@ -28,6 +28,7 @@ import { platformRouter } from './routes/platform.js';
 import { alertsRouter } from './routes/alerts.js';
 import { receiptSettingsRouter } from './routes/receiptSettings.js';
 import { activityRouter } from './routes/activity.js';
+import { invoicesRouter } from './routes/invoices.js';
 import { recordActivity } from './security/activity.js';
 
 export function createApp() {
@@ -142,6 +143,7 @@ export function createApp() {
   app.use('/api', alertsRouter);
   app.use('/api', receiptSettingsRouter);
   app.use('/api', activityRouter);
+  app.use('/api', invoicesRouter);
   app.use('/api', accountRouter);
   app.use('/api', catalogRouter);
   app.use('/api', inboxRouter);

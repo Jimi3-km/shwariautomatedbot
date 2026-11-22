@@ -60,7 +60,8 @@ activityRouter.get(
         .eq('tenant_id', ctx.tenantId).gt(column, at));
     };
 
-    const [orders, leads, appointments, support, inbox, payments, marketing] = await Promise.all([
+    const today = new Date().toISOString().slice(0, 10);
+    const [orders, leads, appointments, support, inbox, payments, marketing, invoices] = await Promise.all([
       sinceCount('orders'),
       sinceCount('leads'),
       sinceCount('appointments'),
@@ -71,6 +72,9 @@ activityRouter.get(
         .eq('tenant_id', ctx.tenantId).eq('verification_status', 'unverified')),
       count(() => ctx.db.from('scheduled_posts').select('id', { count: 'exact', head: true })
         .eq('tenant_id', ctx.tenantId).eq('status', 'proposed')),
+      // Invoices past their due date and still unpaid: stays until dealt with.
+      count(() => ctx.db.from('invoices').select('id', { count: 'exact', head: true })
+        .eq('tenant_id', ctx.tenantId).eq('status', 'sent').lt('due_date', today)),
     ]);
 
     // For the people who run the platform: businesses waiting and open faults.
@@ -84,6 +88,6 @@ activityRouter.get(
       platform = pending + alerts;
     }
 
-    res.json({ orders, leads, appointments, support, inbox, payments, marketing, platform });
+    res.json({ orders, leads, appointments, support, inbox, payments, marketing, invoices, platform });
   })
 );

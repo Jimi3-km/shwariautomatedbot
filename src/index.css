@@ -1610,3 +1610,10 @@ select.field.board-move {
   font-variant-numeric: tabular-nums;
 }
 .nav-item.active .nav-dot { background: var(--accent); }
+
+/* Invoice lines: description, quantity, price, remove. */
+.invoice-line { display: grid; grid-template-columns: minmax(0, 1fr) 76px 110px 32px; gap: 8px; align-items: center; }
+@media (max-width: 560px) {
+  .invoice-line { grid-template-columns: minmax(0, 1fr) 64px 32px; }
+  .invoice-line > :nth-child(1) { grid-column: 1 / -1; }
+}

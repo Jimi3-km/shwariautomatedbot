@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Eye, ImagePlus, Save, Trash2 } from 'lucide-react';
 import {
   getReceiptSettings, updateReceiptSettings, uploadReceiptImage, previewReceipt,
-  type ReceiptSettings,
+  getInvoiceSettings, updateInvoiceSettings,
+  type ReceiptSettings, type InvoiceSettings,
 } from '../lib/api';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -115,10 +116,12 @@ export function ReceiptDesignPanel() {
       <div style={{ display: 'grid', gap: 14, minWidth: 0 }}>
         <InlineError message={save.error ?? upload.error ?? removeImage.error ?? showPreview.error} />
 
+        <InvoiceSettingsCard canEdit={canEdit} />
+
         <Card>
           <div className="section-label" style={{ marginBottom: 4 }}>Letterhead</div>
           <p className="field-hint" style={{ marginBottom: 12 }}>
-            Upload a letterhead banner to use your own across the top of every receipt, or a logo to sit beside your business name. PNG or JPG, under 2 MB.
+            Used on every invoice and receipt. Upload a letterhead banner to use your own across the top, or a logo to sit beside your business name. PNG or JPG, under 2 MB.
           </p>
 
           <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
@@ -147,7 +150,7 @@ export function ReceiptDesignPanel() {
         </Card>
 
         <Card>
-          <div className="section-label" style={{ marginBottom: 12 }}>Business details on the receipt</div>
+          <div className="section-label" style={{ marginBottom: 12 }}>Business details on invoices and receipts</div>
           <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             {text('display_name', 'Name on the receipt', { hint: 'Leave empty to use your business name.', placeholder: state.data!.business_name, max: 60 })}
             {text('tagline', 'Tagline', { hint: 'One short line under the name.', max: 90 })}
@@ -200,7 +203,7 @@ export function ReceiptDesignPanel() {
         {canEdit ? (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button variant="solid" icon={<Save size={14} />} loading={save.busy} disabled={!dirty} onClick={() => save.run()}>
-              Save receipt design
+              Save design
             </Button>
             <Button variant="outline" icon={<Eye size={14} />} loading={showPreview.busy} onClick={() => showPreview.run()}>
               Preview changes
@@ -223,10 +226,90 @@ export function ReceiptDesignPanel() {
               </div>}
         </div>
         <p className="field-hint" style={{ marginTop: 8 }}>
-          A sample order. Customers get this as a picture in chat and in the receipt email.
+          A sample receipt. Invoices use the same letterhead, details and colour. Both reach customers as a PDF, in chat and by email.
         </p>
       </div>
     </div>
+  );
+}
+
+/** How invoices are numbered, when they fall due, and whether a booking raises one by itself. */
+function InvoiceSettingsCard({ canEdit }: { canEdit: boolean }) {
+  const toast = useToast();
+  const state = useAsync(() => getInvoiceSettings(), []);
+  const [form, setForm] = useState<InvoiceSettings | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (state.data) { setForm(state.data.settings); setDirty(false); }
+  }, [state.data]);
+
+  const save = useMutation(async (next: InvoiceSettings) => {
+    await updateInvoiceSettings(next);
+    toast.push('success', 'Invoice settings saved.');
+    state.reload();
+  });
+
+  if (!form) return state.error ? <ErrorState message={state.error} onRetry={state.reload} /> : <LoadingState rows={2} />;
+  const set = <K extends keyof InvoiceSettings>(k: K, v: InvoiceSettings[K]) => { setForm({ ...form, [k]: v }); setDirty(true); };
+
+  return (
+    <Card>
+      <div className="section-label" style={{ marginBottom: 4 }}>Invoices</div>
+      <p className="field-hint" style={{ marginBottom: 12 }}>
+        How to pay is printed from your payment details (Settings → Payments), with the invoice number as the reference.
+      </p>
+      <InlineError message={save.error} />
+
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', marginBottom: 12,
+        background: 'var(--surface-2)', borderRadius: 'var(--radius)',
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Invoice bookings automatically</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, marginTop: 2 }}>
+            When an agent books a service that has a price, raise the invoice and send it to the customer straight away.
+          </div>
+        </div>
+        <Switch
+          checked={form.auto_on_booking} disabled={!canEdit || save.busy} label="Invoice bookings automatically"
+          onChange={(on: boolean) => { const next = { ...form, auto_on_booking: on }; setForm(next); void save.run(next); }}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        <Field label="Number prefix" hint={`Next looks like ${form.prefix || 'INV'}-00001`} htmlFor="is-prefix">
+          <Input id="is-prefix" disabled={!canEdit} maxLength={6} value={form.prefix}
+            onChange={(e) => set('prefix', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} />
+        </Field>
+        <Field label="Days until due" htmlFor="is-due">
+          <Input id="is-due" type="number" min={0} max={365} disabled={!canEdit} value={String(form.due_days)}
+            onChange={(e) => set('due_days', Math.max(0, Math.min(365, Number(e.target.value) || 0)))} />
+        </Field>
+        <Field label="Tax name" hint="For example VAT." htmlFor="is-taxlabel">
+          <Input id="is-taxlabel" disabled={!canEdit} maxLength={24} value={form.tax_label ?? ''}
+            onChange={(e) => set('tax_label', e.target.value || null)} />
+        </Field>
+        <Field label="Tax rate %" hint="0 adds no tax." htmlFor="is-taxrate">
+          <Input id="is-taxrate" type="number" min={0} max={100} step="any" disabled={!canEdit} value={String(form.tax_rate)}
+            onChange={(e) => set('tax_rate', Math.max(0, Math.min(100, Number(e.target.value) || 0)))} />
+        </Field>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <Field label="Standard terms" hint="Printed on every invoice unless one says otherwise. Up to 300 characters." htmlFor="is-terms">
+          <Textarea id="is-terms" rows={2} maxLength={300} disabled={!canEdit} value={form.terms ?? ''}
+            placeholder="Payment is due within 7 days."
+            onChange={(e) => set('terms', e.target.value || null)} />
+        </Field>
+      </div>
+      {canEdit && (
+        <div style={{ marginTop: 12 }}>
+          <Button variant="outline" icon={<Save size={14} />} loading={save.busy} disabled={!dirty} onClick={() => save.run(form)}>
+            Save invoice settings
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }
 

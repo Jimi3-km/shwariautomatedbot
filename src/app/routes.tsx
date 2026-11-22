@@ -27,6 +27,7 @@ const Settings = lazyPage(() => import('../pages/Settings'), 'Settings');
 const AgentQA = lazyPage(() => import('../pages/AgentQA'), 'AgentQA');
 const NotFound = lazyPage(() => import('../pages/NotFound'), 'NotFound');
 const Platform = lazyPage(() => import('../pages/Platform'), 'Platform');
+const Invoices = lazyPage(() => import('../pages/Invoices'), 'Invoices');
 
 const RELOAD_KEY = 'shwari-chunk-reload';
 
@@ -127,6 +128,7 @@ export const router = createBrowserRouter([
       { path: 'settings', element: page(<Settings />) },
       { path: 'admin/agent-qa', element: page(<AgentQA />) },
       { path: 'platform', element: page(<Platform />) },
+      { path: 'invoices', element: page(<Invoices />) },
       // Legacy hash-era links.
       { path: 'conversations', element: <Navigate to="/inbox" replace /> },
       { path: 'channels', element: <Navigate to="/integrations" replace /> },

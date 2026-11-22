@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Package, ShoppingCart, CreditCard,
   BarChart3, Bot, Plug, Settings as SettingsIcon, LogOut, Menu, Search, Bell, ChevronDown, Check,
-  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone, Building2,
+  Sparkles, CalendarDays, LifeBuoy, Wrench, ShieldCheck, SlidersHorizontal, Megaphone, Building2, FileText,
 } from 'lucide-react';
 import { setActiveTenant, type ActivityCounts } from '../lib/api';
 import type { SeenPage } from '../app/SessionContext';
@@ -48,6 +48,7 @@ const NAV: NavEntry[] = [
   { to: '/orders', label: 'Orders', icon: ShoppingCart, badge: 'orders' },
   { to: '/appointments', label: 'Appointments', icon: CalendarDays, badge: 'appointments' },
   { to: '/support', label: 'Support', icon: LifeBuoy, badge: 'support' },
+  { to: '/invoices', label: 'Invoices', icon: FileText, badge: 'invoices' },
   { to: '/payments', label: 'Payments', icon: CreditCard, badge: 'payments' },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/agents', label: 'AI team', icon: Bot },
@@ -117,7 +118,7 @@ function BottomNav({ onMore }: { onMore: () => void }) {
     { to: '/orders', label: 'Orders', icon: ShoppingCart, count: activity.orders },
   ];
   // Everything else lives behind "More", so its dot says there is news there.
-  const elsewhere = activity.payments + activity.appointments + activity.support + activity.marketing
+  const elsewhere = activity.payments + activity.invoices + activity.appointments + activity.support + activity.marketing
     + (isAdmin ? activity.leads : 0) + activity.platform;
   return (
     <nav className="bottom-nav" aria-label="Main">

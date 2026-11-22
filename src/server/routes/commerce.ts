@@ -1,3 +1,4 @@
+import { settleInvoiceForPayment } from '../services/invoices.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
 import { RefError, leadIdOrNull, customerIdOrNull, textOrNull } from './refs.js';
@@ -102,6 +103,12 @@ commerceRouter.post(
         decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency,
       },
     });
+
+    // A payment for an invoice settles it.
+    if (decision === 'verified') {
+      await settleInvoiceForPayment(ctx.tenantId, req.params.id).catch((e) =>
+        console.warn('[commerce] could not settle the invoice:', e instanceof Error ? e.message : e));
+    }
 
     // Keep the lead stage in step with the verification decision.
     if (data.lead_id) {

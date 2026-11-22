@@ -14,7 +14,9 @@ import { serviceClient } from '../supabase.js';
 export type NotificationKind =
   | 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human'
   // Marketing (migration 0024 widens the check constraint to allow these).
-  | 'posts_to_approve' | 'post_published' | 'post_failed';
+  | 'posts_to_approve' | 'post_published' | 'post_failed'
+  // Invoices (migration 0031).
+  | 'invoice_paid' | 'invoice_overdue';
 
 export interface NotifyInput {
   tenantId: string;

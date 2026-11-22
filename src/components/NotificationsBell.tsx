@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CreditCard, LifeBuoy, MessageSquare, ShoppingCart, BadgeCheck, Megaphone, X } from 'lucide-react';
+import { Bell, CreditCard, LifeBuoy, MessageSquare, ShoppingCart, BadgeCheck, Megaphone, X, FileText } from 'lucide-react';
 import { getNotifications, markNotificationsRead, type AppNotification } from '../lib/api';
 import { useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -21,6 +21,8 @@ const ICONS: Record<AppNotification['kind'], React.ComponentType<{ size?: number
   posts_to_approve: Megaphone,
   post_published: Megaphone,
   post_failed: Megaphone,
+  invoice_paid: FileText,
+  invoice_overdue: FileText,
 };
 
 const TONE: Record<AppNotification['kind'], string> = {
@@ -31,6 +33,8 @@ const TONE: Record<AppNotification['kind'], string> = {
   posts_to_approve: 'var(--warning)',
   post_published: 'var(--success)',
   post_failed: 'var(--danger)',
+  invoice_paid: 'var(--success)',
+  invoice_overdue: 'var(--danger)',
 };
 
 function ago(iso: string): string {

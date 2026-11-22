@@ -38,7 +38,7 @@ const TABS = [
   { id: 'business', label: 'Business' },
   { id: 'delivery', label: 'Delivery' },
   { id: 'payments', label: 'Payments' },
-  { id: 'receipts', label: 'Receipts' },
+  { id: 'receipts', label: 'Invoices & receipts' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'team', label: 'Team' },
   { id: 'account', label: 'Account' },

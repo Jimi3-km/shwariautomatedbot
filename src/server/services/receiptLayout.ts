@@ -29,6 +29,20 @@ export interface ReceiptImageData {
   /** Pictures already fetched and encoded; set by prepareReceiptData. */
   logoData?: string | null;
   letterheadData?: string | null;
+
+  // --- an invoice is the same document with a few different parts ----------
+  /** Defaults to a receipt. */
+  kind?: 'receipt' | 'invoice';
+  /** Invoices: when payment is due, and where the invoice stands. */
+  dueDate?: string | null;
+  status?: 'unpaid' | 'paid' | 'overdue' | 'void' | null;
+  /** Invoices: how to pay, one instruction per line. */
+  payLines?: string[] | null;
+  /** A line under the items, e.g. a discount or tax. Amounts are in the document's currency. */
+  discount?: number | null;
+  tax?: { label: string; amount: number } | null;
+  /** Invoices: terms or a note to the customer. */
+  notes?: string | null;
 }
 
 const esc = (v: unknown) =>
@@ -119,11 +133,14 @@ export function receiptSvg(d: ReceiptImageData): string {
 
   // --- title and reference --------------------------------------------------
   y += 54;
-  parts.push(`<text x="${M}" y="${y}" font-size="30" font-weight="700" fill="${INK}" letter-spacing="3">RECEIPT</text>`);
+  const invoice = d.kind === 'invoice';
+  const paid = !invoice || d.status === 'paid';
+  parts.push(`<text x="${M}" y="${y}" font-size="30" font-weight="700" fill="${INK}" letter-spacing="3">${invoice ? 'INVOICE' : 'RECEIPT'}</text>`);
   const refs: Array<[string, string]> = [];
-  if (d.receiptNo) refs.push(['Receipt no.', fit(d.receiptNo, 22)]);
-  if (d.orderRef) refs.push(['Order', fit(d.orderRef, 22)]);
-  if (d.date) refs.push(['Date', fit(d.date, 22)]);
+  if (d.receiptNo) refs.push([invoice ? 'Invoice no.' : 'Receipt no.', fit(d.receiptNo, 22)]);
+  if (d.orderRef) refs.push([invoice ? 'Reference' : 'Order', fit(d.orderRef, 22)]);
+  if (d.date) refs.push([invoice ? 'Issued' : 'Date', fit(d.date, 22)]);
+  if (invoice && d.dueDate) refs.push(['Due', fit(d.dueDate, 22)]);
   refs.forEach(([k, v], i) => {
     const ly = y - 24 + i * 24;
     parts.push(`<text x="${W - M - 170}" y="${ly}" text-anchor="end" font-size="14" fill="${MUTED}">${esc(k)}</text>`);
@@ -149,13 +166,30 @@ export function receiptSvg(d: ReceiptImageData): string {
   });
 
   const right = M + colW + 24 + 20;
-  parts.push(`<text x="${right}" y="${y + 30}" font-size="12" font-weight="700" fill="${FAINT}" letter-spacing="1.5">PAYMENT</text>`);
-  parts.push(`<text x="${right}" y="${y + 58}" font-size="18" font-weight="700" fill="${INK}">${esc(fit(d.method || 'Payment received', 26))}</text>`);
-  if (d.transactionCode) {
-    parts.push(`<text x="${right}" y="${y + 84}" font-size="14" fill="${MUTED}">Reference: ${esc(fit(d.transactionCode, 24))}</text>`);
+  if (invoice) {
+    // What is owed, by when, and where it stands.
+    const state =
+      d.status === 'paid' ? { label: 'PAID', bg: '#d1fae5', fg: '#065f46' }
+      : d.status === 'overdue' ? { label: 'OVERDUE', bg: '#fee2e2', fg: '#991b1b' }
+      : d.status === 'void' ? { label: 'CANCELLED', bg: '#e5e7eb', fg: '#374151' }
+      : { label: 'AWAITING PAYMENT', bg: '#fef3c7', fg: '#92400e' };
+    parts.push(`<text x="${right}" y="${y + 30}" font-size="12" font-weight="700" fill="${FAINT}" letter-spacing="1.5">${paid ? 'AMOUNT PAID' : 'AMOUNT DUE'}</text>`);
+    parts.push(`<text x="${right}" y="${y + 62}" font-size="22" font-weight="700" fill="${INK}">${esc(money(d.amount, d.currency))}</text>`);
+    if (d.dueDate && !paid) {
+      parts.push(`<text x="${right}" y="${y + 86}" font-size="14" fill="${MUTED}">Due ${esc(fit(d.dueDate, 24))}</text>`);
+    }
+    const pillW = 22 + state.label.length * 8.4;
+    parts.push(`<rect x="${right}" y="${y + 104}" width="${pillW}" height="22" rx="11" fill="${state.bg}"/>`);
+    parts.push(`<text x="${right + pillW / 2}" y="${y + 120}" text-anchor="middle" font-size="12" font-weight="700" fill="${state.fg}">${state.label}</text>`);
+  } else {
+    parts.push(`<text x="${right}" y="${y + 30}" font-size="12" font-weight="700" fill="${FAINT}" letter-spacing="1.5">PAYMENT</text>`);
+    parts.push(`<text x="${right}" y="${y + 58}" font-size="18" font-weight="700" fill="${INK}">${esc(fit(d.method || 'Payment received', 26))}</text>`);
+    if (d.transactionCode) {
+      parts.push(`<text x="${right}" y="${y + 84}" font-size="14" fill="${MUTED}">Reference: ${esc(fit(d.transactionCode, 24))}</text>`);
+    }
+    parts.push(`<rect x="${right}" y="${y + 104}" width="118" height="22" rx="11" fill="#d1fae5"/>`);
+    parts.push(`<text x="${right + 59}" y="${y + 120}" text-anchor="middle" font-size="12" font-weight="700" fill="#065f46">VERIFIED</text>`);
   }
-  parts.push(`<rect x="${right}" y="${y + 104}" width="118" height="22" rx="11" fill="#d1fae5"/>`);
-  parts.push(`<text x="${right + 59}" y="${y + 120}" text-anchor="middle" font-size="12" font-weight="700" fill="#065f46">VERIFIED</text>`);
   y += boxH + 30;
 
   // --- what was bought ------------------------------------------------------
@@ -195,18 +229,26 @@ export function receiptSvg(d: ReceiptImageData): string {
   // --- totals ---------------------------------------------------------------
   y += 22;
   const tx = W - M - 300;
-  const showSubtotal = priced === items.length && items.length > 0 && d.amount !== null && Math.abs(subtotal - Number(d.amount)) > 0.005;
-  if (showSubtotal) {
-    parts.push(`<text x="${tx}" y="${y + 18}" font-size="15" fill="${MUTED}">Items total</text>`);
-    parts.push(`<text x="${W - M - 14}" y="${y + 18}" text-anchor="end" font-size="15" fill="${INK}">${esc(money(subtotal, d.currency))}</text>`);
-    y += 32;
-  }
+  const hasAdjust = Boolean((d.discount && d.discount > 0) || (d.tax && d.tax.amount > 0));
+  const showSubtotal = priced === items.length && items.length > 0 && d.amount !== null
+    && (hasAdjust || Math.abs(subtotal - Number(d.amount)) > 0.005);
+  const totalRow = (label: string, value: string) => {
+    parts.push(`<text x="${tx}" y="${y + 18}" font-size="15" fill="${MUTED}">${esc(label)}</text>`);
+    parts.push(`<text x="${W - M - 14}" y="${y + 18}" text-anchor="end" font-size="15" fill="${INK}">${esc(value)}</text>`);
+    y += 30;
+  };
+  const stampTop = y;
+  if (showSubtotal) totalRow(hasAdjust ? 'Subtotal' : 'Items total', money(subtotal, d.currency));
+  if (d.discount && d.discount > 0) totalRow('Discount', `- ${money(d.discount, d.currency)}`);
+  if (d.tax && d.tax.amount > 0) totalRow(fit(d.tax.label || 'Tax', 22), money(d.tax.amount, d.currency));
+  if (y > stampTop) y += 4;
   parts.push(`<rect x="${tx - 16}" y="${y}" width="${316}" height="58" rx="8" fill="${accent}"/>`);
-  parts.push(`<text x="${tx}" y="${y + 36}" font-size="16" font-weight="700" fill="#ffffff">TOTAL PAID</text>`);
+  parts.push(`<text x="${tx}" y="${y + 36}" font-size="16" font-weight="700" fill="#ffffff">${paid ? 'TOTAL PAID' : 'TOTAL DUE'}</text>`);
   parts.push(`<text x="${W - M - 14}" y="${y + 37}" text-anchor="end" font-size="22" font-weight="700" fill="#ffffff">${esc(money(d.amount, d.currency))}</text>`);
 
-  // The mark that it is settled, set at an angle like a stamp.
-  if (s.show_stamp !== false) {
+  // The mark that it is settled, set at an angle like a stamp. An invoice
+  // only carries it once it has been paid.
+  if (s.show_stamp !== false && paid) {
     const cx = M + 92, cy = y + 28;
     parts.push(
       `<g transform="rotate(-9 ${cx} ${cy})">` +
@@ -217,6 +259,35 @@ export function receiptSvg(d: ReceiptImageData): string {
     );
   }
   y += 58 + 34;
+
+  // --- how to pay (invoices that are still owed) ---------------------------
+  if (invoice && !paid && d.status !== 'void') {
+    const pay = (d.payLines ?? []).flatMap((l) => wrap(l, 80, 2)).slice(0, 6);
+    const terms = d.notes ? wrap(d.notes, 84, 3) : [];
+    if (pay.length || terms.length) {
+      const boxH2 = 22 + (pay.length ? 26 + pay.length * 22 : 0) + (terms.length ? 26 + terms.length * 21 : 0);
+      parts.push(`<rect x="${M}" y="${y}" width="${W - M * 2}" height="${boxH2}" rx="10" fill="#f9fafb" stroke="${RULE}"/>`);
+      let py = y + 30;
+      if (pay.length) {
+        parts.push(`<text x="${M + 20}" y="${py}" font-size="12" font-weight="700" fill="${FAINT}" letter-spacing="1.5">HOW TO PAY</text>`);
+        py += 24;
+        for (const line of pay) {
+          parts.push(`<text x="${M + 20}" y="${py}" font-size="15" fill="${INK}">${esc(line)}</text>`);
+          py += 22;
+        }
+        py += 4;
+      }
+      if (terms.length) {
+        parts.push(`<text x="${M + 20}" y="${py}" font-size="12" font-weight="700" fill="${FAINT}" letter-spacing="1.5">TERMS</text>`);
+        py += 23;
+        for (const line of terms) {
+          parts.push(`<text x="${M + 20}" y="${py}" font-size="14" fill="${MUTED}">${esc(line)}</text>`);
+          py += 21;
+        }
+      }
+      y += boxH2 + 30;
+    }
+  }
 
   // --- foot -----------------------------------------------------------------
   const note = wrap(s.footer_note || `Thank you for choosing ${name}.`, 84, 3);

@@ -481,6 +481,17 @@ function MessageBubble({ message }: { message: ConversationDetail['messages'][nu
         }}>
           {message.body}
         </div>
+        {documentOf(message) && (
+          <a
+            href={documentOf(message)!.url} target="_blank" rel="noreferrer"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '6px 10px',
+              border: '1px solid var(--border)', borderRadius: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text)',
+            }}
+          >
+            PDF · {documentOf(message)!.name}
+          </a>
+        )}
         {receiptImageOf(message) && (
           <a href={receiptImageOf(message)!} target="_blank" rel="noreferrer" style={{ display: 'block', marginTop: 6 }}>
             <img
@@ -612,6 +623,19 @@ function Row({ label, value }: { label: string; value: string | null | undefined
       <span style={{ textAlign: 'right', wordBreak: 'break-word' }}>{value || '—'}</span>
     </div>
   );
+}
+
+/** The invoice or receipt PDF attached to a message, when it is one this site issued. */
+function documentOf(message: { extracted?: unknown }): { url: string; name: string } | null {
+  const e = message.extracted as { file_url?: unknown; file_name?: unknown } | null;
+  if (typeof e?.file_url !== 'string') return null;
+  try {
+    const u = new URL(e.file_url);
+    const ours = u.protocol === 'https:' && (u.pathname.startsWith('/api/receipts/pdf/') || u.pathname.startsWith('/api/invoices/pdf/'));
+    return ours ? { url: e.file_url, name: typeof e.file_name === 'string' ? e.file_name : 'Document.pdf' } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The receipt picture attached to a message, when it is one this site issued. */

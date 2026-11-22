@@ -21,6 +21,8 @@ const SKIP: RegExp[] = [
   /^\/team(\/|$)/,
   /^\/alerts\/(recipients|test|telegram-bot)/,
   /^\/receipt-settings\/preview$/,
+  // Invoices write their own, fuller entries.
+  /^\/invoices(\/|$)/,
   /^\/invitations\//,
   /^\/shwari\/chat$/,
   /^\/platform\//,
@@ -75,6 +77,8 @@ const SUMMARY: Record<string, string> = {
   'POST /onboarding/complete': 'Finished setting up the business',
   'PUT /alerts': 'Changed which alerts are sent',
   'PUT /receipt-settings': 'Changed how receipts look',
+  'PUT /invoice-settings': 'Changed the invoice settings',
+  'POST /payments/:id/invoice': 'Linked a payment to an invoice',
   'POST /receipt-settings/image': 'Changed the receipt letterhead or logo',
 };
 

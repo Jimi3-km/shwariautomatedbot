@@ -1,3 +1,4 @@
+import { pixelsToPdf } from './pdf.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,12 +67,62 @@ export async function renderReceiptPng(data: ReceiptImageData): Promise<Buffer |
   }
 }
 
+/**
+ * The same document as a PDF. Rendered a little larger than the chat picture
+ * so it prints cleanly. Null on the same conditions as the picture.
+ */
+export async function renderDocumentPdf(data: ReceiptImageData, title: string): Promise<Buffer | null> {
+  try {
+    const fonts = fontFiles();
+    if (!fonts.length) {
+      console.warn('[receipt-image] no font file found; skipping the PDF');
+      return null;
+    }
+    const { Resvg } = await import('@resvg/resvg-js');
+    const ready = data.letterheadData !== undefined || data.logoData !== undefined ? data : await prepareReceiptData(data);
+    const resvg = new Resvg(receiptSvg(ready), {
+      font: { fontFiles: fonts, loadSystemFonts: false, defaultFontFamily: 'DejaVu Sans' },
+      fitTo: { mode: 'width', value: 1240 },
+      background: '#ffffff',
+    });
+    const rendered = resvg.render();
+    return pixelsToPdf(rendered.pixels, rendered.width, rendered.height, title);
+  } catch (e) {
+    console.warn('[receipt-image] could not render the PDF:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The signed address
 // ---------------------------------------------------------------------------
 
 function signingKey(): string {
   return process.env.INTERNAL_API_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+}
+
+/** A signature for any document address: `scope` keeps one kind from opening another. */
+export function signDocument(scope: string, id: string): string {
+  return crypto.createHmac('sha256', signingKey()).update(`${scope}:${id}`).digest('base64url').slice(0, 32);
+}
+
+export function documentSignatureOk(scope: string, id: string, sig: unknown): boolean {
+  if (!signingKey() || typeof sig !== 'string' || sig.length !== 32) return false;
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(signDocument(scope, id)));
+}
+
+/** The public address of a receipt as a PDF, or null. */
+export function receiptPdfUrl(paymentId: string): string | null {
+  const origin = publicApiUrl();
+  if (!origin || !signingKey()) return null;
+  return `${origin}/api/receipts/pdf/${encodeURIComponent(paymentId)}.pdf?sig=${signDocument('receipt-pdf', paymentId)}`;
+}
+
+/** The public address of an invoice as a PDF, or null. */
+export function invoicePdfUrl(invoiceId: string): string | null {
+  const origin = publicApiUrl();
+  if (!origin || !signingKey()) return null;
+  return `${origin}/api/invoices/pdf/${encodeURIComponent(invoiceId)}.pdf?sig=${signDocument('invoice-pdf', invoiceId)}`;
 }
 
 export function signReceipt(paymentId: string): string {

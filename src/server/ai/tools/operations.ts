@@ -1,3 +1,4 @@
+import { createInvoice, findInvoiceForClaim, invoiceSettingsOf, loadBusiness as loadInvoiceBusiness, sendInvoice } from '../../services/invoices.js';
 import { notify } from '../../services/notify.js';
 import { findInCatalogue } from './bulk.js';
 import { serviceClient } from '../../supabase.js';
@@ -220,7 +221,7 @@ export const bookAppointment: Tool = {
     // exists, and so the duration defaults to what the service actually takes.
     const { data: service } = await serviceClient
       .from('services')
-      .select('id, name, duration_minutes, booking_mode, active')
+      .select('id, name, duration_minutes, booking_mode, active, price_amount')
       .eq('tenant_id', ctx.tenantId)
       .ilike('name', likeLiteral(serviceName))
       .limit(1)
@@ -293,6 +294,29 @@ export const bookAppointment: Tool = {
 
     if (error) throw new Error(error.message);
 
+    // A business that bills on booking gets the invoice raised and sent now.
+    // Never allowed to undo the booking: a failure here is logged and left.
+    let invoiced: string | null = null;
+    try {
+      const price = service?.price_amount === null || service?.price_amount === undefined ? null : Number(service.price_amount);
+      if (price !== null && price > 0) {
+        const business = await loadInvoiceBusiness(ctx.tenantId);
+        if (invoiceSettingsOf(business).auto_on_booking) {
+          const inv = await createInvoice(ctx.tenantId, {
+            leadId: customer.leadId ?? null,
+            conversationId: ctx.conversationId ?? null,
+            appointmentId: data.id,
+            customerName: finalCustomerName,
+            items: [{ name: service?.name ?? serviceName, qty: 1, price }],
+          });
+          const delivery = await sendInvoice(ctx.tenantId, inv.id);
+          if (delivery.sent) invoiced = inv.invoice_no;
+        }
+      }
+    } catch (e) {
+      console.warn('[booking] could not raise the invoice:', e instanceof Error ? e.message : e);
+    }
+
     // Look up customer email if available to send confirmation
     let customerEmail = str(args, 'customer_email', { max: 200 });
     if (!customerEmail && customer.leadId) {
@@ -329,6 +353,7 @@ export const bookAppointment: Tool = {
     return {
       booked: true,
       appointment: data,
+      ...(invoiced ? { invoice_sent: invoiced, invoice_note: `Invoice ${invoiced} has just been sent to the customer in this chat as a PDF. Tell them so; do not restate the amount unless asked.` } : {}),
       local_time: toLocalIso(new Date(startsAt), ctx.timezone),
       ...(hours ? { warning: hours } : {}),
     };
@@ -1253,6 +1278,8 @@ export const recordPaymentClaim: Tool = {
         tenant_id: ctx.tenantId,
         lead_id: customer?.leadId ?? null,
         order_id: orderId,
+        // With no order named, an open invoice for this customer is what they are paying.
+        invoice_id: orderId ? null : await findInvoiceForClaim(ctx.tenantId, customer?.leadId, amount).catch(() => null),
         conversation_id: ctx.conversationId,
         customer_id: customer?.customerId ?? null,
         transaction_code: code,

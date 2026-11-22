@@ -22,6 +22,15 @@ function ownReceiptImage(extracted: unknown): string | null {
   return url.startsWith(`${publicApiUrl()}/api/receipts/image/`) ? url : null;
 }
 
+/** The PDF on a message, if it is an invoice or receipt this server issued. */
+function ownDocument(extracted: unknown): { url: string; name: string } | null {
+  const e = extracted as { file_url?: unknown; file_name?: unknown } | null;
+  if (typeof e?.file_url !== 'string') return null;
+  const base = publicApiUrl();
+  if (!e.file_url.startsWith(`${base}/api/receipts/pdf/`) && !e.file_url.startsWith(`${base}/api/invoices/pdf/`)) return null;
+  return { url: e.file_url, name: typeof e.file_name === 'string' ? e.file_name.slice(0, 80) : 'Document.pdf' };
+}
+
 export const webchatRouter = Router();
 
 /**
@@ -311,6 +320,10 @@ webchatRouter.get(
         // image from anywhere else.
         ...(ownReceiptImage((m as { extracted?: unknown }).extracted)
           ? { image: ownReceiptImage((m as { extracted?: unknown }).extracted) }
+          : {}),
+        // An invoice or receipt as a PDF, by the same rule.
+        ...(ownDocument((m as { extracted?: unknown }).extracted)
+          ? { file: ownDocument((m as { extracted?: unknown }).extracted) }
           : {}),
       })),
     });

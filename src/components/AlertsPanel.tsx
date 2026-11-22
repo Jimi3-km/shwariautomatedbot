@@ -20,6 +20,8 @@ const KIND_LABEL: Record<string, { label: string; hint: string }> = {
   payment_verified: { label: 'A payment verified', hint: 'Someone on your team confirmed a payment.' },
   posts_to_approve: { label: 'Posts to approve', hint: "The week's posts are ready for you." },
   post_failed: { label: 'A post failed', hint: 'A scheduled post did not go out.' },
+  invoice_paid: { label: 'An invoice paid', hint: 'A customer settled an invoice.' },
+  invoice_overdue: { label: 'An invoice overdue', hint: 'An invoice passed its due date unpaid.' },
   post_published: { label: 'A post published', hint: 'A scheduled post went out.' },
 };
 

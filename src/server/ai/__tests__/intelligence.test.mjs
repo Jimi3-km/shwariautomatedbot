@@ -1349,6 +1349,64 @@ await t('every kind of alert is on by default', () => {
   assert.deepEqual([...DEFAULT_ALERT_KINDS].sort(), [...ALERT_KINDS].sort());
 });
 
+const invoicing = await import('../../services/invoices.js');
+const { renderDocumentPdf } = await import('../../services/receiptImage.js');
+
+await t('invoice totals are worked out here, never taken from the browser', () => {
+  const items = invoicing.cleanItems([
+    { name: ' Bridal makeup ', qty: 1, price: 12000 },
+    { name: 'Gel manicure', qty: 2, price: '1500' },
+    { name: '', qty: 1, price: 50 },
+    { name: 'No price' },
+    { name: 'Negative', qty: 1, price: -5 },
+  ]);
+  assert.equal(items.length, 2, 'lines without a name or a valid price are dropped');
+  assert.equal(items[0].name, 'Bridal makeup');
+  const t1 = invoicing.totalsOf(items, 1000, 16);
+  assert.deepEqual(t1, { subtotal: 15000, discount: 1000, tax_amount: 2240, total: 16240 });
+  assert.equal(invoicing.totalsOf(items, 999999, 0).total, 0, 'a discount cannot exceed the subtotal');
+});
+
+await t('a sent invoice past its due date reads as overdue; a paid one never does', () => {
+  assert.equal(invoicing.displayStatus({ status: 'sent', due_date: '2000-01-01' }), 'overdue');
+  assert.equal(invoicing.displayStatus({ status: 'sent', due_date: '2999-01-01' }), 'sent');
+  assert.equal(invoicing.displayStatus({ status: 'paid', due_date: '2000-01-01' }), 'paid');
+  assert.equal(invoicing.displayStatus({ status: 'draft', due_date: '2000-01-01' }), 'draft');
+});
+
+await t('an invoice is drawn as an invoice and comes out as a real PDF', async () => {
+  const data = invoicing.invoiceDocData(
+    { business_name: 'LuxeGlow <b>Studio</b>', currency: 'KES', payment_details: { 'M-Pesa Paybill': '456565' } },
+    {
+      id: '99fd3fb2-2f8d-4b38-b859-c9ae3baf9bfb', invoice_no: 'INV-00017', status: 'sent', due_date: '2999-01-01',
+      issue_date: '2026-11-22', customer_name: 'Jane', items: [{ name: 'Bridal makeup', qty: 1, price: 12000 }],
+      discount: 0, tax_amount: 0, tax_rate: 0, total: 12000, currency: 'KES', notes: 'Due in 7 days.',
+    }
+  );
+  assert.equal(data.kind, 'invoice');
+  assert.equal(data.status, 'unpaid');
+  assert.ok(data.payLines.some((l) => l.includes('456565')), 'how to pay comes from the payment details');
+  assert.ok(data.payLines.some((l) => l.includes('INV-00017')), 'the invoice number is the reference');
+  const svg = receiptSvg({ ...data, letterheadData: null, logoData: null });
+  for (const expected of ['INVOICE', 'INV-00017', 'TOTAL DUE', 'AWAITING PAYMENT', 'HOW TO PAY', 'KES 12,000.00']) {
+    assert.ok(svg.includes(expected), `missing ${expected}`);
+  }
+  assert.ok(!svg.includes('>PAID<'), 'an unpaid invoice carries no PAID mark');
+  assert.ok(!svg.includes('<b>'), 'business text must be escaped');
+  const pdf = await renderDocumentPdf({ ...data, letterheadData: null, logoData: null }, 'Invoice INV-00017');
+  assert.ok(pdf && pdf.length > 5000, 'the invoice did not render to a PDF');
+  assert.equal(pdf.subarray(0, 8).toString('latin1'), '%PDF-1.4');
+  assert.ok(pdf.subarray(-6).toString('latin1').includes('%%EOF'));
+});
+
+await t('a paid invoice says so', () => {
+  const data = invoicing.invoiceDocData({ business_name: 'X', currency: 'KES' },
+    { invoice_no: 'INV-1', status: 'paid', items: [{ name: 'A', qty: 1, price: 10 }], total: 10, currency: 'KES' });
+  const svg = receiptSvg({ ...data, letterheadData: null, logoData: null });
+  assert.ok(svg.includes('TOTAL PAID') && svg.includes('>PAID<'));
+  assert.ok(!svg.includes('HOW TO PAY'), 'nothing left to pay');
+});
+
 await t('the sign-in hop only goes to Meta, and moves on without a tap', () => {
   assert.ok(safeMetaUrl('https://www.instagram.com/oauth/authorize?client_id=1&state=x'));
   assert.ok(safeMetaUrl('https://business.facebook.com/messaging/whatsapp/onboard/?app_id=1'));

@@ -1,4 +1,5 @@
-import { receiptImageUrl } from './receiptImage.js';
+import { sendDocumentToCustomer } from '../channels/media.js';
+import { receiptImageUrl, receiptPdfUrl } from './receiptImage.js';
 import { sendImageToCustomer } from '../channels/media.js';
 import { notify, logReceipt } from './notify.js';
 import { serviceClient } from '../supabase.js';
@@ -123,7 +124,7 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
       .eq('tenant_id', input.tenantId).eq('id', input.paymentId).maybeSingle();
     if (!payment) return { ...result, reason: 'The payment could not be read back.' };
 
-    const [{ data: business }, { data: order }, { data: lead }] = await Promise.all([
+    const [{ data: business }, orderRes, leadRes] = await Promise.all([
       serviceClient.from('tenants')
         .select('business_name, address, currency, order_prefix, branding, contact_info, timezone')
         .eq('id', input.tenantId).maybeSingle(),
@@ -134,6 +135,20 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
         ? serviceClient.from('leads').select('*').eq('tenant_id', input.tenantId).eq('id', payment.lead_id).maybeSingle()
         : Promise.resolve({ data: null } as any),
     ]);
+    let order: any = orderRes.data;
+    let lead: any = leadRes.data;
+    // A payment for an invoice is receipted with the invoice's own lines, and
+    // goes to the conversation the invoice was sent in.
+    if (!order && (payment as any).invoice_id) {
+      const { data: inv } = await serviceClient.from('invoices')
+        .select('invoice_no, items, customer_name, customer_phone, customer_email, conversation_id')
+        .eq('tenant_id', input.tenantId).eq('id', (payment as any).invoice_id).maybeSingle();
+      if (inv) {
+        order = { order_ref: inv.invoice_no, items: inv.items, delivery_location: null };
+        if (!lead) lead = { customer_name: inv.customer_name, phone: inv.customer_phone, email: inv.customer_email };
+        if (!payment.conversation_id && inv.conversation_id) (payment as any).conversation_id = inv.conversation_id;
+      }
+    }
 
     // --- the receipt by email, when there is an address ---------------------
     const email = String(payment.customer_email || (lead as any)?.email || '').trim();
@@ -146,11 +161,12 @@ export async function notifyPaymentVerified(input: PaymentNoticeInput): Promise<
         tenantId: input.tenantId,
         senderName: (business as any).business_name || undefined,
       };
-      // The same picture the customer gets in chat, attached. If the email
-      // service cannot fetch it, the receipt still goes without it.
-      const picture = receiptImageUrl(input.paymentId);
-      let sent: any = picture
-        ? await sendBrevoEmail({ ...receiptEmail, attachments: [{ url: picture, name: 'receipt.png' }] } as any).catch(() => ({ success: false }))
+      // The receipt as a PDF, attached. If the email service cannot fetch it,
+      // the receipt still goes without it.
+      const document = receiptPdfUrl(input.paymentId);
+      const fileName = `Receipt ${(order as any)?.order_ref ?? ''}`.trim() + '.pdf';
+      let sent: any = document
+        ? await sendBrevoEmail({ ...receiptEmail, attachments: [{ url: document, name: fileName }] } as any).catch(() => ({ success: false }))
         : { success: false };
       if (!sent?.success) {
         sent = await sendBrevoEmail(receiptEmail as any).catch(() => ({ success: false }));
@@ -264,10 +280,13 @@ async function sendInChat(
   // The receipt as a picture, fetched by the chat platform from a signed
   // address. Kept on the transcript row too, so web chat and the Inbox have it.
   const imageUrl = receiptImageUrl(input.paymentId);
+  const pdfUrl = receiptPdfUrl(input.paymentId);
+  const pdfName = `Receipt ${order?.order_ref ?? ''}`.trim() + '.pdf';
   const extracted: Record<string, unknown> = {
     agent: 'shwari', department: 'orders',
     payment_confirmation: true, receipt: true, payment_id: input.paymentId,
     ...(imageUrl ? { image_url: imageUrl } : {}),
+    ...(pdfUrl ? { file_url: pdfUrl, file_name: pdfName } : {}),
     ...(input.resend ? { resent: true } : {}),
   };
   const { data: row, error: insertErr } = await serviceClient
@@ -297,10 +316,20 @@ async function sendInChat(
   try {
     await provider.sendMessage(channelId, conv.customer_id, text, { tenantId: input.tenantId, userId: '' });
 
-    // Then the same receipt as a photo they can save and forward. The text
-    // has already arrived, so a photo that fails costs nothing.
+    // Then the receipt itself, as a PDF they can keep and forward. The text
+    // has already arrived, so a file that fails costs nothing.
     let image = false;
-    if (imageUrl) {
+    if (pdfUrl) {
+      const doc = await sendDocumentToCustomer({
+        tenantId: input.tenantId, channelType: conv.channel_type, channelId,
+        customerId: conv.customer_id, fileUrl: pdfUrl, filename: pdfName,
+        caption: order?.order_ref ? `Receipt ${order.order_ref}` : 'Receipt',
+      });
+      image = doc.sent;
+      if (!doc.sent) console.warn('[payment-notice] receipt PDF not sent:', doc.reason);
+    }
+    // A platform that refuses the file still gets the receipt as a picture.
+    if (!image && imageUrl) {
       const photo = await sendImageToCustomer({
         tenantId: input.tenantId, channelType: conv.channel_type, channelId,
         customerId: conv.customer_id, imageUrl,

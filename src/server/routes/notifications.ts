@@ -113,7 +113,19 @@ notificationsRouter.get(
         : Promise.resolve({ data: null } as any),
     ]);
 
-    const png = await renderReceiptPng(receiptDataFrom(business, payment, order, lead));
+    // A payment for an invoice is receipted with the invoice's own lines.
+    let basis: any = order;
+    let who: any = lead;
+    if (!basis && (payment as any).invoice_id) {
+      const { data: inv } = await serviceClient.from('invoices')
+        .select('invoice_no, items, customer_name, customer_phone')
+        .eq('tenant_id', payment.tenant_id).eq('id', (payment as any).invoice_id).maybeSingle();
+      if (inv) {
+        basis = { order_ref: inv.invoice_no, items: inv.items, delivery_location: null };
+        who = who ?? { customer_name: inv.customer_name, phone: inv.customer_phone };
+      }
+    }
+    const png = await renderReceiptPng(receiptDataFrom(business, payment, basis, who));
     if (!png) return res.status(503).json({ error: 'The receipt image could not be produced' });
 
     res.setHeader('content-type', 'image/png');

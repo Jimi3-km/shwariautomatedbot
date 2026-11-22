@@ -30,6 +30,7 @@ import { publicApiUrl } from '../config/publicUrl.js';
 export const ALERT_KINDS = [
   'payment_claim', 'new_order', 'needs_human', 'payment_verified',
   'posts_to_approve', 'post_failed', 'post_published',
+  'invoice_paid', 'invoice_overdue',
 ] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
@@ -93,6 +94,22 @@ const REASONS: Record<AlertKind, Reason> = {
       name: 'shwari_alert_post_failed',
       body: 'A scheduled post did not go out: {{1}}. Open your dashboard to fix it.',
       example: 'Monday 9:00 post, Instagram refused the photo',
+    },
+  },
+  invoice_paid: {
+    emoji: '🧾', action: 'See the invoice', link: '/invoices',
+    template: {
+      name: 'shwari_alert_invoice_paid',
+      body: 'An invoice was paid at your business: {{1}}. Open your dashboard to see it.',
+      example: 'Invoice INV-00017, Jane paid KES 16,240.00',
+    },
+  },
+  invoice_overdue: {
+    emoji: '⏰', action: 'Follow it up', link: '/invoices',
+    template: {
+      name: 'shwari_alert_invoice_overdue',
+      body: 'An invoice is overdue at your business: {{1}}. Open your dashboard to follow it up.',
+      example: 'Invoice INV-00017 for Jane, KES 16,240.00, was due 29 Nov',
     },
   },
   post_published: {
