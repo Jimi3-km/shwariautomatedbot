@@ -343,6 +343,8 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     else if (status === 'no_pages') setError('No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
     else if (status === 'page_in_use') setError('That Facebook Page is already connected to another business.');
     else if (status === 'database_update_needed') setError('The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
+    else if (status === 'account_in_use') setError('That account is already connected to another business on this platform. Disconnect it there first, then connect it here.');
+    else if (status === 'instagram_exchange_failed') setError('Instagram did not complete the sign-in. Try again; if it keeps happening, check that the account is a Business or Creator account.');
     else setError("We couldn't finish connecting. Please try again.");
   }, []);
 

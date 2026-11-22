@@ -239,8 +239,10 @@ channelsRouter.post(
       // them back to it rather than to the domain Meta redirects to.
       const started = await provider.connect({ ...req.ctx!, returnTo: safeReturnOrigin(requestOrigin(req)) });
       if (started.mode === 'oauth') {
-        // Written down now, so an attempt that never comes back is still visible.
-        void recordConnectStart({
+        // Written down now, so an attempt that never comes back is still
+        // visible. Awaited: on this host, work left running after the response
+        // is cut off, which is why earlier attempts left no record.
+        await recordConnectStart({
           tenantId: req.ctx!.tenantId, provider: provider.id,
           state: stateOf(started.authorize_url), userAgent: req.get('user-agent'),
         });
@@ -305,9 +307,10 @@ channelsRouter.get(
     const state = params.state ? verifyOAuthState(params.state) : null;
     const home = safeReturnOrigin(state?.returnTo) ?? '';
 
-    const back = (status: string, detail?: string) => {
-      // How it ended, and in which browser Meta sent the person back.
-      void recordConnectFinish({
+    const back = async (status: string, detail?: string) => {
+      // How it ended, and in which browser Meta sent the person back. Awaited
+      // for the same reason as the start: nothing survives the response here.
+      await recordConnectFinish({
         state: params.state, provider: providerId, tenantId: state?.tenantId ?? null,
         outcome: status, detail: detail ?? null, userAgent: req.get('user-agent'),
       });

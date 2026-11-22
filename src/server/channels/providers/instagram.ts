@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { instagramConnectConfigured, metaConfig } from '../../config/meta.js';
@@ -120,6 +121,9 @@ export const instagramProvider: ChannelProvider = {
       );
     }
 
+    // An account another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('instagram', [accountId, profile.id], ctx.tenantId);
+
     // One Instagram account belongs to one workspace. Rows connected before
     // the id fix are keyed on the app-scoped id, so both are looked for.
     const { data: matches } = await serviceClient
@@ -130,7 +134,9 @@ export const instagramProvider: ChannelProvider = {
 
     const candidates = Array.isArray(matches) ? matches : [];
     if (candidates.some((r) => r.tenant_id !== ctx.tenantId)) {
-      throw new ProviderError('That Instagram account is already connected to another business.', { status: 409 });
+      throw new ProviderError('That Instagram account is already connected to another business.', {
+        status: 409, code: 'ACCOUNT_IN_USE',
+      });
     }
     const existing = candidates.find((r) => r.channel_account_id === accountId) ?? candidates[0] ?? null;
 
@@ -164,7 +170,13 @@ export const instagramProvider: ChannelProvider = {
 
     if (error || !data) {
       console.error('[providers/instagram] save failed', error);
-      throw new ProviderError("We couldn't save that connection. Please try again.", { status: 500 });
+      // Two businesses connecting the same account at once: the unique key decided.
+      if ((error as { code?: string } | null)?.code === '23505') {
+        throw new ProviderError('That Instagram account is already connected to another business.', {
+          status: 409, code: 'ACCOUNT_IN_USE',
+        });
+      }
+      throw new ProviderError("We couldn't save that connection. Please try again.", { status: 500, code: 'SAVE_FAILED' });
     }
 
     return { account: toAccount(data) };

@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { facebookConnectConfigured } from '../../config/meta.js';
@@ -79,6 +80,9 @@ export async function connectFacebookPage(
   ctx: Pick<ConnectContext, 'tenantId' | 'userId'>,
   page: FacebookPage
 ): Promise<CallbackResult> {
+  // A Page another business has disconnected is free to connect here.
+  await releaseDisconnectedElsewhere('facebook', [page.id], ctx.tenantId);
+
   // One Page belongs to one workspace.
   const { data: matches, error: lookupErr } = await serviceClient
     .from('channels')

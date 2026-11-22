@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { whatsappEmbeddedSignupConfigured } from '../../config/meta.js';
@@ -196,6 +197,9 @@ export const whatsappProvider: ChannelProvider = {
       });
     }
 
+    // A number another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('whatsapp', [phone.id], ctx.tenantId);
+
     const { data: existing } = await serviceClient
       .from('channels')
       .select('id, tenant_id')
@@ -204,7 +208,9 @@ export const whatsappProvider: ChannelProvider = {
       .maybeSingle();
 
     if (existing && existing.tenant_id !== ctx.tenantId) {
-      throw new ProviderError('That WhatsApp number is already connected to another business.', { status: 409 });
+      throw new ProviderError('That WhatsApp number is already connected to another business.', {
+        status: 409, code: 'ACCOUNT_IN_USE',
+      });
     }
 
     await storeToken({

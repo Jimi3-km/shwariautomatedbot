@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import {
   getMe, setWebhook, deleteWebhook, getWebhookInfo, sendTelegramMessage, generateSecretToken,
@@ -116,6 +117,9 @@ export const telegramProvider: ChannelProvider = {
     }
 
     const accountId = String(bot.id);
+
+    // A bot another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('telegram', [accountId], ctx.tenantId);
 
     // UNIQUE (channel_type, channel_account_id) already prevents two tenants
     // owning one bot; checking first turns that into a readable message.
