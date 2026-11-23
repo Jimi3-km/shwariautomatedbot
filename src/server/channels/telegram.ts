@@ -8,16 +8,29 @@ export interface TelegramBotInfo {
   first_name: string;
 }
 
+export class TelegramError extends Error {
+  readonly httpStatus: number;
+  constructor(message: string, httpStatus: number) {
+    super(message);
+    this.name = 'TelegramError';
+    this.httpStatus = httpStatus;
+  }
+}
+
 async function call<T>(token: string, method: string, body?: unknown): Promise<T> {
   const r = await fetch(`${API}/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(15_000),
   });
   const json: any = await r.json().catch(() => ({}));
   if (!r.ok || !json?.ok) {
     // Never echo the token back in an error.
-    throw new Error(json?.description || `Telegram ${method} failed with HTTP ${r.status}`);
+    throw new TelegramError(
+      json?.description || `Telegram ${method} failed with HTTP ${r.status}`,
+      r.status
+    );
   }
   return json.result as T;
 }
@@ -28,9 +41,9 @@ export function getMe(token: string): Promise<TelegramBotInfo> {
 }
 
 /**
- * Points the bot at our n8n inbound webhook and pins the secret header.
- * n8n's "Resolve Channel" node matches that header against channels.secret_token,
- * which is what maps an incoming update to exactly one tenant.
+ * Points the bot at our inbound webhook and pins the secret header. The
+ * webhook route matches that header against channels.secret_token, which is
+ * what maps an incoming update to exactly one tenant.
  */
 export function setWebhook(token: string, url: string, secretToken: string) {
   return call(token, 'setWebhook', {

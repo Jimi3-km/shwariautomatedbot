@@ -37,6 +37,25 @@ const SUGGESTIONS = [
 
 export function Shwari() {
   const { isAdmin } = useSession();
+  // Shwari changes how the whole business is configured, so the server only
+  // answers owners and admins. Say so here rather than loading into a 403.
+  if (!isAdmin) {
+    return (
+      <>
+        <PageHeader title="Shwari" />
+        <EmptyState
+          icon={<Sparkles size={28} />}
+          title="Shwari is for owners and admins"
+          body="Shwari sets up and changes how the business runs, so only owners and admins can talk to it. Ask one of them if something needs changing."
+        />
+      </>
+    );
+  }
+  return <ShwariChat />;
+}
+
+function ShwariChat() {
+  const { isAdmin } = useSession();
   const toast = useToast();
 
   const status = useAsync(() => getShwariStatus(), []);
@@ -259,6 +278,26 @@ const ACTION_LABELS: Record<string, string> = {
   schedule_follow_up: 'Queued a follow-up message',
   cancel_follow_up: 'Cancelled a queued message',
   update_customer: 'Updated a customer',
+  save_products: 'Saved products',
+  save_services: 'Saved services',
+  remove_product: 'Took a product off sale',
+  remove_products: 'Deleted products',
+  remove_services: 'Stopped offering services',
+  update_business_settings: 'Updated your settings',
+  set_payment_instructions: 'Saved how customers pay',
+  update_agent_settings: 'Changed the AI Agent settings',
+  teach_team: 'Taught the team',
+  forget_lesson: 'Retired a lesson',
+  message_customer: 'Queued a message to a customer',
+  set_conversation_handling: 'Changed who handles a conversation',
+  update_order_status: 'Updated an order',
+  delegate_to_agent: 'Handed a job to a department',
+  resend_receipt: 'Sent a receipt again',
+  propose_week_posts: 'Laid out posts for you to approve',
+  approve_posts: 'Approved posts',
+  update_scheduled_post: 'Changed a post on the calendar',
+  set_posting_schedule: 'Updated your posting schedule',
+  pause_posting: 'Paused or resumed posting',
 };
 
 function ActionList({ actions }: { actions: string[] }) {

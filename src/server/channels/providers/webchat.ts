@@ -1,6 +1,7 @@
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { newSiteKey } from '../webchat/session.js';
+import { publicApiUrl } from '../../config/publicUrl.js';
 import {
   ProviderError,
   type ChannelProvider,
@@ -48,7 +49,7 @@ function toAccount(row: {
  * snippet works in development and production without a second setting.
  */
 export function widgetOrigin(): string {
-  return (process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, '');
+  return publicApiUrl() || `http://localhost:${process.env.PORT || 3000}`;
 }
 
 export function buildEmbed(siteKey: string): EmbedSnippet {

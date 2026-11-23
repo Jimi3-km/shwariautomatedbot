@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Save, LogOut, Plus, X } from 'lucide-react';
-import { getBusiness, updateBusiness, getTeam, updateTeamMember, getSupabase } from '../lib/api';
+import { getBusiness, updateBusiness, getSupabase } from '../lib/api';
+import { TeamPanel } from '../components/TeamPanel';
+import { AlertsPanel } from '../components/AlertsPanel';
+import { ReceiptDesignPanel } from '../components/ReceiptDesignPanel';
 import type { Tenant } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -15,6 +18,16 @@ type Pair = { key: string; value: string };
 const toPairs = (o: Record<string, unknown> | null | undefined): Pair[] =>
   o ? Object.entries(o).map(([key, value]) => ({ key, value: String(value ?? '') })) : [];
 
+const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+/** Days in the order people read a week; anything else keeps its place after them. */
+const weekOrder = (pairs: Pair[]): Pair[] => {
+  const rank = (key: string) => {
+    const i = WEEK.findIndex((d) => key.trim().toLowerCase().startsWith(d.slice(0, 3)));
+    return i === -1 ? WEEK.length : i;
+  };
+  return pairs.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p.key) - rank(b.p.key) || a.i - b.i).map((x) => x.p);
+};
+
 const fromPairs = (pairs: Pair[]): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const p of pairs) if (p.key.trim()) out[p.key.trim()] = p.value;
@@ -25,6 +38,7 @@ const TABS = [
   { id: 'business', label: 'Business' },
   { id: 'delivery', label: 'Delivery' },
   { id: 'payments', label: 'Payments' },
+  { id: 'receipts', label: 'Invoices & receipts' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'team', label: 'Team' },
   { id: 'account', label: 'Account' },
@@ -51,9 +65,13 @@ export function Settings() {
       </div>
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
-        <div style={{ maxWidth: 720, margin: '0 auto' }}>
+        <div style={{ maxWidth: tab === 'receipts' ? 1120 : 720, margin: '0 auto' }}>
           {tab === 'team' ? (
-            <TeamSection isAdmin={isAdmin} />
+            <TeamPanel />
+          ) : tab === 'notifications' ? (
+            <AlertsPanel />
+          ) : tab === 'receipts' ? (
+            <ReceiptDesignPanel />
           ) : tab === 'account' ? (
             <AccountSection />
           ) : (
@@ -82,7 +100,7 @@ function BusinessForm({
     languages: (business.languages ?? []).join(', '),
     notification_channel: business.notification_channel ?? 'telegram',
     notification_target: business.notification_target ?? '',
-    business_hours: toPairs(business.business_hours as Record<string, unknown>),
+    business_hours: weekOrder(toPairs(business.business_hours as Record<string, unknown>)),
     delivery_rules: toPairs(business.delivery_rules as Record<string, unknown>),
     payment_details: toPairs(business.payment_details as Record<string, unknown>),
     contact_info: toPairs(business.contact_info as Record<string, unknown>),
@@ -129,7 +147,7 @@ function BusinessForm({
               <Textarea rows={3} value={form.business_description} disabled={ro}
                 onChange={(e) => set('business_description', e.target.value)} />
             </Field>
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))' }}>
               <Field label="Agent name" hint="What your AI assistant calls itself.">
                 <Input value={form.agent_name} disabled={ro} onChange={(e) => set('agent_name', e.target.value)} />
               </Field>
@@ -183,30 +201,6 @@ function BusinessForm({
               pairs={form.contact_info} disabled={ro}
               onChange={(v) => set('contact_info', v)}
               placeholderKey="phone" placeholderValue="+254…" />
-          </div>
-        </Card>
-      )}
-
-      {tab === 'notifications' && (
-        <Card>
-          <div style={{ display: 'grid', gap: 12 }}>
-            <Field label="Send alerts via">
-              <Select
-                value={form.notification_channel} disabled={ro}
-                onChange={(e) => set('notification_channel', e.target.value)}
-                options={[
-                  { value: 'telegram', label: 'Telegram' },
-                  { value: 'whatsapp', label: 'WhatsApp' },
-                ]}
-              />
-            </Field>
-            <Field
-              label="Send alerts to"
-              hint="Your chat ID on that channel. New leads and payment claims are sent here."
-            >
-              <Input value={form.notification_target} disabled={ro}
-                onChange={(e) => set('notification_target', e.target.value)} />
-            </Field>
           </div>
         </Card>
       )}
@@ -267,74 +261,14 @@ function PairEditor({
   );
 }
 
-function TeamSection({ isAdmin }: { isAdmin: boolean }) {
-  const { user } = useSession();
-  const toast = useToast();
-  const state = useAsync(() => getTeam(), []);
-
-  const change = useMutation(async (id: string, role: string) => {
-    await updateTeamMember(id, role);
-    toast.push('success', 'Role updated.');
-    state.reload();
-  });
-
-  if (state.loading && !state.data) return <LoadingState rows={3} />;
-  if (state.error) return <ErrorState message={state.error} onRetry={state.reload} />;
-
-  const members = state.data?.members ?? [];
-
-  return (
-    <Card>
-      <InlineError message={change.error} />
-      <div className="section-label" style={{ marginBottom: 11 }}>People with access</div>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {members.map((m) => (
-          <div key={m.id} style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
-            background: 'var(--surface-2)', borderRadius: 'var(--radius)',
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13 }}>
-                {m.user_id === user.id ? 'You' : 'Team member'}
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                Added {formatDateTime(m.created_at)}
-              </div>
-            </div>
-            {isAdmin && m.user_id !== user.id ? (
-              <Select
-                aria-label="Role" value={m.role} disabled={change.busy}
-                onChange={(e) => change.run(m.id, e.target.value)}
-                options={[
-                  { value: 'owner', label: 'Owner' },
-                  { value: 'admin', label: 'Admin' },
-                  { value: 'member', label: 'Member' },
-                  { value: 'viewer', label: 'Viewer' },
-                ]}
-                style={{ height: 30, width: 130, fontSize: 12.5 }}
-              />
-            ) : (
-              <Pill tone="neutral">{m.role}</Pill>
-            )}
-          </div>
-        ))}
-      </div>
-      <p className="field-hint" style={{ marginTop: 12 }}>
-        Owners and admins manage settings and channels. Members handle conversations
-        and can verify payments. Viewers have read-only access.
-      </p>
-    </Card>
-  );
-}
-
 function AccountSection() {
-  const { user, role, signOut } = useSession();
+  const { user, roleLabel, signOut } = useSession();
   const toast = useToast();
 
   const resetPassword = useMutation(async () => {
     if (!user.email) throw new Error('No email address on this account.');
     const { error } = await getSupabase().auth.resetPasswordForEmail(user.email, {
-      redirectTo: 'https://shwariautomatedbot.vercel.app/',
+      redirectTo: `${window.location.origin}/`,
     });
     if (error) throw new Error(error.message);
     toast.push('success', 'Password reset link sent to your email.');
@@ -345,7 +279,7 @@ function AccountSection() {
       <div className="section-label" style={{ marginBottom: 11 }}>Your account</div>
       <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
         <Row label="Email" value={user.email ?? '—'} />
-        <Row label="Role" value={role} />
+        <Row label="Role" value={roleLabel} />
       </div>
 
       <InlineError message={resetPassword.error} />

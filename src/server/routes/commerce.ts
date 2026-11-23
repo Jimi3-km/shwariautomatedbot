@@ -1,6 +1,9 @@
+import { settleInvoiceForPayment } from '../services/invoices.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, requireAdmin, handler } from '../auth.js';
+import { RefError, leadIdOrNull, customerIdOrNull, textOrNull } from './refs.js';
 import { logAuditEvent } from '../security/audit.js';
+import { notifyPaymentVerified } from '../services/paymentNotice.js';
 
 export const commerceRouter = Router();
 
@@ -25,7 +28,36 @@ commerceRouter.get(
     }
     const { data, error } = await q;
     if (error) return res.status(400).json({ error: error.message });
-    res.json({ payments: data ?? [] });
+
+    // The name the customer gave, as it appears on the receipt, and the order
+    // the payment is for: a channel id on its own tells a person nothing.
+    const rows = (data ?? []) as any[];
+    const leadIds = [...new Set(rows.map((p) => p.lead_id).filter((v) => v !== null && v !== undefined))];
+    const orderIds = [...new Set(rows.map((p) => p.order_id).filter(Boolean))];
+    const [leads, orders] = await Promise.all([
+      leadIds.length
+        ? ctx.db.from('leads').select('id, customer_name, phone, email').eq('tenant_id', ctx.tenantId).in('id', leadIds)
+        : Promise.resolve({ data: [] as any[] }),
+      orderIds.length
+        ? ctx.db.from('orders').select('id, order_ref').eq('tenant_id', ctx.tenantId).in('id', orderIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const leadById = new Map(((leads as any).data ?? []).map((l: any) => [String(l.id), l]));
+    const orderById = new Map(((orders as any).data ?? []).map((o: any) => [String(o.id), o]));
+
+    res.json({
+      payments: rows.map((p) => {
+        const lead: any = p.lead_id !== null && p.lead_id !== undefined ? leadById.get(String(p.lead_id)) : null;
+        const order: any = p.order_id ? orderById.get(String(p.order_id)) : null;
+        return {
+          ...p,
+          customer_name: lead?.customer_name ?? null,
+          customer_phone: p.customer_phone ?? lead?.phone ?? null,
+          customer_email: p.customer_email ?? lead?.email ?? null,
+          order_ref: order?.order_ref ?? null,
+        };
+      }),
+    });
   })
 );
 
@@ -53,7 +85,7 @@ commerceRouter.post(
     const { data, error } = await ctx.db
       .from('payments').update(updates)
       .eq('id', req.params.id).eq('tenant_id', ctx.tenantId)
-      .select('amount, currency, lead_id, order_id')
+      .select('id, amount, currency, lead_id, order_id')
       .maybeSingle();
     if (error) return res.status(400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Payment not found' });
@@ -61,12 +93,22 @@ commerceRouter.post(
     void logAuditEvent({
       tenantId: ctx.tenantId,
       actorId: ctx.userId,
-      actorType: 'user',
+      actorType: ctx.supportMode ? 'platform_admin' : 'user',
+      actorLabel: ctx.email,
       action: `payment.${decision}`,
       resourceType: 'payments',
       resourceId: req.params.id,
-      details: { decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency },
+      details: {
+        summary: `${decision === 'verified' ? 'Verified' : 'Rejected'} a payment of ${data.currency ?? ''} ${data.amount ?? ''}`.trim(),
+        decision, reason: req.body?.reason || null, amount: data.amount, currency: data.currency,
+      },
     });
+
+    // A payment for an invoice settles it.
+    if (decision === 'verified') {
+      await settleInvoiceForPayment(ctx.tenantId, req.params.id).catch((e) =>
+        console.warn('[commerce] could not settle the invoice:', e instanceof Error ? e.message : e));
+    }
 
     // Keep the lead stage in step with the verification decision.
     if (data.lead_id) {
@@ -74,13 +116,54 @@ commerceRouter.post(
         .update({ stage: decision === 'verified' ? 'payment_verified' : 'payment_claimed', updated_at: new Date().toISOString() })
         .eq('id', data.lead_id).eq('tenant_id', ctx.tenantId);
     }
+    // A claim recorded without an order still pays for one. When the customer
+    // has a single unpaid order for exactly this amount, that is the order.
+    if (decision === 'verified' && !data.order_id && data.lead_id && data.amount !== null) {
+      const { data: open } = await ctx.db
+        .from('orders').select('id, total')
+        .eq('tenant_id', ctx.tenantId).eq('lead_id', data.lead_id)
+        .eq('payment_status', 'unpaid').neq('status', 'cancelled')
+        .order('created_at', { ascending: false }).limit(10);
+      const matches = (open ?? []).filter((o: any) => Number(o.total) === Number(data.amount));
+      // Several identical unpaid orders are duplicates of one purchase: the
+      // newest is the one the customer was last shown.
+      if (matches.length) {
+        data.order_id = matches[0].id;
+        await ctx.db.from('payments').update({ order_id: data.order_id })
+          .eq('id', req.params.id).eq('tenant_id', ctx.tenantId);
+        const extras = matches.slice(1).map((o: any) => o.id);
+        if (extras.length) {
+          await ctx.db.from('orders')
+            .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+            .in('id', extras).eq('tenant_id', ctx.tenantId);
+        }
+      }
+    }
     if (decision === 'verified' && data.order_id) {
       await ctx.db.from('orders')
         .update({ payment_status: 'paid', status: 'confirmed', updated_at: new Date().toISOString() })
         .eq('id', data.order_id).eq('tenant_id', ctx.tenantId);
     }
 
-    res.json(data);
+    // The customer was told a colleague would confirm. Now one has, so tell
+    // them - on the channel they wrote in, with the figures just verified.
+    // A rejection is not announced: that conversation is for a person to have.
+    let notice: Awaited<ReturnType<typeof notifyPaymentVerified>> | null = null;
+    if (decision === 'verified') {
+      notice = await notifyPaymentVerified({ tenantId: ctx.tenantId, paymentId: String(req.params.id) });
+    }
+
+    res.json({
+      ...data,
+      ...(notice
+        ? {
+            customer_notified: notice.notified,
+            receipt_emailed: notice.receipt_emailed,
+            receipt_image: notice.receipt_image,
+            ...(notice.notified ? { customer_notice_channel: notice.channel } : { customer_notice_reason: notice.reason }),
+          }
+        : {}),
+    });
   })
 );
 
@@ -121,6 +204,22 @@ commerceRouter.post(
       return res.status(400).json({ error: 'total must be a non-negative number' });
     }
 
+    let leadId, customerId, channelType, deliveryLocation;
+    try {
+      leadId = await leadIdOrNull(ctx, req.body?.lead_id);
+      customerId = customerIdOrNull(req.body?.customer_id);
+      channelType = textOrNull(req.body?.channel_type, 32, 'channel_type');
+      deliveryLocation = textOrNull(req.body?.delivery_location, 500, 'delivery_location');
+    } catch (e) {
+      if (e instanceof RefError) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+    if (items.length > 200) return res.status(400).json({ error: 'Too many items' });
+    const subtotal = req.body?.subtotal == null ? null : Number(req.body.subtotal);
+    if (subtotal != null && (!Number.isFinite(subtotal) || subtotal < 0)) {
+      return res.status(400).json({ error: 'subtotal must be a non-negative number' });
+    }
+
     const orderRef = `${tenant?.order_prefix || 'ORD'}-${Date.now().toString(36).toUpperCase()}`;
 
     const { data, error } = await ctx.db
@@ -128,14 +227,14 @@ commerceRouter.post(
       .insert({
         tenant_id: ctx.tenantId,
         order_ref: orderRef,
-        lead_id: req.body?.lead_id ?? null,
-        customer_id: req.body?.customer_id ?? null,
-        channel_type: req.body?.channel_type ?? null,
+        lead_id: leadId,
+        customer_id: customerId,
+        channel_type: channelType,
         items,
-        subtotal: req.body?.subtotal == null ? null : Number(req.body.subtotal),
+        subtotal,
         total,
         currency: String(req.body?.currency || tenant?.currency || 'KES').toUpperCase().slice(0, 3),
-        delivery_location: req.body?.delivery_location ?? null,
+        delivery_location: deliveryLocation,
         status: 'pending',
       })
       .select('*').single();

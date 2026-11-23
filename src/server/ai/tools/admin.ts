@@ -152,13 +152,20 @@ export const messageCustomer: Tool = {
     // Written to the transcript first, so the Inbox shows what was said whether
     // or not the outbound send succeeds — and web chat has no outbound API, so
     // for that channel the transcript IS the delivery.
-    await serviceClient.from('conversation_messages').insert({
+    const { error: saveErr } = await serviceClient.from('conversation_messages').insert({
       tenant_id: ctx.tenantId,
       conversation_id: conversation.id,
       sender: 'agent',
       body: text,
       extracted: { agent: 'shwari', sent_by: 'owner' },
     });
+    if (saveErr) {
+      console.error('[admin] message_customer could not save the message:', saveErr.message);
+      // Web chat has no outbound API: an unsaved message there was never sent.
+      if (lead.channel_type === 'webchat') {
+        return { sent: false, saved: false, note: 'The message could not be saved, so it was not sent. Try again.' };
+      }
+    }
     await serviceClient
       .from('conversations')
       .update({ last_message_at: now, last_message_preview: text.slice(0, 160) })
@@ -173,9 +180,19 @@ export const messageCustomer: Tool = {
         .eq('tenant_id', ctx.tenantId)
         .eq('channel_type', lead.channel_type)
         .eq('status', 'active')
+        .limit(1)
         .maybeSingle();
 
-      if (provider && channel) {
+      if (!provider || !channel) {
+        // Nothing to send it through. Saying "sent" here would be a lie the
+        // owner acts on.
+        return {
+          sent: false,
+          saved: !saveErr,
+          note: `There is no active ${lead.channel_type} channel connected, so the message was not delivered. It is in the inbox for a person to follow up.`,
+        };
+      }
+      {
         try {
           await provider.sendMessage(channel.id, lead.customer_id, text, { tenantId: ctx.tenantId, userId: '' });
         } catch (e) {
@@ -222,7 +239,7 @@ export const setConversationHandling: Tool = {
 
     const { error } = await serviceClient
       .from('conversations')
-      .update({ ai_enabled: who === 'ai', updated_at: new Date().toISOString() })
+      .update({ ai_enabled: who === 'ai' })
       .eq('id', conversation.id)
       .eq('tenant_id', ctx.tenantId);
     if (error) throw new Error(error.message);

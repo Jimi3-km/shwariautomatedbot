@@ -45,7 +45,7 @@ const emptyForm: FormState = {
  * free-form attributes rather than a fixed set of phone-specific columns.
  */
 export function Products() {
-  const { canWrite, currency } = useSession();
+  const { isAdmin: canWrite, currency } = useSession();
   const toast = useToast();
   const state = useAsync(() => getProducts(), []);
   const [form, setForm] = useState<FormState | null>(null);
@@ -106,7 +106,7 @@ export function Products() {
       <PageHeader
         title="Products"
         subtitle="Your AI agent quotes only from this catalogue and can never invent a price."
-        actions={canWrite && <Button variant="solid" size="sm" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
+        actions={canWrite && <Button variant="accent" size="sm" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
       />
 
       <InlineError message={archive.error ?? restore.error} />
@@ -131,12 +131,12 @@ export function Products() {
             icon={<Package size={26} />}
             title="Your catalogue is empty"
             body="Add your first product so your AI agent can answer customer questions accurately and quote real prices."
-            action={canWrite && <Button variant="solid" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
+            action={canWrite && <Button variant="accent" icon={<Plus size={14} />} onClick={openNew}>Add product</Button>}
           />
         ) : (
           <div style={{
             display: 'grid', gap: 12, maxWidth: 1280, margin: '0 auto',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 270px), 1fr))',
           }}>
             {products.map((p) => (
               <Card key={p.id}>

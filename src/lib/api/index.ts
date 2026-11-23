@@ -1,6 +1,6 @@
 import { request, qs } from './client';
 import type {
-  Me, TenantUser, Tenant, Overview, Analytics, Onboarding,
+  Me, TenantUser, TeamInvitation, ActivityEvent, Tenant, Overview, Analytics, Onboarding,
   Conversation, ConversationDetail, ConversationMessage,
   Lead, LeadDetail, LeadStage, Product, Order, OrderStatus,
   Payment, AgentSettings, Channel, VerificationStatus, ChannelType,
@@ -9,7 +9,9 @@ import type {
   ShwariStatus, ShwariMessage, ShwariReply, PairingCode, LinkedAdmin, AgentActivity,
   Appointment, AppointmentStatus, SupportTicket, TicketStatus, TicketPriority,
   FollowUp, FollowUpStatus, AttentionReport,
-  AgentConfig, AgentRole, AgentStatus, Service, ServiceInput,
+  AgentConfig, AgentLesson, AgentRole, AgentStatus, Service, ServiceInput,
+  ContentItem, ContentStatus, ScheduledPost, PostingSettings, PostingStatus, WeekPlan,
+  FacebookPageChoice, PostPlatform,
 } from '../../types';
 
 export * from './client';
@@ -22,7 +24,117 @@ export const getMe = () => request<Me>('/me');
 export const bootstrapTenant = (body: { business_name: string; agent_name?: string; currency?: string; timezone?: string }) =>
   request<{ tenant_id: string; role: string; created: boolean }>('/bootstrap', { method: 'POST', body });
 
-export const getTeam = () => request<{ members: TenantUser[] }>('/team');
+export const getTeam = () => request<{ members: TenantUser[]; invitations: TeamInvitation[] }>('/team');
+
+/** The session of a platform admin who belongs to no business. */
+export const getPlatformMe = () => request<Me>('/platform/me');
+
+export const inviteTeamMember = (email: string, role: string, phone?: string) =>
+  request<{
+    invitation: TeamInvitation; link: string; emailed: boolean;
+    whatsapp: { sent: boolean; reason?: string } | null;
+  }>('/team/invitations', { method: 'POST', body: { email, role, ...(phone ? { phone } : {}) } });
+
+export const withdrawInvitation = (id: string) =>
+  request<{ ok: boolean }>(`/team/invitations/${id}`, { method: 'DELETE' });
+
+export const removeTeamMember = (id: string) =>
+  request<{ ok: boolean }>(`/team/${id}`, { method: 'DELETE' });
+
+export const getActivityLog = () => request<{ events: ActivityEvent[] }>('/audit');
+
+/** What an invitation is for. Works before signing in. */
+export const lookUpInvitation = (token: string) =>
+  request<{ business_name: string; role: string; role_label: string; email: string }>(`/invitations/${token}`);
+
+export const acceptInvitation = (token: string) =>
+  request<{ tenant_id: string; role: string }>(`/invitations/${token}/accept`, { method: 'POST' });
+
+// ---------------------------------------------------------------------------
+// Platform console (platform admins only)
+// ---------------------------------------------------------------------------
+export interface PlatformBusiness {
+  id: string;
+  business_name: string;
+  slug: string;
+  status: string;
+  agents_paused: boolean;
+  status_reason: string | null;
+  business_category: string | null;
+  created_at: string;
+  approved_at: string | null;
+  onboarding_completed_at: string | null;
+  owners: string[];
+  people: number;
+  channels: Array<{ type: string; name: string | null; status: string }>;
+  conversations_7d: number;
+  last_message_at: string | null;
+  payments_waiting: number;
+  open_alerts: number;
+}
+
+export interface PlatformAlert {
+  id: number;
+  kind: string;
+  tenant_id: string | null;
+  summary: string;
+  detail: string | null;
+  seen_count: number;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export const getPlatformOverview = () =>
+  request<{
+    businesses: PlatformBusiness[];
+    alerts: PlatformAlert[];
+    totals: { businesses: number; pending: number; live: number; suspended: number };
+  }>('/platform/overview');
+
+export const setBusinessStatus = (id: string, status: 'active' | 'suspended', reason?: string) =>
+  request<{ id: string; status: string }>(`/platform/tenants/${id}/status`, { method: 'POST', body: { status, reason } });
+
+export const setBusinessAgentsPaused = (id: string, paused: boolean) =>
+  request<{ id: string; agents_paused: boolean }>(`/platform/tenants/${id}/agents`, { method: 'POST', body: { paused } });
+
+export interface EmailCheckItem {
+  id: string;
+  label: string;
+  ok: boolean | null;
+  detail: string;
+  fix?: string;
+}
+
+export const getEmailCheck = () =>
+  request<{
+    checks: EmailCheckItem[];
+    sender: { name: string; email: string };
+    recent: Array<{ at: string; kind: string; recipient: string; ok: boolean; error: string | null }>;
+    events: Array<{ at: string; event: string; to: string; reason: string | null; subject: string | null }>;
+  }>('/platform/email-check');
+
+export const sendTestEmail = () =>
+  request<{ accepted: boolean; to: string; from: string; error: string | null }>('/platform/email-test', { method: 'POST' });
+
+export interface ConnectAttempt {
+  id: number;
+  business_name: string | null;
+  provider: string;
+  start_device: string;
+  start_browser: string;
+  return_device: string | null;
+  return_browser: string | null;
+  outcome: string;
+  detail: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** Recent attempts to connect a channel, for diagnosing "it didn't work on my phone". */
+export const getConnectAttempts = () => request<{ attempts: ConnectAttempt[] }>('/platform/connect-attempts');
+
+export const resolvePlatformAlert = (id: number) =>
+  request<{ ok: boolean }>(`/platform/alerts/${id}/resolve`, { method: 'POST' });
 
 export const updateTeamMember = (id: string, role: string) =>
   request<TenantUser>(`/team/${id}`, { method: 'PATCH', body: { role } });
@@ -31,6 +143,15 @@ export const updateTeamMember = (id: string, role: string) =>
 // Dashboard
 // ---------------------------------------------------------------------------
 export const getOverview = () => request<Overview>('/overview');
+
+/** What is new on each page, for the numbered dots in the menu. */
+export interface ActivityCounts {
+  orders: number; leads: number; appointments: number; support: number;
+  inbox: number; payments: number; marketing: number; invoices: number; platform: number;
+}
+
+export const getActivity = (since: Partial<Record<'orders' | 'leads' | 'appointments' | 'support', string>>) =>
+  request<ActivityCounts>(`/activity${qs(since)}`);
 export const getAnalytics = (days = 30) => request<Analytics>(`/analytics${qs({ days })}`);
 export const getOnboarding = () => request<Onboarding>('/onboarding');
 
@@ -131,7 +252,9 @@ export const getPayments = (verification_status?: VerificationStatus | '') =>
  * trigger rejects any verified row without a real staff user of the tenant.
  */
 export const verifyPayment = (id: string, decision: 'verified' | 'rejected', reason?: string) =>
-  request<Payment>(`/payments/${id}/verify`, { method: 'POST', body: { decision, reason } });
+  request<Payment & { customer_notified?: boolean; receipt_emailed?: boolean; receipt_image?: boolean; customer_notice_reason?: string }>(
+    `/payments/${id}/verify`, { method: 'POST', body: { decision, reason } }
+  );
 
 export const issueReceipt = (id: string) =>
   request<{ order_ref: string | null; recipient: string | null; html: string; delivery: { sent: boolean; reason: string } }>(
@@ -156,22 +279,12 @@ export const updateBusiness = (body: Partial<Tenant>) => request<Tenant>('/busin
 // ---------------------------------------------------------------------------
 export const getChannels = () => request<{ channels: Channel[] }>('/channels');
 
-/** The token is posted once and never returned by any endpoint afterwards. */
-export const connectTelegram = (botToken: string) =>
-  request<{ channel: Channel; bot: { id: number; username: string } }>(
-    '/channels/telegram', { method: 'POST', body: { bot_token: botToken } }
-  );
-
 export const getChannelStatus = (id: string) =>
-  request<{ status: string; webhook: { configured: boolean; matches_expected: boolean; pending_update_count: number; last_error_message: string | null } }>(
-    `/channels/${id}/status`
-  );
-
-export const completeMetaEmbeddedSignup = (code: string) =>
-  request<{ channel: Channel }>('/channels/meta/whatsapp', { method: 'POST', body: { code } });
-
-export const completeInstagramLogin = (accessToken: string) =>
-  request<{ channel: Channel }>('/channels/meta/instagram', { method: 'POST', body: { accessToken } });
+  request<{
+    status: string;
+    webhook?: { configured: boolean; matches_expected: boolean; pending_update_count: number; last_error_message: string | null };
+    health?: { healthy: boolean; summary: string; needs_reconnect: boolean };
+  }>(`/channels/${id}/status`);
 
 export const disconnectChannel = (id: string) =>
   request<{ disconnected: boolean }>(`/channels/${id}`, { method: 'DELETE' });
@@ -192,6 +305,19 @@ export const submitChannelCredentials = (provider: ProviderId, values: Record<st
     method: 'POST', body: values,
   });
 
+/**
+ * The Facebook Pages waiting to be chosen from after signing in with Facebook.
+ * Names and ids only; empty when there is no choice to make, or it expired.
+ */
+export const getFacebookPages = () =>
+  request<{ pages: FacebookPageChoice[] }>('/channels/facebook/pages');
+
+/** Connect one of those Pages to this business. */
+export const selectFacebookPage = (pageId: string) =>
+  request<{ account: ConnectedChannel }>('/channels/facebook/select-page', {
+    method: 'POST', body: { page_id: pageId },
+  });
+
 export const getChannelHealth = (channelId: string) =>
   request<ChannelHealth>(`/channels/${channelId}/health`);
 
@@ -200,8 +326,227 @@ export const getChannelHealth = (channelId: string) =>
 // ---------------------------------------------------------------------------
 export const getOnboardingState = () => request<OnboardingState>('/onboarding/state');
 
+export interface AppNotification {
+  id: string;
+  kind: 'new_order' | 'payment_claim' | 'payment_verified' | 'needs_human'
+    | 'posts_to_approve' | 'post_published' | 'post_failed'
+    | 'invoice_paid' | 'invoice_overdue';
+  title: string;
+  body: string;
+  link: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Alerts to the owner's phone
+// ---------------------------------------------------------------------------
+export interface AlertRecipient {
+  id: string;
+  channel: 'whatsapp' | 'telegram';
+  address: string;
+  label: string | null;
+  active: boolean;
+  last_sent_at: string | null;
+  last_error: string | null;
+}
+
+export interface AlertDelivery {
+  channel: 'whatsapp' | 'telegram';
+  to: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface AlertsConfig {
+  kinds: string[];
+  all_kinds: string[];
+  telegram_enabled: boolean;
+  recipients: AlertRecipient[];
+  whatsapp: { connected: boolean; number: string | null; template: string | null };
+  telegram: { connected: boolean; linked_chats: number; bot: { username: string | null; name: string | null } | null };
+}
+
+/** Set the bot that sends alerts. The token is checked and stored by the server; it is never read back. */
+export const setAlertTelegramBot = (token: string) =>
+  request<{ bot: { username: string | null; name: string | null } }>('/alerts/telegram-bot', { method: 'PUT', body: { token } });
+
+export const removeAlertTelegramBot = () =>
+  request<{ ok: boolean }>('/alerts/telegram-bot', { method: 'DELETE' });
+
+export const startAlertTelegramLink = () =>
+  request<{ url: string; code: string }>('/alerts/telegram-bot/link', { method: 'POST' });
+
+export const confirmAlertTelegramLink = () =>
+  request<{ added: string[] }>('/alerts/telegram-bot/confirm', { method: 'POST' });
+
+export const getAlerts = () => request<AlertsConfig>('/alerts');
+
+export const updateAlerts = (body: { kinds?: string[]; telegram_enabled?: boolean }) =>
+  request<{ kinds: string[]; telegram: boolean }>('/alerts', { method: 'PUT', body });
+
+export const addAlertRecipient = (phone: string, label: string) =>
+  request<AlertRecipient>('/alerts/recipients', { method: 'POST', body: { phone, label } });
+
+export const setAlertRecipientActive = (id: string, active: boolean) =>
+  request<AlertRecipient>(`/alerts/recipients/${id}`, { method: 'PATCH', body: { active } });
+
+export const removeAlertRecipient = (id: string) =>
+  request<{ ok: boolean }>(`/alerts/recipients/${id}`, { method: 'DELETE' });
+
+export const sendTestAlert = (kind?: string) =>
+  request<{ results: AlertDelivery[] }>('/alerts/test', { method: 'POST', body: kind ? { kind } : {} });
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+export interface Invoice {
+  id: string;
+  invoice_no: string;
+  lead_id: number | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  items: Array<{ name: string; qty: number; price: number }>;
+  subtotal: number;
+  discount: number;
+  tax_label: string | null;
+  tax_rate: number;
+  tax_amount: number;
+  total: number;
+  currency: string;
+  status: 'draft' | 'sent' | 'paid' | 'void';
+  /** As shown: a sent invoice past its due date reads as overdue. */
+  display_status: 'draft' | 'sent' | 'overdue' | 'paid' | 'void';
+  issue_date: string;
+  due_date: string | null;
+  notes: string | null;
+  sent_at: string | null;
+  sent_via: string | null;
+  paid_at: string | null;
+  pdf_url: string | null;
+  created_at: string;
+}
+
+export interface InvoiceDelivery {
+  sent: boolean;
+  chat: { sent: boolean; channel?: string; file?: boolean; reason?: string };
+  email: { sent: boolean; reason?: string };
+}
+
+export interface InvoiceSettings {
+  prefix: string;
+  due_days: number;
+  terms: string | null;
+  tax_label: string | null;
+  tax_rate: number;
+  auto_on_booking: boolean;
+}
+
+export const getInvoices = (filters: { status?: string; search?: string } = {}) =>
+  request<{
+    invoices: Invoice[];
+    total: number;
+    summary: { outstanding: number; outstanding_count: number; overdue: number; overdue_count: number; paid_this_month: number };
+  }>(`/invoices${qs(filters)}`);
+
+export const getInvoiceOptions = () =>
+  request<{
+    customers: Array<{ id: number; customer_name: string; email: string | null; phone: string | null; channel_type: string | null }>;
+    catalogue: Array<{ name: string; price: number | null; kind: 'service' | 'product' }>;
+    settings: InvoiceSettings;
+    currency: string;
+  }>('/invoices/options');
+
+export const createInvoice = (body: {
+  lead_id: number | null; customer_name?: string; customer_email?: string;
+  items: Array<{ name: string; qty: number; price: number }>;
+  discount?: number; due_date?: string; notes?: string; send?: boolean;
+}) => request<{ invoice: Invoice; delivery: InvoiceDelivery | null }>('/invoices', { method: 'POST', body });
+
+export const sendInvoice = (id: string) =>
+  request<{ invoice: Invoice; delivery: InvoiceDelivery }>(`/invoices/${id}/send`, { method: 'POST' });
+
+export const markInvoicePaid = (id: string, body: { method: string; reference?: string }) =>
+  request<{ invoice: Invoice; payment_id: string }>(`/invoices/${id}/mark-paid`, { method: 'POST', body });
+
+export const voidInvoice = (id: string) =>
+  request<{ invoice: Invoice }>(`/invoices/${id}/void`, { method: 'POST' });
+
+export const getInvoiceSettings = () => request<{ settings: InvoiceSettings }>('/invoice-settings');
+
+export const updateInvoiceSettings = (body: Partial<InvoiceSettings>) =>
+  request<{ settings: InvoiceSettings }>('/invoice-settings', { method: 'PUT', body });
+
+// ---------------------------------------------------------------------------
+// Receipt design
+// ---------------------------------------------------------------------------
+export interface ReceiptSettings {
+  letterhead_url: string | null;
+  logo_url: string | null;
+  display_name: string | null;
+  tagline: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  tax_label: string | null;
+  tax_id: string | null;
+  footer_note: string | null;
+  accent: string | null;
+  show_stamp: boolean;
+}
+
+export interface ReceiptSettingsResponse {
+  business_name?: string;
+  /** What the owner has set. */
+  settings: ReceiptSettings;
+  /** What a receipt prints, with gaps filled from the business's own details. */
+  effective: ReceiptSettings;
+}
+
+export const getReceiptSettings = () => request<ReceiptSettingsResponse>('/receipt-settings');
+
+export const updateReceiptSettings = (body: Partial<ReceiptSettings>) =>
+  request<ReceiptSettingsResponse>('/receipt-settings', { method: 'PUT', body });
+
+export const uploadReceiptImage = (kind: 'logo' | 'letterhead', file: File) => {
+  const form = new FormData();
+  form.append('kind', kind);
+  form.append('file', file);
+  return request<ReceiptSettingsResponse>('/receipt-settings/image', { method: 'POST', body: form });
+};
+
+export const previewReceipt = (draft?: Partial<ReceiptSettings>) =>
+  request<{ image: string }>('/receipt-settings/preview', { method: 'POST', body: draft ?? {} });
+
+export const getNotifications = () =>
+  request<{ notifications: AppNotification[]; unread: number }>('/notifications');
+
+export const markNotificationsRead = (ids?: string[]) =>
+  request<{ ok: boolean }>('/notifications/read', { method: 'POST', body: ids ? { ids } : {} });
+
 /** Operator readiness. Admin-only; 403 for anyone else. */
 export const getSetupStatus = () => request<SetupStatus>('/setup/status');
+
+export interface MetaCheck {
+  id: string;
+  area: 'app' | 'instagram' | 'whatsapp' | 'facebook' | 'webhook';
+  label: string;
+  ok: boolean | null;
+  detail: string;
+  fix?: string;
+  copy?: string;
+  subscribe?: 'instagram' | 'whatsapp_business_account' | 'page';
+}
+
+/** Has the server switch on message delivery for one Meta product. Admin-only. */
+export const subscribeMetaWebhook = (object: NonNullable<MetaCheck['subscribe']>) =>
+  request<{ ok: boolean; message: string }>('/setup/meta-webhook', { method: 'POST', body: { object } });
+
+/** Tests the server's Meta settings against Meta. Admin-only. */
+export const getMetaCheck = () =>
+  request<{ checks: MetaCheck[]; summary: { ok: number; failing: number; unknown: number } }>('/setup/meta-check');
 
 export const createOnboardingBusiness = (body: {
   business_name: string;
@@ -306,8 +651,13 @@ export const getAttention = () => request<AttentionReport>('/shwari/attention');
 // Agents, configured by hand
 // ---------------------------------------------------------------------------
 
-/** The five agents. Provisioned on first read; there is nothing to create. */
-export const getAgents = () => request<{ agents: AgentConfig[] }>('/agents');
+/** The six agents. Provisioned on first read; there is nothing to create. */
+export const getAgents = () =>
+  request<{ agents: AgentConfig[]; shared_rules?: string[] }>('/agents');
+
+/** What the team has been taught. Empty, with available false, where lessons are not set up yet. */
+export const getAgentLessons = () =>
+  request<{ lessons: AgentLesson[]; available: boolean }>('/agents/lessons');
 
 /**
  * Name, objective, instructions, escalation and status only. Capabilities are
@@ -405,3 +755,49 @@ export const labelAgentTurn = (
     body,
   });
 
+
+// ---------------------------------------------------------------------------
+// Marketing: the content library and the posting calendar
+// ---------------------------------------------------------------------------
+export const getContent = () =>
+  request<{ items: ContentItem[]; available: boolean }>('/content');
+
+/** Upload one photo or video with its details. The file never leaves this origin's API. */
+export const uploadContent = (form: FormData) =>
+  request<ContentItem>('/content', { method: 'POST', body: form });
+
+export const updateContent = (
+  id: string,
+  body: {
+    caption?: string; about?: string | null; product_id?: string | null; service_id?: string | null;
+    max_uses?: number | null; status?: ContentStatus; platforms?: PostPlatform[];
+  }
+) => request<ContentItem>(`/content/${id}`, { method: 'PATCH', body });
+
+export const deleteContent = (id: string) =>
+  request<{ deleted: boolean; archived: boolean }>(`/content/${id}`, { method: 'DELETE' });
+
+/** `from` and `to` are wall-clock times in the business's timezone, e.g. 2026-11-23T00:00. */
+export const getPosts = (from: string, to: string) =>
+  request<{ posts: ScheduledPost[]; available: boolean }>(`/posts${qs({ from, to })}`);
+
+export const planWeekPosts = (from?: string) =>
+  request<WeekPlan>('/posts/plan-week', { method: 'POST', body: from ? { from } : {} });
+
+export const approvePosts = (body: { ids?: string[]; week_start?: string }) =>
+  request<{ approved: ScheduledPost[]; skipped: Array<{ id: string; why: string }>; approved_count: number }>(
+    '/posts/approve', { method: 'POST', body }
+  );
+
+export const updatePost = (
+  id: string,
+  body: { caption?: string; scheduled_for?: string; status?: 'rejected' | 'cancelled'; content_item_id?: string }
+) => request<ScheduledPost>(`/posts/${id}`, { method: 'PATCH', body });
+
+export const publishPostNow = (id: string) =>
+  request<{ outcome: string; post: ScheduledPost; message: string }>(`/posts/${id}/publish-now`, { method: 'POST', body: {} });
+
+export const getPostingSettings = () => request<PostingStatus>('/posting-settings');
+
+export const savePostingSettings = (body: Partial<PostingSettings>) =>
+  request<{ settings: PostingSettings }>('/posting-settings', { method: 'PUT', body });

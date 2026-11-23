@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { serviceClient, userClient } from './supabase.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -7,11 +8,72 @@ export type Role = 'owner' | 'admin' | 'member' | 'viewer';
 export interface TenantContext {
   userId: string;
   email: string | null;
+  /** True only when Supabase Auth has confirmed the address. */
+  emailVerified: boolean;
   tenantId: string;
   role: Role;
   accessToken: string;
   /** RLS-enforcing client scoped to the caller. Use this for all tenant data. */
   db: SupabaseClient;
+  /** Runs the platform (a row in platform_admins). Never set from the app. */
+  platformAdmin: boolean;
+  /**
+   * A platform admin working inside a business they are not a member of.
+   * They act with a manager's reach, and everything they change is logged in
+   * that business's audit trail.
+   */
+  supportMode: boolean;
+}
+
+/**
+ * Short-lived memory of answers that every request needs and that barely
+ * change. Each dashboard page makes several requests at once, and each used to
+ * verify the same token with the auth service and look up the same rows again,
+ * one after another. Entries live for seconds, so a sign-out, a removed member
+ * or a changed role still takes effect almost at once.
+ */
+const SHORT_MS = 20_000;
+function remember<V>(store: Map<string, { at: number; value: V }>, key: string, ttl: number, load: () => Promise<V>): Promise<V> {
+  const hit = store.get(key);
+  if (hit && Date.now() - hit.at < ttl) return Promise.resolve(hit.value);
+  return load().then((value) => {
+    if (store.size > 2000) store.clear();
+    store.set(key, { at: Date.now(), value });
+    return value;
+  });
+}
+
+const adminCache = new Map<string, { at: number; value: boolean }>();
+
+/** Is this user a platform admin? Read from the database, never from a claim. */
+export function isPlatformAdminUser(userId: string): Promise<boolean> {
+  return remember(adminCache, userId, 60_000, async () => {
+    const { data, error } = await serviceClient
+      .from('platform_admins').select('user_id').eq('user_id', userId).maybeSingle();
+    // A missing table (migration 0027 not applied) means nobody is one.
+    if (error) return false;
+    return Boolean(data);
+  });
+}
+
+type VerifiedUser = { id: string; email: string | null; emailConfirmed: boolean };
+const userCache = new Map<string, { at: number; value: VerifiedUser | null }>();
+
+/** Who a token belongs to, verified with the auth service. Only a hash of the token is kept. */
+async function verifiedUser(token: string): Promise<VerifiedUser | null> {
+  const key = createHash('sha256').update(token).digest('base64');
+  const hit = userCache.get(key);
+  if (hit && Date.now() - hit.at < SHORT_MS) return hit.value;
+  const { data, error } = await serviceClient.auth.getUser(token);
+  const value = error || !data?.user
+    ? null
+    : { id: data.user.id, email: data.user.email ?? null, emailConfirmed: Boolean(data.user.email_confirmed_at) };
+  // A refusal is not remembered: the next attempt asks again.
+  if (value) {
+    if (userCache.size > 2000) userCache.clear();
+    userCache.set(key, { at: Date.now(), value });
+  }
+  return value;
 }
 
 declare global {
@@ -46,18 +108,25 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Unauthorized: missing bearer token' });
   }
 
-  const { data, error } = await serviceClient.auth.getUser(token);
-  if (error || !data?.user) {
+  const verified = await verifiedUser(token);
+  if (!verified) {
     return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
   }
-  const user = data.user;
+  const user = { id: verified.id, email: verified.email, email_confirmed_at: verified.emailConfirmed ? 'yes' : null };
 
   // Tenant membership is read with the service client because a user who is
-  // not yet a member of any tenant cannot see tenant_users under RLS.
-  const { data: memberships, error: mErr } = await serviceClient
-    .from('tenant_users')
-    .select('tenant_id, role')
-    .eq('user_id', user.id);
+  // not yet a member of any tenant cannot see tenant_users under RLS. Asked
+  // for alongside the platform-admin check rather than after it.
+  const [{ data: memberships, error: mErr }, platformAdmin] = await Promise.all([
+    serviceClient
+      .from('tenant_users')
+      .select('tenant_id, role, created_at')
+      .eq('user_id', user.id)
+      // Deterministic default: the oldest membership, with the id as tie-break.
+      .order('created_at', { ascending: true })
+      .order('tenant_id', { ascending: true }),
+    isPlatformAdminUser(user.id),
+  ]);
 
   if (mErr) {
     // This was previously swallowed, which made a 42501 "permission denied for
@@ -73,30 +142,68 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       code: 'MEMBERSHIP_LOOKUP_FAILED',
     });
   }
-  if (!memberships || memberships.length === 0) {
-    return res.status(403).json({ error: 'No tenant is associated with this account', code: 'NO_TENANT' });
-  }
-
   // A user may belong to several tenants. Selection is by an explicit header,
   // but only ever among tenants they actually belong to -- the header can
-  // never introduce a tenant that is not in this list.
+  // never introduce a tenant that is not in this list. The one exception is a
+  // platform admin, who may open any business and then acts in support mode.
   const requested = req.headers['x-tenant-id'];
-  let chosen = memberships[0];
+  let chosen: { tenant_id: string; role: string } | undefined = memberships?.[0];
+  let supportMode = false;
   if (typeof requested === 'string' && requested) {
-    const match = memberships.find((m) => m.tenant_id === requested);
-    if (!match) {
+    const match = (memberships ?? []).find((m) => m.tenant_id === requested);
+    if (match) {
+      chosen = match;
+    } else if (platformAdmin && /^[0-9a-f-]{36}$/i.test(requested)) {
+      const { data: target } = await serviceClient
+        .from('tenants').select('id').eq('id', requested).maybeSingle();
+      if (!target) return res.status(404).json({ error: 'That business does not exist' });
+      chosen = { tenant_id: target.id, role: 'admin' };
+      supportMode = true;
+    } else {
       return res.status(403).json({ error: 'Not a member of the requested tenant' });
     }
-    chosen = match;
+  }
+  if (!chosen) {
+    return res.status(403).json({
+      error: 'No tenant is associated with this account',
+      code: platformAdmin ? 'PLATFORM_NO_TENANT' : 'NO_TENANT',
+    });
   }
 
   req.ctx = {
     userId: user.id,
     email: user.email ?? null,
+    emailVerified: Boolean(user.email_confirmed_at),
     tenantId: chosen.tenant_id,
     role: chosen.role as Role,
     accessToken: token,
-    db: userClient(token),
+    db: userClient(token, supportMode ? chosen.tenant_id : undefined),
+    platformAdmin,
+    supportMode,
+  };
+  next();
+}
+
+/**
+ * Platform routes: the caller must be a platform admin. No business is
+ * involved, so there is no tenant context and no row-level client.
+ */
+export async function requirePlatformAdmin(req: Request, res: Response, next: NextFunction) {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Unauthorized: missing bearer token' });
+  const { data, error } = await serviceClient.auth.getUser(token);
+  if (error || !data?.user) {
+    return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
+  }
+  if (!(await isPlatformAdminUser(data.user.id))) {
+    // Deliberately the same answer as an unknown route.
+    return res.status(404).json({ error: 'Not found' });
+  }
+  req.authUser = {
+    id: data.user.id,
+    email: data.user.email ?? null,
+    emailVerified: Boolean(data.user.email_confirmed_at),
+    accessToken: token,
   };
   next();
 }
@@ -106,7 +213,7 @@ declare global {
   namespace Express {
     interface Request {
       /** Set by requireUser. Present before a tenant exists. */
-      authUser?: { id: string; email: string | null; accessToken: string };
+      authUser?: { id: string; email: string | null; emailVerified: boolean; accessToken: string };
       /** Exact request bytes, kept by the body parser for HMAC verification. */
       rawBody?: Buffer;
     }
@@ -128,7 +235,12 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   if (error || !data?.user) {
     return res.status(401).json({ error: 'Unauthorized: invalid or expired token' });
   }
-  req.authUser = { id: data.user.id, email: data.user.email ?? null, accessToken: token };
+  req.authUser = {
+    id: data.user.id,
+    email: data.user.email ?? null,
+    emailVerified: Boolean(data.user.email_confirmed_at),
+    accessToken: token,
+  };
   next();
 }
 
@@ -137,13 +249,9 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
  * Super-admins can view cross-tenant agent turns and audit metrics.
  */
 export function isSuperAdmin(req: Request): boolean {
-  const email = req.ctx?.email || req.authUser?.email;
-  if (!email) return false;
-  const superAdminList = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  return superAdminList.includes(email.toLowerCase());
+  // One definition of "runs the platform": the platform_admins table. The old
+  // list of email addresses in an environment variable is no longer read.
+  return Boolean(req.ctx?.platformAdmin);
 }
 
 /** Rejects any request that tries to steer tenancy from the client. */
@@ -167,7 +275,11 @@ export function requireRole(min: Role) {
     const ctx = req.ctx;
     if (!ctx) return res.status(401).json({ error: 'Unauthorized' });
     if (ROLE_RANK[ctx.role] < ROLE_RANK[min]) {
-      return res.status(403).json({ error: `Requires ${min} role or higher; you are ${ctx.role}` });
+      const who = min === 'owner' ? 'the owner' : min === 'admin' ? 'a manager or the owner' : 'staff';
+      return res.status(403).json({
+        error: `Only ${who} can do this. Your role is ${ROLE_LABEL[ctx.role]}.`,
+        code: 'ROLE_TOO_LOW',
+      });
     }
     next();
   };
@@ -175,7 +287,22 @@ export function requireRole(min: Role) {
 
 /** Writes require at least `member`; viewers are read-only. */
 export const requireWrite = requireRole('member');
+/** Manager and above: settings, agents, channels, catalogue, payment details. */
 export const requireAdmin = requireRole('admin');
+/** The owner alone: staff, billing, deleting the business. */
+export const requireOwner = requireRole('owner');
+
+/** For a route that already ran requireAuth: platform admins only. */
+export function platformOnly(req: Request, res: Response, next: NextFunction) {
+  // Deliberately the same answer as an unknown route.
+  if (!req.ctx?.platformAdmin) return res.status(404).json({ error: 'Not found' });
+  next();
+}
+
+/** What the product calls each stored role. */
+export const ROLE_LABEL: Record<Role, string> = {
+  owner: 'Owner', admin: 'Manager', member: 'Staff', viewer: 'Viewer',
+};
 
 /** Wraps an async handler so a rejected promise becomes a 500, not a hang. */
 export function handler(

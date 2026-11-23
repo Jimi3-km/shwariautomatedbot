@@ -125,6 +125,8 @@ export const WIDGET_SOURCE = String.raw`(function () {
     '.msg{max-width:84%;padding:10px 13px;border-radius:16px;font-size:14px;line-height:1.5;',
     'white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}',
     '.row.you .msg{background:' + accent + ';color:#fff;border-bottom-right-radius:5px}',
+    '.pic{display:block;max-width:84%;width:260px;height:auto;margin-top:6px;border-radius:12px;border:1px solid #e7e7ec;background:#fff}',
+    '.doc{display:inline-block;max-width:84%;margin-top:6px;padding:9px 12px;border-radius:12px;border:1px solid #e7e7ec;background:#fff;color:#16161a;font-size:13px;font-weight:600;text-decoration:none;overflow-wrap:anywhere}',
     '.row.agent .msg{background:#fff;color:#16161a;border:1px solid #e7e7ec;',
     'border-bottom-left-radius:5px}',
     '.time{font-size:10.5px;color:#9a9aa5;margin:3px 4px 0}',
@@ -269,7 +271,7 @@ export const WIDGET_SOURCE = String.raw`(function () {
     if (force || atBottom()) log.scrollTop = log.scrollHeight;
   }
 
-  function addMessage(from, text, at) {
+  function addMessage(from, text, at, image, file) {
     var stick = atBottom();
     var row = document.createElement('div');
     row.className = 'row ' + (from === 'you' ? 'you' : 'agent');
@@ -278,6 +280,35 @@ export const WIDGET_SOURCE = String.raw`(function () {
     bubble.className = 'msg';
     bubble.textContent = text;          // never innerHTML
     row.appendChild(bubble);
+
+    // A receipt arrives with its picture. It is an <img> element with only a
+    // src and alt set, and the server only ever sends its own receipt address.
+    if (image && /^https:\/\//.test(image)) {
+      var pic = document.createElement('img');
+      pic.className = 'pic';
+      pic.alt = 'Receipt';
+      pic.loading = 'lazy';
+      pic.src = image;
+      pic.onload = function () { scrollDown(stick); };
+      pic.onerror = function () { if (pic.parentNode) pic.parentNode.removeChild(pic); };
+      var link = document.createElement('a');
+      link.href = image;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.appendChild(pic);
+      row.appendChild(link);
+    }
+
+    // An invoice or receipt as a PDF: a plain link, opened in a new tab.
+    if (file && file.url && /^https:\/\//.test(file.url)) {
+      var doc = document.createElement('a');
+      doc.className = 'doc';
+      doc.href = file.url;
+      doc.target = '_blank';
+      doc.rel = 'noopener noreferrer';
+      doc.textContent = 'PDF  ' + (file.name || 'Document');   // never innerHTML
+      row.appendChild(doc);
+    }
 
     if (at) {
       var time = document.createElement('div');
@@ -374,7 +405,7 @@ export const WIDGET_SOURCE = String.raw`(function () {
           seen[m.id] = true;
 
           if (m.from === 'agent') { showTyping(false); awaitingReply = false; fresh++; }
-          addMessage(m.from, m.text || '', m.at);
+          addMessage(m.from, m.text || '', m.at, m.image, m.file);
         }
 
         if (fresh) {

@@ -1,5 +1,12 @@
+import { createInvoice, findInvoiceForClaim, invoiceSettingsOf, loadBusiness as loadInvoiceBusiness, sendInvoice } from '../../services/invoices.js';
+import { notify } from '../../services/notify.js';
+import { findInCatalogue } from './bulk.js';
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, oneOf, type Tool, type AgentContext } from './types.js';
+import {
+  ToolInputError, str, num, oneOf, likeLiteral, isCustomerTurn, customerScope, ownedBy,
+  type Tool, type AgentContext,
+} from './types.js';
+import { parseInTimezone, wallClock, toLocalIso, safeTimezone } from '../time.js';
 import { sendAppointmentConfirmation, sendOrderReceipt } from '../../services/brevo.js';
 
 /**
@@ -32,6 +39,10 @@ import { sendAppointmentConfirmation, sendOrderReceipt } from '../../services/br
  * not a name we would have to guess at.
  */
 async function resolveCustomer(args: Record<string, unknown>, ctx: AgentContext) {
+  // A customer-facing turn acts for the person in the conversation and nobody
+  // else. Whatever lead_id the model sent is not consulted at all.
+  if (isCustomerTurn(ctx)) return customerScope(ctx);
+
   const leadId = num(args, 'lead_id');
 
   if (leadId !== null) {
@@ -70,14 +81,24 @@ async function resolveCustomer(args: Record<string, unknown>, ctx: AgentContext)
   };
 }
 
-/** An ISO timestamp the model can be trusted to have meant. */
-function when(args: Record<string, unknown>, key: string, opts: { required?: boolean } = {}): string | null {
+/**
+ * An ISO timestamp the model can be trusted to have meant.
+ *
+ * A time written without an offset is read as wall-clock time in the
+ * business's timezone, which is what the customer meant by "10 tomorrow".
+ */
+function when(
+  args: Record<string, unknown>,
+  key: string,
+  ctx: AgentContext,
+  opts: { required?: boolean } = {}
+): string | null {
   const raw = str(args, key, { required: opts.required, max: 40 });
   if (!raw) return null;
 
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new ToolInputError(`${key} must be a date and time, e.g. 2026-09-04T14:30:00Z.`);
+  const parsed = parseInTimezone(raw, ctx.timezone);
+  if (!parsed) {
+    throw new ToolInputError(`${key} must be a date and time, e.g. 2026-09-04T14:30.`);
   }
   // A booking a decade out is a parsing accident, not a booking.
   const years = Math.abs(parsed.getTime() - Date.now()) / (365 * 24 * 3600_000);
@@ -105,9 +126,42 @@ export const listAppointments: Tool = {
   mutates: false,
 
   async run(args, ctx) {
-    const from = when(args, 'from') ?? new Date().toISOString();
-    const to = when(args, 'to') ?? new Date(Date.now() + 14 * 86_400_000).toISOString();
+    const from = when(args, 'from', ctx) ?? new Date().toISOString();
+    const to = when(args, 'to', ctx) ?? new Date(Date.now() + 14 * 86_400_000).toISOString();
     const leadId = num(args, 'lead_id');
+
+    // A customer may know when the diary is busy, and everything about their
+    // own bookings. They may not read anyone else's name, service or notes.
+    if (isCustomerTurn(ctx)) {
+      const scope = await customerScope(ctx);
+      const { data, error } = await serviceClient
+        .from('appointments')
+        .select('id, lead_id, customer_id, service_name, starts_at, duration_minutes, status')
+        .eq('tenant_id', ctx.tenantId)
+        .gte('starts_at', from)
+        .lte('starts_at', to)
+        .neq('status', 'cancelled')
+        .order('starts_at')
+        .limit(200);
+      if (error) throw new Error(error.message);
+
+      const rows = data ?? [];
+      return {
+        busy: rows.map((a) => ({
+          starts_at: toLocalIso(new Date(a.starts_at), ctx.timezone),
+          duration_minutes: a.duration_minutes ?? 30,
+        })),
+        this_customers_appointments: rows
+          .filter((a) => ownedBy(a, scope))
+          .map((a) => ({
+            id: a.id, service_name: a.service_name,
+            starts_at: toLocalIso(new Date(a.starts_at), ctx.timezone),
+            duration_minutes: a.duration_minutes, status: a.status,
+          })),
+        window: { from, to },
+        note: 'Times are local to the business. "busy" slots are taken; anything else inside opening hours is free.',
+      };
+    }
 
     let q = serviceClient
       .from('appointments')
@@ -147,7 +201,7 @@ export const bookAppointment: Tool = {
 
   async run(args, ctx) {
     const serviceName = str(args, 'service_name', { required: true, max: 120 });
-    const startsAt = when(args, 'starts_at', { required: true })!;
+    const startsAt = when(args, 'starts_at', ctx, { required: true })!;
     const duration = num(args, 'duration_minutes');
     const customer = await resolveCustomer(args, ctx);
 
@@ -167,9 +221,10 @@ export const bookAppointment: Tool = {
     // exists, and so the duration defaults to what the service actually takes.
     const { data: service } = await serviceClient
       .from('services')
-      .select('id, name, duration_minutes, booking_mode, active')
+      .select('id, name, duration_minutes, booking_mode, active, price_amount')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', serviceName)
+      .ilike('name', likeLiteral(serviceName))
+      .limit(1)
       .maybeSingle();
 
     if (service && !service.active) {
@@ -181,6 +236,11 @@ export const bookAppointment: Tool = {
       : service?.duration_minutes ?? 30;
     if (minutes <= 0 || minutes > 8 * 60) {
       throw new ToolInputError('duration_minutes must be between 1 and 480.');
+    }
+
+    const hours = await outsideOpeningHours(ctx, startsAt, minutes);
+    if (hours && isCustomerTurn(ctx)) {
+      return { booked: false, outside_opening_hours: true, note: hours };
     }
 
     // Clash detection is a read-then-write and so is racy under concurrency;
@@ -204,9 +264,12 @@ export const bookAppointment: Tool = {
     if (overlapping.length) {
       return {
         booked: false,
-        clashes_with: overlapping.map((a) => ({
-          who: a.customer_name, what: a.service_name, at: a.starts_at,
-        })),
+        // A customer is told the slot is taken, never by whom.
+        clashes_with: overlapping.map((a) =>
+          isCustomerTurn(ctx)
+            ? { at: toLocalIso(new Date(a.starts_at), ctx.timezone) }
+            : { who: a.customer_name, what: a.service_name, at: a.starts_at }
+        ),
         note: 'Offer the customer a different time rather than booking over this.',
       };
     }
@@ -231,6 +294,29 @@ export const bookAppointment: Tool = {
 
     if (error) throw new Error(error.message);
 
+    // A business that bills on booking gets the invoice raised and sent now.
+    // Never allowed to undo the booking: a failure here is logged and left.
+    let invoiced: string | null = null;
+    try {
+      const price = service?.price_amount === null || service?.price_amount === undefined ? null : Number(service.price_amount);
+      if (price !== null && price > 0) {
+        const business = await loadInvoiceBusiness(ctx.tenantId);
+        if (invoiceSettingsOf(business).auto_on_booking) {
+          const inv = await createInvoice(ctx.tenantId, {
+            leadId: customer.leadId ?? null,
+            conversationId: ctx.conversationId ?? null,
+            appointmentId: data.id,
+            customerName: finalCustomerName,
+            items: [{ name: service?.name ?? serviceName, qty: 1, price }],
+          });
+          const delivery = await sendInvoice(ctx.tenantId, inv.id);
+          if (delivery.sent) invoiced = inv.invoice_no;
+        }
+      }
+    } catch (e) {
+      console.warn('[booking] could not raise the invoice:', e instanceof Error ? e.message : e);
+    }
+
     // Look up customer email if available to send confirmation
     let customerEmail = str(args, 'customer_email', { max: 200 });
     if (!customerEmail && customer.leadId) {
@@ -250,20 +336,81 @@ export const bookAppointment: Tool = {
         .eq('id', ctx.tenantId)
         .maybeSingle();
 
-      void sendAppointmentConfirmation({
+      // Awaited: on a serverless function an email left running in the
+      // background can be cut off when the reply goes out.
+      await sendAppointmentConfirmation({
         customerEmail,
         customerName: finalCustomerName,
         serviceName: service?.name ?? serviceName,
         startsAt,
         durationMinutes: minutes,
         businessName: tenantRow?.business_name || tenantRow?.name || 'Shwari Services',
+        tenantId: ctx.tenantId,
         notes: str(args, 'notes', { max: 1000 }) || undefined,
       }).catch((e) => console.error('[brevo] booking email error:', e));
     }
 
-    return { booked: true, appointment: data };
+    return {
+      booked: true,
+      appointment: data,
+      ...(invoiced ? { invoice_sent: invoiced, invoice_note: `Invoice ${invoiced} has just been sent to the customer in this chat as a PDF. Tell them so; do not restate the amount unless asked.` } : {}),
+      local_time: toLocalIso(new Date(startsAt), ctx.timezone),
+      ...(hours ? { warning: hours } : {}),
+    };
   },
 };
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * A sentence explaining why a slot falls outside opening hours, or null when it
+ * is fine or the hours for that day are simply not recorded.
+ */
+async function outsideOpeningHours(ctx: AgentContext, startsAt: string, minutes: number): Promise<string | null> {
+  const zone = safeTimezone(ctx.timezone);
+  const start = wallClock(new Date(startsAt), zone);
+
+  const { data: rows } = await serviceClient
+    .from('business_hours')
+    .select('day_of_week, closed, opens, closes')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('day_of_week', start.weekday);
+
+  const row = Array.isArray(rows) ? rows.find((r) => r.day_of_week === start.weekday) : null;
+  if (!row) return null;
+  if (row.closed) return `The business is closed on ${DAY_NAMES[start.weekday]}s. Offer another day.`;
+
+  const toMinutes = (t: unknown): number | null => {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t ?? ''));
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  };
+  const opens = toMinutes(row.opens);
+  const closes = toMinutes(row.closes);
+  if (opens === null || closes === null) return null;
+
+  const begin = start.hour * 60 + start.minute;
+  if (begin < opens || begin + minutes > closes) {
+    return `That is outside opening hours on ${DAY_NAMES[start.weekday]} (${row.opens}-${row.closes}). Offer a time inside them.`;
+  }
+  return null;
+}
+
+/**
+ * Customers may only change their own bookings. Does nothing when the turn is
+ * staff-side; throws the same "no longer exists" a missing row would, so a
+ * customer cannot probe for other people's appointment ids.
+ */
+async function assertOwnAppointment(ctx: AgentContext, id: string): Promise<void> {
+  if (!isCustomerTurn(ctx)) return;
+  const scope = await customerScope(ctx);
+  const { data } = await serviceClient
+    .from('appointments')
+    .select('id, lead_id, customer_id')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('id', id)
+    .maybeSingle();
+  if (!ownedBy(data, scope)) throw new ToolInputError('That appointment no longer exists.');
+}
 
 export const rescheduleAppointment: Tool = {
   name: 'reschedule_appointment',
@@ -281,7 +428,8 @@ export const rescheduleAppointment: Tool = {
 
   async run(args, ctx) {
     const id = str(args, 'appointment_id', { required: true, max: 64 });
-    const startsAt = when(args, 'starts_at', { required: true })!;
+    const startsAt = when(args, 'starts_at', ctx, { required: true })!;
+    await assertOwnAppointment(ctx, id);
 
     const { data, error } = await serviceClient
       .from('appointments')
@@ -315,6 +463,7 @@ export const cancelAppointment: Tool = {
   async run(args, ctx) {
     const id = str(args, 'appointment_id', { required: true, max: 64 });
     const reason = str(args, 'reason', { max: 500 });
+    await assertOwnAppointment(ctx, id);
 
     const { data, error } = await serviceClient
       .from('appointments')
@@ -337,6 +486,59 @@ export const cancelAppointment: Tool = {
 // ---------------------------------------------------------------------------
 // Orders
 // ---------------------------------------------------------------------------
+
+/**
+ * Find an order by the reference someone typed.
+ *
+ * Models and customers both mangle references: an "ORD-" stuck on the front
+ * of a reference that already has the business's own prefix, lower case, a
+ * stray space. A payment was left unlinked from its order for exactly that
+ * reason. The exact reference is tried first, then the same thing with a
+ * leading ORD- removed, then a match on the unique tail.
+ */
+/** A reference as typed, and without an ORD- someone put on the front. */
+export function refSpellings(raw: string): string[] {
+  const ref = raw.trim().toUpperCase().replace(/\s+/g, '');
+  const stripped = ref.replace(/^(?:ORD(?:ER)?[-#: ]*)+/, '');
+  return Array.from(new Set([ref, stripped].filter(Boolean)));
+}
+
+/**
+ * `leadId`, when given, pins every lookup to that customer's orders: on a
+ * customer turn a reference must never find someone else's order.
+ */
+export async function findOrderByRef(tenantId: string, raw: string, leadId?: number | null): Promise<any | null> {
+  const ref = raw.trim().toUpperCase().replace(/\s+/g, '');
+  if (!ref) return null;
+  const select = 'id, order_ref, lead_id, customer_id, total, status, payment_status';
+  const pinned = leadId !== undefined && leadId !== null;
+  const exact = async (value: string) => {
+    let q = serviceClient.from('orders').select(select).eq('tenant_id', tenantId).eq('order_ref', value);
+    if (pinned) q = q.eq('lead_id', leadId);
+    const { data } = await q.maybeSingle();
+    return data ?? null;
+  };
+
+  const direct = await exact(ref);
+  if (direct) return direct;
+
+  const stripped = ref.replace(/^(?:ORD(?:ER)?[-#: ]*)+/, '');
+  if (stripped && stripped !== ref) {
+    const second = await exact(stripped);
+    if (second) return second;
+  }
+
+  const tail = (stripped || ref).split('-').pop() ?? '';
+  if (tail.length >= 6) {
+    let q = serviceClient
+      .from('orders').select(select).eq('tenant_id', tenantId)
+      .ilike('order_ref', `%${likeLiteral(tail)}`);
+    if (pinned) q = q.eq('lead_id', leadId);
+    const { data } = await q.limit(2);
+    if (Array.isArray(data) && data.length === 1) return data[0];
+  }
+  return null;
+}
 
 export const recordOrder: Tool = {
   name: 'record_order',
@@ -387,13 +589,67 @@ export const recordOrder: Tool = {
       };
     });
 
-    const total = num(args, 'total');
+    let total = num(args, 'total');
     if (total !== null && total < 0) throw new ToolInputError('total cannot be negative.');
+
+    // An agent sells what is in the catalogue, at the catalogue's price - for
+    // a customer and for the owner alike. A name that matches nothing on sale
+    // is refused, and a price the model supplied is replaced by the real one.
+    const unknown: string[] = [];
+    let priced = true;
+    let sum = 0;
+    for (const item of items as Array<{ name: string; qty: number; price?: number }>) {
+      const found = await findInCatalogue(ctx.tenantId, item.name);
+      if (!found) { unknown.push(item.name); continue; }
+      item.name = found.name;
+      if (found.price !== null) item.price = found.price;
+      else if (isCustomerTurn(ctx)) delete item.price;
+      if (typeof item.price === 'number') sum += item.price * item.qty;
+      else priced = false;
+    }
+    if (unknown.length) {
+      throw new ToolInputError(
+        `Not on sale: ${unknown.map((n) => `"${n}"`).join(', ')}. Only items in the catalogue can be ordered. ` +
+        'Look up the products and services, use the exact name of what the customer wants, or tell them it is not offered.'
+      );
+    }
+    // The total is what the catalogue says, never what the model worked out.
+    if (isCustomerTurn(ctx)) total = priced ? sum : null;
+    else if (total === null && priced) total = sum;
 
     const customer = await resolveCustomer(args, ctx);
 
     const { data: tenant } = await serviceClient
       .from('tenants').select('business_name, order_prefix, currency').eq('id', ctx.tenantId).single();
+
+    // The same order twice is not two orders. A customer who sends their
+    // details as a message and a photo gets two turns at once, and each one
+    // recorded the order: an unpaid order for the same customer and the same
+    // items in the last quarter of an hour is returned instead of repeated.
+    if (customer.leadId !== null && customer.leadId !== undefined) {
+      const { data: recent } = await serviceClient
+        .from('orders')
+        .select('id, order_ref, items, total, currency, status, payment_status, created_at')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('lead_id', customer.leadId)
+        .eq('status', 'pending')
+        .eq('payment_status', 'unpaid')
+        .gte('created_at', new Date(Date.now() - 15 * 60_000).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(5);
+      const signature = (list: any[]) =>
+        (Array.isArray(list) ? list : [])
+          .map((i) => `${String(i?.name ?? '').trim().toLowerCase()}x${Number(i?.qty) || 1}`)
+          .sort().join('|');
+      const same = (Array.isArray(recent) ? recent : []).find((o: any) => signature(o.items) === signature(items));
+      if (same) {
+        return {
+          order: { id: same.id, order_ref: same.order_ref, total: same.total, currency: same.currency, status: same.status },
+          already_recorded: true,
+          note: 'This order was already recorded a moment ago. Use this reference exactly as written; do not record it again.',
+        };
+      }
+    }
 
     const { data, error } = await serviceClient
       .from('orders')
@@ -418,6 +674,15 @@ export const recordOrder: Tool = {
 
     if (error) throw new Error(error.message);
 
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'new_order',
+      title: `New order ${data.order_ref}`,
+      body: `${customer.customerName || 'A customer'} ordered ${items.map((i: any) => `${i.qty > 1 ? `${i.qty} x ` : ''}${i.name}`).join(', ')}${data.total !== null && data.total !== undefined ? ` - ${data.currency} ${Number(data.total).toLocaleString('en-US')}` : ''}. Unpaid.`,
+      link: '/orders',
+      refId: data.id,
+    });
+
     // Look up customer email if available to send receipt
     let orderCustomerEmail = str(args, 'customer_email', { max: 200 });
     if (!orderCustomerEmail && customer.leadId) {
@@ -431,7 +696,7 @@ export const recordOrder: Tool = {
     }
 
     if (orderCustomerEmail) {
-      void sendOrderReceipt({
+      await sendOrderReceipt({
         customerEmail: orderCustomerEmail,
         customerName: customer.customerName || 'Valued Customer',
         orderId: data.order_ref || data.id,
@@ -439,6 +704,7 @@ export const recordOrder: Tool = {
         totalAmount: total ?? 0,
         currency: (tenant?.currency || 'KES').toUpperCase().slice(0, 3),
         businessName: tenant?.business_name || 'Shwari Commerce',
+        tenantId: ctx.tenantId,
       }).catch((e) => console.error('[brevo] order receipt email error:', e));
     }
 
@@ -516,6 +782,12 @@ export const listTickets: Tool = {
 
     q = status ? q.eq('status', status) : q.in('status', ['open', 'in_progress', 'waiting']);
 
+    // A customer sees the tickets raised in their own conversation only.
+    if (isCustomerTurn(ctx)) {
+      if (!ctx.conversationId) return { tickets: [] };
+      q = q.eq('conversation_id', ctx.conversationId);
+    }
+
     const { data, error } = await q;
     if (error) throw new Error(error.message);
     return { tickets: data ?? [] };
@@ -550,11 +822,19 @@ export const updateTicket: Tool = {
     if (resolution) patch.resolution = resolution;
     if (Object.keys(patch).length === 1) throw new ToolInputError('Nothing to change.');
 
-    const { data, error } = await serviceClient
+    let update = serviceClient
       .from('support_tickets')
       .update(patch)
       .eq('tenant_id', ctx.tenantId)
-      .eq('id', id)
+      .eq('id', id);
+    // On a customer turn only a ticket from this very conversation can be
+    // touched; any other id simply matches nothing.
+    if (isCustomerTurn(ctx)) {
+      if (!ctx.conversationId) throw new ToolInputError('That ticket no longer exists.');
+      update = update.eq('conversation_id', ctx.conversationId);
+    }
+
+    const { data, error } = await update
       .select('id, subject, status')
       .maybeSingle();
 
@@ -592,7 +872,9 @@ export const escalateToHuman: Tool = {
     // replying over the top of a colleague.
     const { data: conversation, error } = await serviceClient
       .from('conversations')
-      .update({ ai_enabled: false, updated_at: new Date().toISOString() })
+      // conversations has no updated_at column; sending one made every
+      // handover fail in production.
+      .update({ ai_enabled: false })
       .eq('tenant_id', ctx.tenantId)
       .eq('id', ctx.conversationId)
       .select('id, customer_name')
@@ -626,6 +908,15 @@ export const escalateToHuman: Tool = {
       .select('id')
       .single();
 
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'needs_human',
+      title: `${conversation.customer_name || 'A customer'} needs a person`,
+      body: reason,
+      link: `/inbox/${ctx.conversationId}`,
+      refId: ticket?.id ?? null,
+    });
+
     return {
       handed_over: true,
       ticket_id: ticket?.id ?? null,
@@ -657,7 +948,7 @@ export const scheduleFollowUp: Tool = {
 
   async run(args, ctx) {
     const message = str(args, 'message', { required: true, max: 1000 });
-    const dueAt = when(args, 'due_at', { required: true })!;
+    const dueAt = when(args, 'due_at', ctx, { required: true })!;
     if (new Date(dueAt).getTime() < Date.now() - 60_000) {
       throw new ToolInputError('due_at is in the past. Pick a future time.');
     }
@@ -784,7 +1075,17 @@ export const listOrders: Tool = {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    if (ref) q = q.eq('order_ref', ref.toUpperCase());
+    if (isCustomerTurn(ctx)) {
+      // "My orders" means theirs, and an order reference only narrows within
+      // theirs - it is never a way to read somebody else's order.
+      const scope = await customerScope(ctx);
+      if (scope.leadId !== null) q = q.eq('lead_id', scope.leadId);
+      else if (scope.customerId) q = q.eq('customer_id', scope.customerId);
+      else return { orders: [] };
+      // The reference only narrows within their own orders; both spellings are
+      // tried in the same pinned query rather than in a lookup of its own.
+      if (ref) q = q.in('order_ref', refSpellings(ref));
+    } else if (ref) q = q.in('order_ref', refSpellings(ref));
     else if (leadId !== null) q = q.eq('lead_id', leadId);
     else if (ctx.conversationId) {
       // In a customer's own conversation, "my orders" means theirs — never
@@ -833,11 +1134,25 @@ export const updateOrderStatus: Tool = {
     if (statusRaw) patch.status = oneOf(args, 'status', ORDER_STATES, null);
     if (delivery) patch.delivery_location = delivery;
 
-    const { data, error } = await serviceClient
+    let update = serviceClient
       .from('orders')
       .update(patch)
       .eq('tenant_id', ctx.tenantId)
-      .eq('order_ref', ref)
+      .eq('order_ref', ref);
+
+    if (isCustomerTurn(ctx)) {
+      // A customer may cancel their own order or correct where it is going.
+      // Confirming and delivering are the business's call, not theirs.
+      if (statusRaw && patch.status !== 'cancelled') {
+        throw new ToolInputError('Only the business can confirm or deliver an order. Hand this to a person.');
+      }
+      const scope = await customerScope(ctx);
+      if (scope.leadId !== null) update = update.eq('lead_id', scope.leadId);
+      else if (scope.customerId) update = update.eq('customer_id', scope.customerId);
+      else throw new ToolInputError(`There is no order ${ref}.`);
+    }
+
+    const { data, error } = await update
       .select('order_ref, status, payment_status, delivery_location')
       .maybeSingle();
 
@@ -873,28 +1188,84 @@ export const recordPaymentClaim: Tool = {
     const customer = await resolveCustomer(args, ctx).catch(() => null);
     const ref = str(args, 'order_ref', { max: 40 }).toUpperCase();
 
+    // Which order is this for? A reference is used when it finds one of the
+    // customer's orders. When it finds nothing - a mistyped or embellished
+    // reference - the claim is still recorded rather than refused: the money
+    // may well have moved, and a claim nobody sees is the worst outcome.
     let orderId: string | null = null;
+    let orderRef: string | null = null;
     if (ref) {
-      const { data: order } = await serviceClient
-        .from('orders').select('id').eq('tenant_id', ctx.tenantId).eq('order_ref', ref).maybeSingle();
-      if (!order) throw new ToolInputError(`There is no order ${ref}.`);
-      orderId = order.id;
+      // On a customer turn the search itself is limited to their own orders.
+      const order = isCustomerTurn(ctx)
+        ? (customer?.leadId != null ? await findOrderByRef(ctx.tenantId, ref, customer.leadId) : null)
+        : await findOrderByRef(ctx.tenantId, ref);
+      const theirs = order && (!isCustomerTurn(ctx) || (customer && ownedBy(order, customer)));
+      if (theirs) { orderId = order.id; orderRef = order.order_ref; }
+      else if (!isCustomerTurn(ctx)) throw new ToolInputError(`There is no order ${ref}.`);
+    }
+    // No usable reference: it is for the order they have just placed. The
+    // newest unpaid one, preferring one whose total matches what they sent.
+    if (!orderId && customer && customer.leadId !== null && customer.leadId !== undefined) {
+      const { data: open } = await serviceClient
+        .from('orders').select('id, order_ref, total')
+        .eq('tenant_id', ctx.tenantId).eq('lead_id', customer.leadId)
+        .eq('payment_status', 'unpaid').neq('status', 'cancelled')
+        .order('created_at', { ascending: false }).limit(5);
+      const list = Array.isArray(open) ? open : [];
+      const match = (amount !== null ? list.find((o: any) => Number(o.total) === amount) : null) ?? list[0];
+      if (match) { orderId = match.id; orderRef = match.order_ref; }
     }
 
-    // The same reference twice is the customer repeating themselves, not a
-    // second payment. Two claims would mean two things for staff to verify.
+    // The same reference twice from the same customer is them repeating
+    // themselves, not a second payment.
     const { data: existing } = await serviceClient
       .from('payments')
-      .select('id, verification_status')
+      .select('id, verification_status, lead_id, customer_id, order_id')
       .eq('tenant_id', ctx.tenantId)
       .eq('transaction_code', code)
       .maybeSingle();
 
     if (existing) {
+      const sameCustomer = customer ? ownedBy(existing, customer) : !isCustomerTurn(ctx);
+      if (sameCustomer) {
+        // Link it to the order now if it was recorded without one.
+        if (!existing.order_id && orderId && existing.verification_status === 'unverified') {
+          await serviceClient.from('payments').update({ order_id: orderId })
+            .eq('tenant_id', ctx.tenantId).eq('id', existing.id);
+        }
+        return {
+          recorded: false,
+          already_known: true,
+          note: 'That reference is already on the list for this customer. Tell them it is being checked.',
+        };
+      }
+
+      // A reference already used for a different customer's payment. It cannot
+      // go on the list twice, and the agent must not decide what it means, so
+      // it is put in front of a person as a ticket instead.
+      await serviceClient.from('support_tickets').insert({
+        tenant_id: ctx.tenantId,
+        lead_id: customer?.leadId ?? null,
+        conversation_id: ctx.conversationId,
+        customer_id: customer?.customerId ?? null,
+        customer_name: customer?.customerName ?? null,
+        subject: `Payment reference ${code} was already used for another customer`,
+        body: `A customer sent transaction code ${code}${amount !== null ? ` for ${amount}` : ''}${orderRef ? ` against order ${orderRef}` : ''}, but that code is already recorded for a different customer's payment. Check the statement before releasing anything.`,
+        priority: 'high',
+        opened_by_agent: ctx.agentRole,
+      });
+      await notify({
+        tenantId: ctx.tenantId,
+        kind: 'needs_human',
+        title: 'Payment reference used twice',
+        body: `${customer?.customerName || 'A customer'} sent ref ${code}, which is already recorded for another payment. Check before releasing anything.`,
+        link: ctx.conversationId ? `/inbox/${ctx.conversationId}` : '/support',
+        refId: `${code}:${ctx.conversationId ?? ''}`,
+      });
       return {
         recorded: false,
-        already_known: true,
-        note: 'That reference is already on the list. Tell the customer it is being checked.',
+        reference_already_used: true,
+        note: 'This reference is already recorded against a different payment, so it could NOT be added to the list. A ticket has been opened for a colleague. Do not tell the customer it is noted or being verified: tell them the reference could not be matched to a new payment, ask them to check they sent the right M-Pesa message, and say a colleague will follow up.',
       };
     }
 
@@ -907,6 +1278,8 @@ export const recordPaymentClaim: Tool = {
         tenant_id: ctx.tenantId,
         lead_id: customer?.leadId ?? null,
         order_id: orderId,
+        // With no order named, an open invoice for this customer is what they are paying.
+        invoice_id: orderId ? null : await findInvoiceForClaim(ctx.tenantId, customer?.leadId, amount).catch(() => null),
         conversation_id: ctx.conversationId,
         customer_id: customer?.customerId ?? null,
         transaction_code: code,
@@ -924,10 +1297,22 @@ export const recordPaymentClaim: Tool = {
 
     if (error) throw new Error(error.message);
 
+    await notify({
+      tenantId: ctx.tenantId,
+      kind: 'payment_claim',
+      title: 'Payment to verify',
+      body: `${customer?.customerName || 'A customer'} says they paid${amount !== null ? ` ${data.currency} ${amount.toLocaleString('en-US')}` : ''}${orderRef ? ` for ${orderRef}` : ''} (ref ${code}).`,
+      link: '/payments',
+      refId: data.id,
+    });
+
     return {
       recorded: true,
       claim: data,
-      note: 'On the list for a person to verify. Do not tell the customer it is confirmed.',
+      for_order: orderRef,
+      note: orderRef
+        ? `On the list for a person to verify, against order ${orderRef}. Do not tell the customer it is confirmed.`
+        : 'On the list for a person to verify. No order could be matched to it. Do not tell the customer it is confirmed.',
     };
   },
 };

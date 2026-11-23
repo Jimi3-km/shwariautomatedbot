@@ -95,25 +95,46 @@ export interface StoreTokenInput {
   whatsappBusinessAccountId?: string | null;
   instagramUserId?: string | null;
   instagramUsername?: string | null;
+  /** The Facebook Page this token acts for. Written only when given. */
+  facebookPageId?: string | null;
+  facebookPageName?: string | null;
   scopes?: string[] | null;
 }
 
+/** True when the database says a column is not there (migration 0025 pending). */
+function missingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === '42703' || error.code === 'PGRST204' ||
+    /column .* does not exist|could not find the .* column/i.test(error.message ?? '');
+}
+
 export async function storeToken(input: StoreTokenInput): Promise<void> {
-  const { error } = await serviceClient.from('meta_tokens').upsert(
-    {
-      tenant_id: input.tenantId,
-      platform: input.platform,
-      access_token_encrypted: encryptToken(input.accessToken),
-      token_expires_at: input.expiresAt ? input.expiresAt.toISOString() : null,
-      phone_number_id: input.phoneNumberId ?? null,
-      whatsapp_business_account_id: input.whatsappBusinessAccountId ?? null,
-      instagram_user_id: input.instagramUserId ?? null,
-      instagram_username: input.instagramUsername ?? null,
-      scopes: input.scopes ?? null,
-      updated_at: new Date().toISOString(),
-    },
+  const row = {
+    tenant_id: input.tenantId,
+    platform: input.platform,
+    access_token_encrypted: encryptToken(input.accessToken),
+    token_expires_at: input.expiresAt ? input.expiresAt.toISOString() : null,
+    phone_number_id: input.phoneNumberId ?? null,
+    whatsapp_business_account_id: input.whatsappBusinessAccountId ?? null,
+    instagram_user_id: input.instagramUserId ?? null,
+    instagram_username: input.instagramUsername ?? null,
+    scopes: input.scopes ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  // The Page columns arrive with migration 0025. They are only sent for a
+  // Page, and dropped if the database does not have them yet: the channel row
+  // already records which Page it is.
+  const page = input.facebookPageId || input.facebookPageName
+    ? { facebook_page_id: input.facebookPageId ?? null, facebook_page_name: input.facebookPageName ?? null }
+    : null;
+
+  let { error } = await serviceClient.from('meta_tokens').upsert(
+    page ? { ...row, ...page } : row,
     { onConflict: 'tenant_id,platform' }
   );
+  if (error && page && missingColumn(error)) {
+    ({ error } = await serviceClient.from('meta_tokens').upsert(row, { onConflict: 'tenant_id,platform' }));
+  }
 
   if (error) {
     // Never log the token itself.
@@ -173,5 +194,33 @@ export async function deleteToken(tenantId: string, platform: MetaPlatform): Pro
   if (error) {
     console.error(`[meta/tokens] delete failed for tenant ${tenantId}/${platform}:`, error.message);
     throw new Error('Could not remove the platform credential');
+  }
+}
+
+/**
+ * Replace only the token and its expiry, leaving the account ids on the row
+ * untouched. Used when a long-lived token is refreshed in place.
+ */
+export async function rotateToken(
+  tenantId: string,
+  platform: MetaPlatform,
+  accessToken: string,
+  expiresAt: Date | null
+): Promise<void> {
+  const { error } = await serviceClient
+    .from('meta_tokens')
+    .update({
+      access_token_encrypted: encryptToken(accessToken),
+      token_expires_at: expiresAt ? expiresAt.toISOString() : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('tenant_id', tenantId)
+    .eq('platform', platform);
+
+  if (error) {
+    console.error(`[meta/tokens] rotate failed for tenant ${tenantId}/${platform}:`, {
+      code: error.code, message: error.message,
+    });
+    throw new Error('Could not store the refreshed credential');
   }
 }

@@ -1,5 +1,8 @@
 # Meta Embedded Onboarding Guide for Shwari
 
+> **Note.** n8n is no longer part of the system. Any `N8N_*` variable mentioned
+> below is not read; messages are handled by this API and the native agent.
+
 This guide explains how to allow your SaaS customers to connect their WhatsApp and Instagram accounts directly to Shwari in a single click, **without** them needing to create Meta Developer accounts or API keys.
 
 This is achieved using **Meta's Embedded Signup** (for WhatsApp) and **Facebook Login for Business** (for Instagram). 

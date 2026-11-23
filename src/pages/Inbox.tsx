@@ -45,12 +45,33 @@ export function Inbox() {
   const debouncedSearch = useDebounced(search, 300);
 
   // Keep the URL honest so searches and filters are shareable and survive reload.
+  // setParams changes identity on every navigation, so it is read through a
+  // ref: depending on it re-ran this effect and wrote the old filters back
+  // over a query that had just arrived from the top bar.
+  const setParamsRef = useRef(setParams);
+  setParamsRef.current = setParams;
   useEffect(() => {
     const next = new URLSearchParams();
     if (debouncedSearch) next.set('search', debouncedSearch);
     if (unreadOnly) next.set('unread', 'true');
-    setParams(next, { replace: true });
-  }, [debouncedSearch, unreadOnly, setParams]);
+    setParamsRef.current(next, { replace: true });
+  }, [debouncedSearch, unreadOnly]);
+
+  // The other direction: the global search box and the bell navigate here with
+  // a query while this page is already mounted, so adopt what the URL says.
+  // Our own writes above always match the current state and are ignored.
+  const urlSearch = params.get('search') ?? '';
+  const urlUnread = params.get('unread') === 'true';
+  const latest = useRef({ debouncedSearch, unreadOnly });
+  latest.current = { debouncedSearch, unreadOnly };
+  useEffect(() => {
+    if (urlSearch !== latest.current.debouncedSearch) setSearch(urlSearch);
+    if (urlUnread !== latest.current.unreadOnly) setUnreadOnly(urlUnread);
+  }, [urlSearch, urlUnread]);
+
+  // Opening a conversation must not drop the active search from the URL.
+  const query = params.toString();
+  const withQuery = (path: string) => (query ? `${path}?${query}` : path);
 
   useEffect(() => { setOffset(0); }, [debouncedSearch, channel, handledBy, unreadOnly, status]);
 
@@ -71,7 +92,9 @@ export function Inbox() {
 
   // Refresh the list periodically so new customer messages appear without a
   // manual reload. Paused while the tab is hidden.
-  useVisiblePolling(list.reload, 25_000);
+  // Only the first page is polled: refreshing a later page would shuffle rows
+  // under someone who is reading them.
+  useVisiblePolling(list.reload, 25_000, offset === 0);
 
   const conversations = list.data?.conversations ?? [];
   const showDetail = Boolean(conversationId);
@@ -79,8 +102,9 @@ export function Inbox() {
   // On desktop, open the first conversation so the pane is never blank.
   useEffect(() => {
     if (!isMobile && !conversationId && conversations.length > 0) {
-      navigate(`/inbox/${conversations[0].id}`, { replace: true });
+      navigate(withQuery(`/inbox/${conversations[0].id}`), { replace: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMobile, conversationId, conversations, navigate]);
 
   const listPane = (
@@ -88,7 +112,7 @@ export function Inbox() {
       state={list}
       conversations={conversations}
       activeId={conversationId ?? null}
-      onSelect={(id) => navigate(`/inbox/${id}`)}
+      onSelect={(id) => navigate(withQuery(`/inbox/${id}`))}
       search={search} setSearch={setSearch}
       channel={channel} setChannel={setChannel}
       handledBy={handledBy} setHandledBy={setHandledBy}
@@ -104,7 +128,7 @@ export function Inbox() {
     return showDetail
       ? <ConversationPane
           conversationId={conversationId!}
-          onBack={() => navigate('/inbox')}
+          onBack={() => navigate(withQuery('/inbox'))}
           onChanged={list.reload}
           showBack
         />
@@ -191,6 +215,7 @@ function ConversationList(props: {
               { value: 'telegram', label: 'Telegram' },
               { value: 'whatsapp', label: 'WhatsApp' },
               { value: 'instagram', label: 'Instagram' },
+              { value: 'facebook', label: 'Facebook' },
               { value: 'webchat', label: 'Web chat' },
             ]}
             style={{ height: 30, fontSize: 12.5 }}
@@ -344,8 +369,8 @@ function ConversationPane({
   }
 
   return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Header with the AI/human state as a first-class control */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
@@ -456,6 +481,25 @@ function MessageBubble({ message }: { message: ConversationDetail['messages'][nu
         }}>
           {message.body}
         </div>
+        {documentOf(message) && (
+          <a
+            href={documentOf(message)!.url} target="_blank" rel="noreferrer"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '6px 10px',
+              border: '1px solid var(--border)', borderRadius: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text)',
+            }}
+          >
+            PDF · {documentOf(message)!.name}
+          </a>
+        )}
+        {receiptImageOf(message) && (
+          <a href={receiptImageOf(message)!} target="_blank" rel="noreferrer" style={{ display: 'block', marginTop: 6 }}>
+            <img
+              src={receiptImageOf(message)!} alt="Receipt sent to the customer" loading="lazy"
+              style={{ display: 'block', width: 240, maxWidth: '100%', height: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}
+            />
+          </a>
+        )}
       </div>
     </div>
   );
@@ -579,4 +623,29 @@ function Row({ label, value }: { label: string; value: string | null | undefined
       <span style={{ textAlign: 'right', wordBreak: 'break-word' }}>{value || '—'}</span>
     </div>
   );
+}
+
+/** The invoice or receipt PDF attached to a message, when it is one this site issued. */
+function documentOf(message: { extracted?: unknown }): { url: string; name: string } | null {
+  const e = message.extracted as { file_url?: unknown; file_name?: unknown } | null;
+  if (typeof e?.file_url !== 'string') return null;
+  try {
+    const u = new URL(e.file_url);
+    const ours = u.protocol === 'https:' && (u.pathname.startsWith('/api/receipts/pdf/') || u.pathname.startsWith('/api/invoices/pdf/'));
+    return ours ? { url: e.file_url, name: typeof e.file_name === 'string' ? e.file_name : 'Document.pdf' } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The receipt picture attached to a message, when it is one this site issued. */
+function receiptImageOf(message: { extracted?: unknown }): string | null {
+  const url = (message.extracted as { image_url?: unknown } | null)?.image_url;
+  if (typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.pathname.startsWith('/api/receipts/image/') ? url : null;
+  } catch {
+    return null;
+  }
 }

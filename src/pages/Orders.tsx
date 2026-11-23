@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ShoppingCart } from 'lucide-react';
 import { getOrders, updateOrder } from '../lib/api';
 import type { Order, OrderStatus } from '../types';
-import { useAsync, useIsMobile, useMutation } from '../hooks';
+import { useAsync, useIsMobile, useMutation, useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Card, EmptyState, ErrorState, FilterChip, InlineError, LoadingState,
@@ -23,6 +23,8 @@ export function Orders() {
   const [status, setStatus] = useState<OrderStatus | ''>('');
 
   const state = useAsync(() => getOrders(status || undefined), [status]);
+  // An order an agent records appears without anyone reloading the page.
+  useVisiblePolling(state.reload, 20_000, true);
   const orders = state.data?.orders ?? [];
 
   const change = useMutation(async (order: Order, next: OrderStatus) => {

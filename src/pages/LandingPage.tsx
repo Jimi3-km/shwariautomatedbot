@@ -1,31 +1,33 @@
 import React, { useEffect, useRef } from 'react';
 import {
-  ArrowRight,
-  Bot,
-  MessageSquare,
-  ShoppingBag,
-  CreditCard,
-  Users,
-  Check,
-  Zap,
-  Shield,
-  Globe,
-  Menu,
-  X,
+  ArrowRight, Bot, Menu, X, Check,
+  Send, MessageCircle, Instagram, Facebook, Globe,
+  Sparkles, ShoppingBag, LifeBuoy, CalendarDays, Receipt, Megaphone,
 } from 'lucide-react';
-import { AuthScreen } from './AuthScreen';
+import { AuthScreen, hasAuthCallback } from './AuthScreen';
+import { BrowserFrame, PhoneFrame, Shot, DemoVideo } from '../components/landing/media';
+import { SaleExplainer } from '../components/landing/SaleExplainer';
+import { AlertsExplainer, MarketingExplainer } from '../components/landing/Explainers';
 
-/* ───────────────────────────────────────────────────────────────────────
-   Scroll-reveal: fade up on first intersection.
-   ─────────────────────────────────────────────────────────────────────── */
+/**
+ * The public landing page.
+ *
+ * Every claim here is something the product does today; the rules for what
+ * may be said, and how each image and video was made, are in
+ * `.claude/skills/shwari-marketing/SKILL.md`. Styles are the `lp-*` rules at
+ * the end of `src/index.css`; imagery lives in `public/landing/`.
+ */
+
+/* Scroll-reveal: fade up on first intersection. */
 function useReveal() {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') { el.classList.add('lp-visible'); return; }
     const io = new IntersectionObserver(
       ([e]) => { if (e.isIntersecting) { el.classList.add('lp-visible'); io.unobserve(el); } },
-      { threshold: 0.1 },
+      { threshold: 0.08 },
     );
     io.observe(el);
     return () => io.disconnect();
@@ -37,9 +39,7 @@ function Reveal({ children, className = '' }: { children: React.ReactNode; class
   return <div ref={ref} className={`lp-reveal ${className}`}>{children}</div>;
 }
 
-/* ───────────────────────────────────────────────────────────────────────
-   Override body/root scroll lock while the landing page is mounted.
-   ─────────────────────────────────────────────────────────────────────── */
+/* Override body/root scroll lock while the landing page is mounted. */
 function useScrollUnlock() {
   useEffect(() => {
     const body = document.body;
@@ -55,12 +55,58 @@ function useScrollUnlock() {
   }, []);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════ */
-
 interface LandingPageProps { onSignedIn: () => void; }
 
+/** Arrived on a staff invitation: skip the marketing page. */
+function hasPendingInvite(): boolean {
+  try { return Boolean(localStorage.getItem('shwari.pending_invite')); } catch { return false; }
+}
+
+const NAV = [
+  { href: '#how', label: 'How a sale happens' },
+  { href: '#paid', label: 'Getting paid' },
+  { href: '#team', label: 'The team' },
+  { href: '#marketing', label: 'Marketing' },
+];
+
+const CHANNELS = [
+  { icon: MessageCircle, name: 'WhatsApp Business', how: 'Approve access with Meta and your number is set up for you.' },
+  { icon: Instagram, name: 'Instagram', how: 'Approve access with Instagram and your direct messages are handled.' },
+  { icon: Facebook, name: 'Facebook Messenger', how: 'Sign in with Facebook and choose your Page.' },
+  { icon: Send, name: 'Telegram', how: 'Connect your own bot.' },
+  { icon: Globe, name: 'Web chat', how: 'Paste one snippet into your website.' },
+];
+
+const TEAM = [
+  { icon: Sparkles, name: 'Shwari', who: 'Works with you', does: 'Your executive assistant. Runs the business with you, and directs the rest of the team.' },
+  { icon: ShoppingBag, name: 'Sales', who: 'Works with your customers', does: 'Answers product and price questions, qualifies interest and closes orders.' },
+  { icon: LifeBuoy, name: 'Support', who: 'Works with your customers', does: 'Handles problems (complaints, faults, cancellations) and gets a person involved when needed.' },
+  { icon: CalendarDays, name: 'Bookings', who: 'Works with your customers', does: 'Owns the diary: availability, booking, moving and confirming appointments.' },
+  { icon: Receipt, name: 'Orders & Payments', who: 'Works with your customers', does: 'Tracks orders through to delivery, and records payment claims for a person to verify.' },
+  { icon: Megaphone, name: 'Marketing', who: 'Works on your posts', does: 'Plans the week’s posts from your content library and publishes the ones you approve, on schedule.' },
+];
+
+const ROLES = [
+  ['Owner', 'Everything, including staff.'],
+  ['Manager', 'Channels, agents, catalogue, payment details and posts. Cannot add or remove staff.'],
+  ['Staff', 'Answers customers, handles leads, orders and bookings, verifies payments.'],
+  ['Viewer', 'Can read everything, change nothing.'],
+];
+
+function Ticks({ items }: { items: string[] }) {
+  return (
+    <ul className="lp-ticks">
+      {items.map((t) => (
+        <li key={t}><span className="lp-tick" aria-hidden="true"><Check size={12} strokeWidth={3} /></span><span>{t}</span></li>
+      ))}
+    </ul>
+  );
+}
+
 export function LandingPage({ onSignedIn }: LandingPageProps) {
-  const [showAuth, setShowAuth] = React.useState(false);
+  // The Instagram OAuth callback lands signed-out users here. Go straight to
+  // the auth screen in that case: it finishes the sign-in or shows the error.
+  const [showAuth, setShowAuth] = React.useState(() => hasAuthCallback() || hasPendingInvite());
   const [menuOpen, setMenuOpen] = React.useState(false);
   useScrollUnlock();
 
@@ -70,435 +116,442 @@ export function LandingPage({ onSignedIn }: LandingPageProps) {
 
   return (
     <div className="lp">
-      <style>{css}</style>
+      <a href="#main" className="lp-skip">Skip to content</a>
 
       {/* ── Nav ──────────────────────────────────────────────────── */}
-      <nav className="lp-nav">
+      <nav className="lp-nav" aria-label="Main">
         <div className="lp-w lp-nav-row">
-          <a href="#" className="lp-brand"><Bot size={24} /><span>Shwari</span></a>
+          <a href="/" className="lp-brand" aria-label="Shwari home"><Bot size={24} aria-hidden="true" /><span>Shwari</span></a>
           <div className="lp-nav-links">
-            <a href="#features">Features</a>
-            <a href="#channels">Channels</a>
-            <a href="#commerce">Commerce</a>
+            {NAV.map((n) => <a key={n.href} href={n.href}>{n.label}</a>)}
           </div>
           <div className="lp-nav-right">
-            <button onClick={go} className="lp-link-btn">Sign in</button>
-            <button onClick={go} className="lp-primary-btn lp-sm">Get Started</button>
+            <button type="button" onClick={go} className="lp-link-btn">Sign in</button>
+            <button type="button" onClick={go} className="lp-primary-btn lp-sm">Start Free</button>
           </div>
-          <button className="lp-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
-            {menuOpen ? <X size={22} /> : <Menu size={22} />}
+          <button
+            type="button" className="lp-menu-btn" onClick={() => setMenuOpen(!menuOpen)}
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen}
+          >
+            {menuOpen ? <X size={22} aria-hidden="true" /> : <Menu size={22} aria-hidden="true" />}
           </button>
         </div>
         {menuOpen && (
           <div className="lp-dropdown">
-            <a href="#features" onClick={() => setMenuOpen(false)}>Features</a>
-            <a href="#channels" onClick={() => setMenuOpen(false)}>Channels</a>
-            <a href="#commerce" onClick={() => setMenuOpen(false)}>Commerce</a>
+            {NAV.map((n) => <a key={n.href} href={n.href} onClick={() => setMenuOpen(false)}>{n.label}</a>)}
             <hr />
-            <button onClick={() => { setMenuOpen(false); go(); }} className="lp-primary-btn" style={{ width: '100%' }}>Get Started</button>
+            <button type="button" onClick={() => { setMenuOpen(false); go(); }} className="lp-outline-btn lp-full">Sign in</button>
+            <button type="button" onClick={() => { setMenuOpen(false); go(); }} className="lp-primary-btn lp-full">Start Free</button>
           </div>
         )}
       </nav>
 
-      {/* ── Hero ─────────────────────────────────────────────────── */}
-      <section className="lp-hero">
-        <div className="lp-w">
-          <Reveal><p className="lp-kicker">AI-powered business operations</p></Reveal>
-          <Reveal>
-            <h1 className="lp-h1">
-              Your entire business,<br />run by AI.
-            </h1>
-          </Reveal>
-          <Reveal>
-            <p className="lp-sub">
-              Deploy a team of specialized AI agents that handle customer conversations,
-              process orders, manage bookings, and collect payments — across every
-              messaging channel — while you focus on growth.
-            </p>
-          </Reveal>
-          <Reveal>
-            <div className="lp-hero-actions">
-              <button onClick={go} className="lp-primary-btn lp-lg">Start Free <ArrowRight size={16} /></button>
-              <a href="#features" className="lp-outline-btn lp-lg">How it works</a>
+      <main id="main">
+        {/* ── Hero ───────────────────────────────────────────────── */}
+        <section className="lp-hero">
+          <div className="lp-w lp-hero-grid">
+            <div className="lp-hero-copy">
+              <p className="lp-kicker">For businesses that sell in chats</p>
+              <h1 className="lp-h1">An AI team that answers your customers, takes the order and gets you paid.</h1>
+              <p className="lp-sub">
+                Shwari is six AI agents working from your own catalogue. They answer on WhatsApp,
+                Instagram, Messenger, Telegram and web chat, record orders and bookings, and send
+                invoices and receipts. A person on your side confirms every payment.
+              </p>
+              <div className="lp-hero-actions">
+                <button type="button" onClick={go} className="lp-primary-btn lp-lg">Start Free <ArrowRight size={16} aria-hidden="true" /></button>
+                <a href="#how" className="lp-outline-btn lp-lg">See how a sale happens</a>
+              </div>
             </div>
-          </Reveal>
-          <Reveal>
-            <div className="lp-metrics">
-              <div><strong>100%</strong><span>AI handling rate</span></div>
-              <div><strong>5</strong><span>Specialized agents</span></div>
-              <div><strong>24/7</strong><span>Always online</span></div>
+            <div className="lp-hero-media">
+              <BrowserFrame label="The dashboard">
+                <DemoVideo
+                  name="tour" w={960} h={570}
+                  label="A tour of the Shwari dashboard: Overview, Inbox, Leads, Invoices, Payments and the AI team"
+                />
+              </BrowserFrame>
+              <p className="lp-caption">The real dashboard, recorded from a live business. Customer details are replaced with demo values.</p>
             </div>
-          </Reveal>
-          <Reveal>
-            <div className="lp-hero-img">
-              <img src="/screenshots/overview-page.png" alt="Shwari Dashboard" />
-            </div>
-          </Reveal>
-        </div>
-      </section>
+          </div>
+        </section>
 
-      {/* ── Partners ─────────────────────────────────────────────── */}
-      <div className="lp-partners">
-        <div className="lp-w">
-          <Reveal>
-            <p className="lp-partners-label">Built on</p>
-            <div className="lp-partners-row">
-              {['Meta Business API', 'Telegram Bot API', 'M-Pesa', 'NVIDIA NIM'].map(t => (
-                <span key={t}>{t}</span>
-              ))}
+        {/* ── How a sale happens ─────────────────────────────────── */}
+        <section id="how" className="lp-section lp-section-alt">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">How a sale happens</p>
+              <h2 className="lp-h2">From the first message to a receipt.</h2>
+              <p className="lp-desc">
+                The agents do the talking and the record-keeping. You do one thing: check that the money arrived.
+              </p>
+            </Reveal>
+            <Reveal><SaleExplainer /></Reveal>
+          </div>
+        </section>
+
+        {/* ── Channels ───────────────────────────────────────────── */}
+        <section id="channels" className="lp-section">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Channels</p>
+              <h2 className="lp-h2">Five channels, one inbox.</h2>
+              <p className="lp-desc">
+                Customers write wherever they already are. Every conversation lands in the same inbox,
+                marked with its channel and whether an agent or a person is handling it.
+              </p>
+            </Reveal>
+            <div className="lp-split lp-split-lg">
+              <Reveal className="lp-split-text">
+                <ul className="lp-channels">
+                  {CHANNELS.map(({ icon: I, name, how }) => (
+                    <li key={name}>
+                      <span className="lp-feat-icon" aria-hidden="true"><I size={18} /></span>
+                      <div><strong>{name}</strong><span>{how}</span></div>
+                    </li>
+                  ))}
+                </ul>
+                <p className="lp-small">
+                  WhatsApp, Instagram and Messenger connect through Meta&rsquo;s own sign-in, so they depend on Meta approving the account.
+                </p>
+              </Reveal>
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="Inbox">
+                  <Shot name="inbox" w={1280} h={760}
+                    alt="The Inbox: a list of conversations with channel and lead stage, an open Telegram conversation where the agent sent an invoice as a PDF, and the customer's details and payments beside it" />
+                </BrowserFrame>
+                <p className="lp-caption">Press <strong>Take over</strong> to answer yourself. The agent steps back on that conversation.</p>
+              </Reveal>
             </div>
-          </Reveal>
-        </div>
-      </div>
-
-      {/* ── AI Team ──────────────────────────────────────────────── */}
-      <section id="features" className="lp-section">
-        <div className="lp-w">
-          <Reveal>
-            <p className="lp-label">AI Workforce</p>
-            <h2 className="lp-h2">Five agents. Zero configuration.</h2>
-            <p className="lp-desc">
-              Your AI team — Shwari, Sales, Support, Bookings, and Orders & Payments —
-              comes pre-trained. Tell Shwari about your business and they all adapt.
-            </p>
-          </Reveal>
-
-          <div className="lp-split">
-            <Reveal className="lp-split-media">
-              <div className="lp-img-card">
-                <img src="/screenshots/AI-Team-page.png" alt="AI Team" />
+            <Reveal>
+              <div className="lp-wide">
+                <BrowserFrame label="Leads">
+                  <Shot name="leads" w={1048} h={400}
+                    alt="The Leads board: columns for New, Contacted, Interested and Quoted, with each customer on a card showing channel and interest score" />
+                </BrowserFrame>
+                <p className="lp-caption">Everyone the agents have spoken to is on the Leads board, from New through Payment verified to Won.</p>
               </div>
             </Reveal>
-            <Reveal className="lp-split-text">
-              <ul className="lp-checks">
-                {[
-                  ['Executive assistant', 'Manages your business setup, directs the team, and reports back.'],
-                  ['Sales agent', 'Answers pricing questions, qualifies leads, closes orders.'],
-                  ['Support agent', 'Resolves customer issues using your knowledge base.'],
-                  ['Bookings agent', 'Schedules, reschedules, and sends reminders.'],
-                  ['Orders & Payments', 'Processes orders and generates payment links.'],
-                ].map(([t, d], i) => (
-                  <li key={i}>
-                    <span className="lp-check"><Check size={12} strokeWidth={3} /></span>
-                    <div><strong>{t}</strong><span>{d}</span></div>
+          </div>
+        </section>
+
+        {/* ── Getting paid ───────────────────────────────────────── */}
+        <section id="paid" className="lp-section lp-section-alt">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Getting paid</p>
+              <h2 className="lp-h2">Customers claim a payment. You confirm it.</h2>
+              <p className="lp-desc">
+                An agent never marks a payment verified; only a person does. Once you verify, the customer
+                gets a confirmation and a PDF receipt in the chat and by email.
+              </p>
+            </Reveal>
+
+            <Reveal>
+              <div className="lp-wide">
+                <BrowserFrame label="Payments">
+                  <Shot name="payments" w={1048} h={330}
+                    alt="The Payments page with tabs for All, Awaiting check, Verified and Rejected, and one verified payment of KES 22,000 with a Receipt button" />
+                </BrowserFrame>
+              </div>
+            </Reveal>
+
+            <div className="lp-split lp-split-docs">
+              <Reveal className="lp-split-text">
+                <h3 className="lp-h3">Receipts and invoices on your own letterhead</h3>
+                <p className="lp-p">
+                  Both are real documents, sent as PDFs. Add a logo or a full letterhead banner, your contact
+                  details, a tax number, a closing note and your colour, and watch the preview change as you go.
+                </p>
+                <Ticks items={[
+                  'A receipt goes out when a payment is verified.',
+                  'An invoice shows the amount due, the due date and how to pay.',
+                  'An optional PAID mark on receipts.',
+                ]} />
+                <BrowserFrame label="Settings · Invoices & receipts" className="lp-frame-sm">
+                  <Shot name="letterhead" w={1048} h={622}
+                    alt="Settings, Invoices and receipts: the letterhead form with tagline, phone, email and website beside a live preview of a receipt" />
+                </BrowserFrame>
+              </Reveal>
+              <Reveal className="lp-split-media">
+                <div className="lp-docs">
+                  <figure className="lp-doc">
+                    <Shot name="receipt" w={720} h={748}
+                      alt="A sample receipt: letterhead, receipt number, billed to, M-Pesa reference marked verified, two items, a PAID stamp and a total of KES 22,000" />
+                    <figcaption>Receipt</figcaption>
+                  </figure>
+                  <figure className="lp-doc">
+                    <Shot name="invoice-doc" w={720} h={900}
+                      alt="A sample invoice: the same letterhead, invoice number, amount due of KES 30,500 awaiting payment, two lines, how to pay and terms" />
+                    <figcaption>Invoice</figcaption>
+                  </figure>
+                </div>
+                <p className="lp-caption">Drawn by the product&rsquo;s own renderer with demo data.</p>
+              </Reveal>
+            </div>
+
+            <div className="lp-split lp-split-reverse lp-split-lg">
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="Invoices">
+                  <DemoVideo
+                    name="invoice" w={960} h={570}
+                    label="Invoices: the list, the New invoice dialog, the row menu with Open PDF, Send again and Cancel invoice, and the invoice arriving in the customer's chat as a PDF"
+                  />
+                </BrowserFrame>
+              </Reveal>
+              <Reveal className="lp-split-text">
+                <h3 className="lp-h3">Invoices, raised by you or on booking</h3>
+                <p className="lp-p">
+                  Bill a customer, send the invoice as a PDF, and confirm when it is paid.
+                </p>
+                <Ticks items={[
+                  'Pick someone who has messaged you and the invoice goes to their chat; a new customer gets it by email.',
+                  'Switch on “Invoice bookings automatically” and a priced booking raises and sends its own invoice.',
+                  'Settle it by verifying the customer’s payment, or press Mark paid.',
+                  'See what is awaiting payment and what is overdue at a glance.',
+                ]} />
+              </Reveal>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Knowing at once ────────────────────────────────────── */}
+        <section id="alerts" className="lp-section">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Knowing at once</p>
+              <h2 className="lp-h2">The moment something needs you, you hear about it.</h2>
+              <p className="lp-desc">
+                Everything appears in the bell and pops up on screen while the dashboard is open. The same
+                alerts go to the WhatsApp numbers you choose and to a Telegram bot of your own.
+              </p>
+            </Reveal>
+            <Reveal><AlertsExplainer /></Reveal>
+            <div className="lp-split">
+              <Reveal className="lp-split-text">
+                <h3 className="lp-h3">You choose what reaches your phone</h3>
+                <Ticks items={[
+                  'A payment to check, a new order, a customer who needs a person.',
+                  'An invoice paid or overdue; posts to approve, published or failed.',
+                  'Numbered dots in the menu for new leads, appointments, support and orders. Opening the page clears its dot.',
+                  'Send a test alert to see exactly how the real one is worded.',
+                ]} />
+              </Reveal>
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="Settings · Notifications" className="lp-frame-sm">
+                  <Shot name="notifications" w={740} h={500}
+                    alt="Settings, Notifications: a ticked list of what to alert about, from a payment to check through to an invoice overdue" />
+                </BrowserFrame>
+              </Reveal>
+            </div>
+          </div>
+        </section>
+
+        {/* ── The team ───────────────────────────────────────────── */}
+        <section id="team" className="lp-section lp-section-alt">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">The team</p>
+              <h2 className="lp-h2">Six agents, each with one job.</h2>
+              <p className="lp-desc">
+                Every business gets the same team. Shwari works with you, four departments answer your
+                customers, and Marketing keeps you posting.
+              </p>
+            </Reveal>
+            <Reveal>
+              <ul className="lp-team">
+                {TEAM.map(({ icon: I, name, who, does }) => (
+                  <li key={name} className="lp-agent">
+                    <span className="lp-agent-icon" aria-hidden="true"><I size={18} /></span>
+                    <h3>{name}</h3>
+                    <p className="lp-agent-who">{who}</p>
+                    <p>{does}</p>
                   </li>
                 ))}
               </ul>
             </Reveal>
-          </div>
-
-          <Reveal>
-            <div className="lp-wide-img">
-              <div className="lp-img-card"><img src="/screenshots/shwari-agent-page.png" alt="Agent Chat" /></div>
-              <p className="lp-caption">Talk to Shwari like a colleague. It learns your preferences and acts on your behalf.</p>
+            <div className="lp-split lp-split-reverse lp-split-lg">
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="AI team">
+                  <Shot name="ai-team" w={900} h={570}
+                    alt="The AI team page: Sales, Support, Bookings, Orders and Payments, and Marketing, each with a description and an On switch" />
+                </BrowserFrame>
+              </Reveal>
+              <Reveal className="lp-split-text">
+                <h3 className="lp-h3">Rules that do not bend</h3>
+                <Ticks items={[
+                  'An agent offers, quotes, books and sells only what is in your catalogue.',
+                  'It reads your records before it answers, and never says something happened unless it did.',
+                  'It records a payment claim; it never says money arrived.',
+                  'It brings in a person for a refund or dispute, an upset customer, or anyone who asks for one.',
+                ]} />
+                <p className="lp-p">
+                  Open any agent to see what it handles and the rules it follows, switch it on or off, and add your own instructions.
+                </p>
+              </Reveal>
             </div>
-          </Reveal>
-        </div>
-      </section>
+          </div>
+        </section>
 
-      {/* ── Channels ─────────────────────────────────────────────── */}
-      <section id="channels" className="lp-section lp-section-alt">
-        <div className="lp-w">
-          <Reveal>
-            <p className="lp-label">Omnichannel</p>
-            <h2 className="lp-h2">Every channel. One inbox.</h2>
-            <p className="lp-desc">
-              WhatsApp, Instagram, Telegram, and Webchat in a single stream.
-              Your AI team handles all of them simultaneously.
-            </p>
-          </Reveal>
-
-          <div className="lp-split lp-split-reverse">
-            <Reveal className="lp-split-text">
-              <div className="lp-features-list">
-                {[
-                  { icon: Globe, t: 'Multi-channel messaging', d: 'Reach customers wherever they are.' },
-                  { icon: Zap, t: 'One-click WhatsApp setup', d: 'Embedded Signup — no API keys to paste.' },
-                  { icon: Shield, t: 'Official Meta integration', d: 'Built on the official Business API.' },
-                  { icon: Users, t: 'Human handoff', d: 'AI handles volume. You handle high-value moments.' },
-                ].map(({ icon: I, t, d }, i) => (
-                  <div key={i} className="lp-feat-item">
-                    <div className="lp-feat-icon"><I size={18} /></div>
-                    <div><strong>{t}</strong><span>{d}</span></div>
-                  </div>
-                ))}
+        {/* ── Shwari ─────────────────────────────────────────────── */}
+        <section id="shwari" className="lp-section">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Shwari, the manager</p>
+              <h2 className="lp-h2">Run the business by saying what you want.</h2>
+              <p className="lp-desc">
+                Shwari is the agent you talk to. Tell it about your business in plain language and it sets
+                things up, keeps them correct and reports back.
+              </p>
+            </Reveal>
+            <Reveal>
+              <div className="lp-wide">
+                <BrowserFrame label="Shwari">
+                  <Shot name="shwari" w={1030} h={196}
+                    alt="A conversation with Shwari: the owner asks for a full technology services catalogue and Shwari replies that it has rebuilt the business as a technology services company" />
+                </BrowserFrame>
+                <p className="lp-caption">A real exchange from the dashboard: one request rebuilt this business&rsquo;s profile, services and products.</p>
               </div>
             </Reveal>
-            <Reveal className="lp-split-media">
-              <div className="lp-img-card"><img src="/screenshots/inbox-page.png" alt="Inbox" /></div>
-              <div className="lp-img-card" style={{ marginTop: 16 }}><img src="/screenshots/Integrations-page.png" alt="Integrations" /></div>
+            <Reveal>
+              <div className="lp-cols-2">
+                <Ticks items={[
+                  'Sets up and keeps the business details, services, products, hours and policies correct.',
+                  'Answers questions about performance and explains what the numbers mean.',
+                  'Flags what needs attention: payments to check, customers gone quiet, unanswered questions.',
+                ]} />
+                <Ticks items={[
+                  'Books, reschedules, chases and updates records on your behalf.',
+                  'Passes work to the right department and reports back what was done.',
+                  'Also reachable on Telegram, for the owner and managers.',
+                ]} />
+              </div>
             </Reveal>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* ── Commerce ─────────────────────────────────────────────── */}
-      <section id="commerce" className="lp-section">
-        <div className="lp-w">
-          <Reveal>
-            <p className="lp-label">Commerce</p>
-            <h2 className="lp-h2">Products. Services. Payments.</h2>
-            <p className="lp-desc">
-              Turn conversations into revenue. Agents showcase products,
-              book services, and collect payments automatically.
-            </p>
-          </Reveal>
-
-          <div className="lp-cards-3">
-            {[
-              { img: '/screenshots/products-page.png', icon: ShoppingBag, t: 'Product Catalog', d: 'Manage inventory with images, pricing, and variants.' },
-              { img: '/screenshots/services-page.png', icon: CreditCard, t: 'Service Bookings', d: 'Define packages and availability. AI handles scheduling.' },
-              { img: '/screenshots/payments-page.png', icon: CreditCard, t: 'Payment Tracking', d: 'Generate links, track invoices, reconcile revenue.' },
-            ].map(({ img, icon: I, t, d }, i) => (
-              <Reveal key={i}>
-                <div className="lp-card">
-                  <div className="lp-card-img"><img src={img} alt={t} /></div>
-                  <div className="lp-card-body">
-                    <h3>{t}</h3>
-                    <p>{d}</p>
-                  </div>
-                </div>
+        {/* ── Marketing ──────────────────────────────────────────── */}
+        <section id="marketing" className="lp-section lp-section-alt">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Marketing</p>
+              <h2 className="lp-h2">Your own photos, a week approved at a time.</h2>
+              <p className="lp-desc">
+                Upload your photos and videos, say what each is about, and the Marketing agent lays out the
+                next seven days for Instagram and your Facebook Page. Nothing is generated, and nothing
+                unapproved is published.
+              </p>
+            </Reveal>
+            <Reveal><MarketingExplainer /></Reveal>
+            <div className="lp-split">
+              <Reveal className="lp-split-text">
+                <h3 className="lp-h3">You set the pace</h3>
+                <Ticks items={[
+                  'Choose the days and times posts go out.',
+                  'Approve the week together, approve each post, or let already-approved items go out on autopilot.',
+                  'Pause posting to stop everything at once.',
+                  'Marketing never talks to a customer; it works only on your posts.',
+                ]} />
               </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── CTA ──────────────────────────────────────────────────── */}
-      <section className="lp-cta">
-        <div className="lp-w">
-          <Reveal>
-            <div className="lp-cta-box">
-              <h2>Ready to put your business on autopilot?</h2>
-              <p>Set up takes five minutes. Your AI team starts working immediately.</p>
-              <button onClick={go} className="lp-primary-btn lp-lg">Create Your Free Account</button>
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="Marketing · Schedule" className="lp-frame-sm">
+                  <Shot name="marketing-schedule" w={620} h={520}
+                    alt="Marketing, Schedule: posting is on, posts are approved a week at a time, and posts go out on Monday, Wednesday and Friday at 6 PM" />
+                </BrowserFrame>
+              </Reveal>
             </div>
-          </Reveal>
-        </div>
-      </section>
+          </div>
+        </section>
+
+        {/* ── Roles ──────────────────────────────────────────────── */}
+        <section id="roles" className="lp-section">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">Your staff</p>
+              <h2 className="lp-h2">Give each person the access their job needs.</h2>
+              <p className="lp-desc">
+                Invite people by email, with a WhatsApp message too if you add their number. Whoever verifies
+                a payment or answers a customer is recorded by name.
+              </p>
+            </Reveal>
+            <div className="lp-split">
+              <Reveal className="lp-split-text">
+                <dl className="lp-roles">
+                  {ROLES.map(([r, d]) => (
+                    <div key={r}><dt>{r}</dt><dd>{d}</dd></div>
+                  ))}
+                </dl>
+                <p className="lp-small">Invitations expire, removing a person ends their access at once, and an activity log shows every change.</p>
+              </Reveal>
+              <Reveal className="lp-split-media">
+                <BrowserFrame label="Settings · Team" className="lp-frame-sm">
+                  <Shot name="team" w={740} h={480}
+                    alt="Settings, Team: a pending invitation, the form to invite someone by email and WhatsApp number with a role, and what each role can do" />
+                </BrowserFrame>
+              </Reveal>
+            </div>
+          </div>
+        </section>
+
+        {/* ── On a phone ─────────────────────────────────────────── */}
+        <section id="phone" className="lp-section lp-section-alt">
+          <div className="lp-w">
+            <Reveal>
+              <p className="lp-label">On a phone</p>
+              <h2 className="lp-h2">The whole dashboard, in your pocket.</h2>
+              <p className="lp-desc">
+                Open it in your phone&rsquo;s browser. Read a conversation, check a payment or raise an invoice from wherever you are.
+              </p>
+            </Reveal>
+            <Reveal>
+              <div className="lp-phones">
+                <PhoneFrame>
+                  <DemoVideo
+                    name="phone" w={390} h={844}
+                    label="The dashboard on a phone: Home, Inbox, a conversation, Invoices and Payments"
+                  />
+                </PhoneFrame>
+                <PhoneFrame className="lp-phone-extra">
+                  <Shot name="phone-chat" w={540} h={1170}
+                    alt="A conversation on a phone: the agent books a service, tells the customer someone will confirm their payment claim, and later sends an invoice as a PDF" />
+                </PhoneFrame>
+                <PhoneFrame className="lp-phone-extra">
+                  <Shot name="phone-invoices" w={540} h={1170}
+                    alt="Invoices on a phone: a New invoice button, totals awaiting payment and overdue, and an invoice with a Mark paid button" />
+                </PhoneFrame>
+              </div>
+            </Reveal>
+          </div>
+        </section>
+
+        {/* ── CTA ────────────────────────────────────────────────── */}
+        <section className="lp-cta">
+          <div className="lp-w">
+            <Reveal>
+              <div className="lp-cta-box">
+                <h2>Start with your own catalogue.</h2>
+                <p>
+                  Create an account, tell Shwari about your business and connect a channel.
+                  New businesses are reviewed before their agents start answering customers.
+                </p>
+                <button type="button" onClick={go} className="lp-primary-btn lp-lg">Start Free <ArrowRight size={16} aria-hidden="true" /></button>
+              </div>
+            </Reveal>
+          </div>
+        </section>
+      </main>
 
       {/* ── Footer ───────────────────────────────────────────────── */}
       <footer className="lp-footer">
         <div className="lp-w lp-footer-row">
-          <div className="lp-brand"><Bot size={20} /><span>Shwari</span></div>
+          <div className="lp-brand"><Bot size={20} aria-hidden="true" /><span>Shwari</span></div>
+          <nav className="lp-footer-links" aria-label="Legal">
+            <a href="/privacy">Privacy</a>
+            <a href="/terms">Terms</a>
+            <a href="/data-deletion">Delete your data</a>
+          </nav>
           <p>&copy; {new Date().getFullYear()} Shwari. All rights reserved.</p>
         </div>
       </footer>
     </div>
   );
 }
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Scoped styles — clean, no glows, no gradients, no sparkles.
-   ═══════════════════════════════════════════════════════════════════════ */
-const css = `
-.lp {
-  --c-bg: #050505;
-  --c-s1: #0c0c0c;
-  --c-s2: #131313;
-  --c-border: rgba(255,255,255,0.07);
-  --c-t1: #ededed;
-  --c-t2: #888;
-  --c-t3: #555;
-  --c-accent: #7c5cff;
-  --c-green: #3dd68c;
-  --radius: 12px;
-  --max-w: 1120px;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  background: var(--c-bg);
-  color: var(--c-t1);
-  line-height: 1.6;
-}
-.lp *, .lp *::before, .lp *::after { box-sizing: border-box; margin: 0; padding: 0; }
-.lp img { max-width: 100%; display: block; }
-.lp a { color: inherit; text-decoration: none; }
-.lp ul { list-style: none; }
-
-.lp-w { max-width: var(--max-w); margin: 0 auto; padding: 0 20px; }
-
-/* reveal */
-.lp-reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
-.lp-reveal.lp-visible { opacity: 1; transform: none; }
-
-/* ── Nav ──────────────────────────────────────────────────────────── */
-.lp-nav {
-  position: sticky; top: 0; z-index: 100;
-  background: rgba(5,5,5,0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--c-border);
-}
-.lp-nav-row { display: flex; align-items: center; height: 56px; }
-.lp-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; }
-.lp-brand svg { color: var(--c-accent); }
-.lp-nav-links { display: flex; gap: 28px; margin-left: 40px; }
-.lp-nav-links a { font-size: 13px; color: var(--c-t2); font-weight: 500; transition: color .15s; }
-.lp-nav-links a:hover { color: var(--c-t1); }
-.lp-nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.lp-menu-btn { display: none; background: none; border: none; color: var(--c-t1); cursor: pointer; margin-left: auto; }
-.lp-dropdown { display: none; flex-direction: column; padding: 12px 20px 20px; gap: 4px; }
-.lp-dropdown a { padding: 10px 0; font-size: 14px; color: var(--c-t2); font-weight: 500; }
-.lp-dropdown hr { border: none; border-top: 1px solid var(--c-border); margin: 8px 0; }
-@media (max-width: 768px) {
-  .lp-nav-links, .lp-nav-right { display: none; }
-  .lp-menu-btn { display: block; }
-  .lp-dropdown { display: flex; }
-}
-
-/* buttons */
-.lp-primary-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--c-accent); color: #fff; border: none; border-radius: 8px;
-  font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer;
-  transition: opacity .15s;
-}
-.lp-primary-btn:hover { opacity: 0.88; }
-.lp-sm { padding: 7px 14px; font-size: 13px; }
-.lp-lg { padding: 14px 28px; font-size: 15px; border-radius: 10px; }
-.lp-outline-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: transparent; color: var(--c-t1); border: 1px solid var(--c-border);
-  border-radius: 8px; font-size: 14px; font-weight: 600; padding: 10px 20px;
-  cursor: pointer; transition: border-color .15s;
-}
-.lp-outline-btn:hover { border-color: var(--c-t3); }
-.lp-link-btn { background: none; border: none; color: var(--c-t2); font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 10px; }
-.lp-link-btn:hover { color: var(--c-t1); }
-
-/* ── Hero ─────────────────────────────────────────────────────────── */
-.lp-hero { padding: 72px 0 0; text-align: center; }
-.lp-kicker {
-  font-size: 13px; font-weight: 600; color: var(--c-accent);
-  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px;
-}
-.lp-h1 {
-  font-size: clamp(32px, 5.5vw, 64px); font-weight: 800;
-  letter-spacing: -0.03em; line-height: 1.1; color: #fff; margin-bottom: 20px;
-}
-.lp-sub {
-  max-width: 580px; margin: 0 auto 36px; font-size: 16px;
-  color: var(--c-t2); line-height: 1.7;
-}
-.lp-hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
-.lp-metrics {
-  display: flex; justify-content: center; gap: 48px; margin-bottom: 56px; flex-wrap: wrap;
-}
-.lp-metrics > div { text-align: center; }
-.lp-metrics strong { display: block; font-size: 24px; font-weight: 800; color: #fff; }
-.lp-metrics span { font-size: 12px; color: var(--c-t3); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
-.lp-hero-img {
-  max-width: 960px; margin: 0 auto;
-  border-radius: var(--radius); overflow: hidden;
-  border: 1px solid var(--c-border);
-}
-.lp-hero-img img { width: 100%; }
-
-/* ── Partners ─────────────────────────────────────────────────────── */
-.lp-partners { padding: 48px 0; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }
-.lp-partners-label {
-  text-align: center; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.1em; color: var(--c-t3); margin-bottom: 16px;
-}
-.lp-partners-row { display: flex; justify-content: center; gap: 36px; flex-wrap: wrap; }
-.lp-partners-row span { font-size: 13px; font-weight: 600; color: var(--c-t3); }
-
-/* ── Sections ─────────────────────────────────────────────────────── */
-.lp-section { padding: 96px 0; }
-.lp-section-alt { background: var(--c-s1); }
-.lp-label {
-  font-size: 12px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--c-accent); margin-bottom: 12px; text-align: center;
-}
-.lp-h2 {
-  font-size: clamp(24px, 3.5vw, 40px); font-weight: 800;
-  letter-spacing: -0.025em; line-height: 1.15; color: #fff;
-  text-align: center; margin-bottom: 12px;
-}
-.lp-desc { font-size: 15px; color: var(--c-t2); text-align: center; max-width: 520px; margin: 0 auto 56px; line-height: 1.7; }
-
-/* split layout */
-.lp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; margin-bottom: 56px; }
-.lp-split-reverse .lp-split-media { order: 2; }
-.lp-split-reverse .lp-split-text { order: 1; }
-@media (max-width: 768px) {
-  .lp-split { grid-template-columns: 1fr; gap: 32px; }
-  .lp-split-reverse .lp-split-media, .lp-split-reverse .lp-split-text { order: unset; }
-}
-
-/* image cards */
-.lp-img-card {
-  border-radius: var(--radius); overflow: hidden;
-  border: 1px solid var(--c-border); background: var(--c-s2);
-}
-.lp-img-card img { width: 100%; }
-
-.lp-wide-img { text-align: center; }
-.lp-wide-img .lp-img-card { max-width: 880px; margin: 0 auto; }
-.lp-caption { margin-top: 16px; font-size: 14px; color: var(--c-t3); }
-
-/* check list */
-.lp-checks { display: flex; flex-direction: column; gap: 16px; }
-.lp-checks li { display: flex; gap: 12px; align-items: flex-start; }
-.lp-check {
-  flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px;
-  background: rgba(61,214,140,0.1); color: var(--c-green);
-  display: flex; align-items: center; justify-content: center; margin-top: 2px;
-}
-.lp-checks strong { display: block; font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 1px; }
-.lp-checks span { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
-
-/* features list */
-.lp-features-list { display: flex; flex-direction: column; gap: 24px; }
-.lp-feat-item { display: flex; gap: 14px; align-items: flex-start; }
-.lp-feat-icon {
-  flex-shrink: 0; width: 36px; height: 36px; border-radius: 9px;
-  background: var(--c-s2); border: 1px solid var(--c-border);
-  color: var(--c-t2); display: flex; align-items: center; justify-content: center;
-}
-.lp-feat-item strong { display: block; font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 2px; }
-.lp-feat-item span { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
-
-/* commerce cards */
-.lp-cards-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-@media (max-width: 768px) { .lp-cards-3 { grid-template-columns: 1fr; } }
-.lp-card {
-  border-radius: var(--radius); border: 1px solid var(--c-border);
-  background: var(--c-s1); overflow: hidden;
-  transition: border-color .2s;
-}
-.lp-card:hover { border-color: rgba(255,255,255,0.12); }
-.lp-card-img { padding: 12px 12px 0; }
-.lp-card-img img { border-radius: 8px; border: 1px solid var(--c-border); }
-.lp-card-body { padding: 16px 20px 24px; }
-.lp-card h3 { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; }
-.lp-card p { font-size: 13px; color: var(--c-t2); line-height: 1.5; }
-
-/* ── CTA ──────────────────────────────────────────────────────────── */
-.lp-cta { padding: 96px 0; }
-.lp-cta-box {
-  text-align: center; padding: 64px 32px;
-  border-radius: 16px; border: 1px solid var(--c-border); background: var(--c-s1);
-}
-.lp-cta-box h2 { font-size: clamp(22px, 3vw, 32px); font-weight: 800; color: #fff; margin-bottom: 12px; }
-.lp-cta-box p { font-size: 15px; color: var(--c-t2); margin-bottom: 28px; }
-
-/* ── Footer ───────────────────────────────────────────────────────── */
-.lp-footer { padding: 32px 0; border-top: 1px solid var(--c-border); }
-.lp-footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
-.lp-footer p { font-size: 12px; color: var(--c-t3); }
-
-/* ── Mobile ───────────────────────────────────────────────────────── */
-@media (max-width: 640px) {
-  .lp-hero { padding-top: 48px; }
-  .lp-hero-actions { flex-direction: column; align-items: stretch; }
-  .lp-hero-actions .lp-primary-btn, .lp-hero-actions .lp-outline-btn { justify-content: center; }
-  .lp-metrics { gap: 28px; }
-  .lp-metrics strong { font-size: 20px; }
-  .lp-section { padding: 64px 0; }
-  .lp-cta { padding: 48px 0; }
-  .lp-cta-box { padding: 40px 20px; border-radius: 12px; }
-  .lp-footer-row { flex-direction: column; text-align: center; }
-}
-`;
-

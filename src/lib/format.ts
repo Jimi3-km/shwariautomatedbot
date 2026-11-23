@@ -59,3 +59,29 @@ export function avatarColor(seed: string | null | undefined): string {
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
+
+/**
+ * What to call a customer on screen.
+ *
+ * Their name when we have one. Otherwise something a person can read: a phone
+ * number for WhatsApp, and for platforms that only give a long internal id
+ * (Instagram, Messenger, Telegram, web chat) the platform and the id's last
+ * four characters, never the raw id as if it were a name.
+ */
+export function customerLabel(c: { customer_name?: string | null; customer_id?: string | null; channel_type?: string | null }): string {
+  const name = (c.customer_name ?? '').trim();
+  const id = (c.customer_id ?? '').trim();
+  const looksLikeId = (v: string) => /^[0-9a-f_-]{9,}$/i.test(v) && !/[g-z]/i.test(v.replace(/[_-]/g, ''));
+  if (name && !looksLikeId(name)) return name;
+  const raw = name || id;
+  if (!raw) return 'Customer';
+  const tail = raw.slice(-4);
+  switch (c.channel_type) {
+    case 'whatsapp': return /^\d{8,15}$/.test(raw) ? `+${raw}` : raw;
+    case 'instagram': return `Instagram customer ··${tail}`;
+    case 'facebook': return `Messenger customer ··${tail}`;
+    case 'telegram': return `Telegram customer ··${tail}`;
+    case 'webchat': return `Website visitor ··${tail}`;
+    default: return looksLikeId(raw) ? `Customer ··${tail}` : raw;
+  }
+}

@@ -21,6 +21,21 @@ export const INSTAGRAM_AUTHORIZE_URL = 'https://www.instagram.com';
 export const INSTAGRAM_OAUTH_URL = 'https://api.instagram.com';
 export const INSTAGRAM_GRAPH_URL = 'https://graph.instagram.com';
 
+import { publicApiUrl } from './publicUrl.js';
+
+/**
+ * A callback address, from the environment when given and otherwise worked out
+ * from this deployment's own public address. Leaving the variable unset used
+ * to send Meta an empty or wrong redirect, which Meta answers with an error
+ * page of its own rather than anything we can explain.
+ */
+function callbackUrl(envName: string, path: string): string {
+  const explicit = (process.env[envName] ?? '').trim();
+  if (explicit) return explicit;
+  const origin = publicApiUrl();
+  return origin ? `${origin}${path}` : '';
+}
+
 export const metaConfig = {
   appId: (process.env.META_APP_ID ?? '').trim(),
   appSecret: (process.env.META_APP_SECRET ?? '').trim(),
@@ -31,9 +46,9 @@ export const metaConfig = {
     clientId: (process.env.INSTAGRAM_CLIENT_ID ?? '').trim(),
     clientSecret: (process.env.INSTAGRAM_CLIENT_SECRET ?? '').trim(),
     /** Callback for Instagram sign-in (creates an account). */
-    redirectUri: (process.env.INSTAGRAM_REDIRECT_URI ?? '').trim(),
+    redirectUri: callbackUrl('INSTAGRAM_REDIRECT_URI', '/api/auth/instagram/callback'),
     /** Callback for attaching Instagram to an existing workspace. */
-    connectRedirectUri: (process.env.INSTAGRAM_CONNECT_REDIRECT_URI ?? '').trim(),
+    connectRedirectUri: callbackUrl('INSTAGRAM_CONNECT_REDIRECT_URI', '/api/channels/oauth/instagram/callback'),
   },
 
   whatsapp: {
@@ -43,7 +58,35 @@ export const metaConfig = {
      * WhatsApp Business account rather than asking them for tokens.
      */
     configId: (process.env.META_WHATSAPP_CONFIG_ID ?? '').trim(),
-    redirectUri: (process.env.META_WHATSAPP_REDIRECT_URI ?? '').trim(),
+    redirectUri: callbackUrl('META_WHATSAPP_REDIRECT_URI', '/api/channels/oauth/whatsapp/callback'),
+    /**
+     * Which signup flow to open. The default onboards a business that already
+     * uses the WhatsApp Business app; set META_WHATSAPP_FEATURE_TYPE=standard
+     * for the plain Cloud API signup, which asks less of the Meta app.
+     */
+    featureType: (process.env.META_WHATSAPP_FEATURE_TYPE ?? '').trim(),
+    /**
+     * Which entry point starts the signup.
+     *
+     *   dialog  (default) Facebook's sign-in dialog with the Embedded Signup
+     *           configuration. It returns to our callback with a code, which
+     *           is what lets the app finish the connection.
+     *   hosted  Meta's own hosted page. It completes on Meta's side and does
+     *           not hand a code back, so the app never learns the number was
+     *           added: the owner saw "connected" on Meta's page and nothing
+     *           in the app.
+     */
+    flow: ((process.env.META_WHATSAPP_FLOW ?? '').trim().toLowerCase() === 'hosted' ? 'hosted' : 'dialog') as 'dialog' | 'hosted',
+  },
+
+  facebook: {
+    /**
+     * A Facebook Login for Business configuration id. The configuration, not
+     * a scope list, decides which permissions the owner is asked for: the six
+     * Page permissions listed in docs/FACEBOOK.md.
+     */
+    configId: (process.env.META_FACEBOOK_CONFIG_ID ?? '').trim(),
+    redirectUri: callbackUrl('META_FACEBOOK_REDIRECT_URI', '/api/channels/oauth/facebook/callback'),
   },
 
   /** 32-byte key, hex or base64, used for AES-256-GCM token encryption. */
@@ -82,6 +125,13 @@ export const instagramConnectConfigured = (): ConfigGap =>
   gap([
     ['META_APP_ID', metaConfig.appId],
     ['META_APP_SECRET', metaConfig.appSecret],
+    // The authorization itself runs on the Instagram app's own id and secret,
+    // and the token it returns cannot be stored without the encryption key.
+    // Without these the Connect button led to an Instagram error page.
+    ['INSTAGRAM_CLIENT_ID', metaConfig.instagram.clientId],
+    ['INSTAGRAM_CLIENT_SECRET', metaConfig.instagram.clientSecret],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
+    ['INSTAGRAM_CONNECT_REDIRECT_URI', metaConfig.instagram.connectRedirectUri],
   ]);
 
 /** WhatsApp Embedded Signup: the user never pastes a token. */
@@ -89,6 +139,24 @@ export const whatsappEmbeddedSignupConfigured = (): ConfigGap =>
   gap([
     ['META_APP_ID', metaConfig.appId],
     ['META_APP_SECRET', metaConfig.appSecret],
+    // Without a configuration id Meta's signup page opens and then refuses.
+    ['META_WHATSAPP_CONFIG_ID', metaConfig.whatsapp.configId],
+    ['META_WHATSAPP_REDIRECT_URI', metaConfig.whatsapp.redirectUri],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
+  ]);
+
+/**
+ * Connecting a Facebook Page. The app secret is needed twice over: to finish
+ * the sign-in, and to verify the Messenger webhooks that follow.
+ */
+export const facebookConnectConfigured = (): ConfigGap =>
+  gap([
+    ['META_APP_ID', metaConfig.appId],
+    ['META_APP_SECRET', metaConfig.appSecret],
+    // Without a configuration id Facebook has no permissions to ask for.
+    ['META_FACEBOOK_CONFIG_ID', metaConfig.facebook.configId],
+    ['META_FACEBOOK_REDIRECT_URI', metaConfig.facebook.redirectUri],
+    ['META_TOKEN_ENCRYPTION_KEY', metaConfig.tokenEncryptionKey],
   ]);
 
 export const webhookConfigured = (): ConfigGap =>

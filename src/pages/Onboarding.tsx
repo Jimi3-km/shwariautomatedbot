@@ -1,3 +1,5 @@
+import { detectInAppBrowser, type InAppBrowser } from '../lib/inAppBrowser';
+import { OpenInBrowserDialog } from '../components/ConnectHelp';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2, MessageSquare, Sparkles, Rocket, Check, ArrowRight, ArrowLeft,
@@ -14,6 +16,7 @@ import {
 } from '../components/ui';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
+import { FacebookPagePicker } from '../components/FacebookPagePicker';
 import type {
   AgentTone, ChannelProviderInfo, ConnectedChannel, CredentialField,
   EmbedSnippet, LaunchResult, OnboardingStepId, ProviderId,
@@ -56,6 +59,7 @@ const TONES: Array<{ value: AgentTone; label: string; blurb: string }> = [
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   whatsapp: "You'll approve access with Meta, and we'll set up your WhatsApp number for you.",
   instagram: "You'll approve access with Instagram, and we'll start handling your DMs.",
+  facebook: "You'll sign in with Facebook and choose your Page. We'll answer its messages and publish the posts you approve.",
   webchat: 'Add a chat bubble to your own website. Nothing to sign up for — ready in one click.',
   telegram: 'Create a bot in Telegram and paste the code it gives you.',
 };
@@ -74,9 +78,13 @@ export function Onboarding({ onFinished, onSignOut }: {
   const [timezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
 
   // Step 3
-  const [sells, setSells] = useState('');
+  // The server does not hand these two answers back, so a draft is kept in
+  // this browser: leaving to authorize a channel, or reloading, must not
+  // return the user to a blank required field.
+  const [sells, setSells] = useState(() => readDraft().sells ?? '');
   const [description, setDescription] = useState('');
-  const [tone, setTone] = useState<AgentTone>('friendly');
+  const [tone, setTone] = useState<AgentTone>(() => readDraft().tone ?? 'friendly');
+  useEffect(() => { writeDraft({ sells, tone }); }, [sells, tone]);
 
   /**
    * Resume from the server. Also runs after the OAuth callback bounces back,
@@ -85,11 +93,16 @@ export function Onboarding({ onFinished, onSignOut }: {
   const refreshState = useCallback(async () => {
     try {
       const state = await getOnboardingState();
-      if (state.complete) { onFinished(); return; }
+      if (state.complete) { clearDraft(); onFinished(); return; }
       if (state.business) {
         setBusinessName((v) => v || state.business!.business_name);
         setCategory((v) => v || state.business!.business_category || '');
         setDescription((v) => v || state.business!.business_description || '');
+        // Already answered on an earlier visit but no local draft (another
+        // device): fall back to the saved description so the step is not blank.
+        if (state.agent_configured) {
+          setSells((v) => v || state.business!.business_description || state.business!.business_category || '');
+        }
       }
       setStep(state.step === 'done' ? 'launch' : state.step);
       setBootError(null);
@@ -115,6 +128,12 @@ export function Onboarding({ onFinished, onSignOut }: {
       {bootError && (
         <div style={{ marginBottom: 14 }}>
           <InlineError message={bootError} onDismiss={() => setBootError(null)} />
+          <Button
+            size="sm" variant="outline" style={{ marginTop: 8 }}
+            onClick={() => { setBootError(null); void refreshState(); }}
+          >
+            Try again
+          </Button>
         </div>
       )}
 
@@ -290,6 +309,8 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
   >(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
   const [confirming, setConfirming] = useState<ProviderId | null>(null);
+  // Signed in with Facebook, with more than one Page to choose from.
+  const [pickingPage, setPickingPage] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -316,16 +337,28 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     window.history.replaceState({}, '', window.location.pathname);
 
     if (status === 'connected') setNotice('Connected.');
+    else if (status === 'pick_page') setPickingPage(true);
     else if (status === 'cancelled') setError('That connection was cancelled. You can try again.');
     else if (status === 'expired') setError('That took too long, so we stopped for safety. Please try again.');
+    else if (status === 'no_pages') setError('No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
+    else if (status === 'page_in_use') setError('That Facebook Page is already connected to another business.');
+    else if (status === 'database_update_needed') setError('The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
+    else if (status === 'account_in_use') setError('That account is already connected to another business on this platform. Disconnect it there first, then connect it here.');
+    else if (status === 'instagram_access_refused') setError("Instagram signed you in but did not let this app use the account. Check that you signed in to the Instagram account you meant to connect, and that it is a Business or Creator account. We've recorded what Instagram answered and have been notified.");
+    else if (status === 'instagram_exchange_failed') setError('Instagram did not complete the sign-in. Try again; if it keeps happening, check that the account is a Business or Creator account.');
     else setError("We couldn't finish connecting. Please try again.");
   }, []);
 
+  const [wrongBrowser, setWrongBrowser] = useState<InAppBrowser | null>(null);
   const start = useMutation(async (provider: ProviderId, label: string) => {
+    // Meta's sign-in does not work inside another app's built-in browser.
+    // Telegram and web chat need no sign-in elsewhere, so they are unaffected.
+    const inApp = provider === 'telegram' || provider === 'webchat' ? null : detectInAppBrowser();
+    if (inApp) { setWrongBrowser(inApp); return; }
     const result = await startChannelConnect(provider);
 
     if (result.mode === 'oauth') {
-      window.location.href = result.authorize_url;
+      window.location.href = `/api/go?to=${encodeURIComponent(result.authorize_url)}`;
       return;
     }
     if (result.mode === 'instant') {
@@ -348,6 +381,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
 
   return (
     <Card>
+      <OpenInBrowserDialog browser={wrongBrowser} onClose={() => setWrongBrowser(null)} />
       <StepHeader
         title="Connect where your customers message you"
         subtitle="Connect at least one. You can add the others any time."
@@ -425,6 +459,16 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           if (!confirming) return;
           const label = providers.find((p) => p.id === confirming)?.label ?? confirming;
           void start.run(confirming, label);
+        }}
+      />
+
+      <FacebookPagePicker
+        open={pickingPage}
+        onClose={() => setPickingPage(false)}
+        onConnected={async (name) => {
+          setPickingPage(false);
+          setNotice(name ? `Connected ${name}.` : 'Connected.');
+          await load();
         }}
       />
 
@@ -543,7 +587,7 @@ function AgentStep({
         </Field>
 
         <Field label="How should it sound?">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 8 }}>
             {TONES.map((t) => {
               const active = tone === t.value;
               return (
@@ -591,12 +635,21 @@ function LaunchStep({ businessName, onBack, onFinished }: {
   const [result, setResult] = useState<LaunchResult | null>(null);
   const [testTarget, setTestTarget] = useState('');
   const [testSent, setTestSent] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
 
   const check = useCallback(async () => {
     setLoading(true);
+    setCheckError(null);
     try {
       const r = await getOnboardingChannels(true);
       setConnected(r.connected.filter((c) => c.status === 'active'));
+    } catch (err) {
+      // Without this a failed check looked identical to "nothing connected".
+      setCheckError(
+        err instanceof Error && err.message.length < 300
+          ? err.message
+          : "We couldn't check your connections. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -611,8 +664,12 @@ function LaunchStep({ businessName, onBack, onFinished }: {
     setTimeout(onFinished, 1400);
   });
 
+  // A test message needs somewhere to send it. Web chat has no address to
+  // message — the visitor starts that conversation — so it is never the target.
+  const testChannel = connected.find((c) => c.provider !== 'webchat') ?? null;
+
   const test = useMutation(async () => {
-    const channel = connected[0];
+    const channel = testChannel;
     if (!channel) return;
     await sendOnboardingTestMessage(channel.channel_id, testTarget.trim());
     setTestSent(true);
@@ -689,17 +746,21 @@ function LaunchStep({ businessName, onBack, onFinished }: {
             </div>
           ))}
 
-          {!loading && connected.length === 0 && (
+          {!loading && checkError && (
+            <InlineError message={checkError} onDismiss={() => setCheckError(null)} />
+          )}
+
+          {!loading && !checkError && connected.length === 0 && (
             <p style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
               No channels are connected yet. Go back a step to add one.
             </p>
           )}
         </div>
 
-        {connected.length > 0 && (
+        {testChannel && (
           <Field
             label="Send yourself a test message"
-            hint={`Optional — we'll message this ${connected[0].provider} contact so you can see it working.`}
+            hint={`Optional — we'll message this ${testChannel.provider} contact so you can see it working.`}
           >
             <div style={{ display: 'flex', gap: 8 }}>
               <Input
@@ -753,4 +814,31 @@ function SummaryRow({ label, value, tone }: { label: string; value: string; tone
         : <span style={{ fontSize: 13, fontWeight: 550 }}>{value}</span>}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Agent-step draft, kept in this browser only
+// ---------------------------------------------------------------------------
+
+const DRAFT_KEY = 'shwari-onboarding-agent-draft';
+const DRAFT_TONES: AgentTone[] = ['friendly', 'professional', 'concise', 'enthusiastic'];
+
+function readDraft(): { sells?: string; tone?: AgentTone } {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? '{}') as { sells?: unknown; tone?: unknown };
+    return {
+      sells: typeof raw.sells === 'string' ? raw.sells : undefined,
+      tone: DRAFT_TONES.includes(raw.tone as AgentTone) ? (raw.tone as AgentTone) : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeDraft(draft: { sells: string; tone: AgentTone }) {
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ }
+}
+
+function clearDraft() {
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* storage unavailable */ }
 }

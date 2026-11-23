@@ -87,7 +87,9 @@ export function useMutation<Args extends unknown[], R>(
       return await fn(...args);
     } catch (err) {
       setError(
-        err instanceof ApiError || err instanceof NetworkError
+        // Errors thrown on purpose (ApiError, NetworkError, or a plain Error
+        // with a short human message) are shown; anything else stays generic.
+        err instanceof Error && err.message && err.message.length < 300
           ? err.message
           : 'Something went wrong.'
       );

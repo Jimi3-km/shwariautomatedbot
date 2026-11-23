@@ -1,3 +1,4 @@
+import { publicApiUrl } from '../config/publicUrl.js';
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -7,10 +8,28 @@ import {
   issueVisitorToken, verifyVisitorToken, newVisitorId,
 } from '../channels/webchat/session.js';
 import { rateLimit } from '../channels/webchat/rateLimit.js';
-import { claimEvent, persistInbound } from '../services/inbound.js';
-import { dispatchInbound } from '../services/dispatch.js';
+import { claimEvent, markEvent, persistInbound } from '../services/inbound.js';
+import { runTurn } from '../services/pipeline.js';
+import { runInBackground } from '../services/background.js';
+import { housekeeping } from '../services/followUps.js';
 import { WIDGET_SOURCE } from '../channels/webchat/widget.js';
 import type { NormalizedInboundEvent } from '../channels/meta/types.js';
+
+/** The receipt picture on a message, if it is one of ours. */
+function ownReceiptImage(extracted: unknown): string | null {
+  const url = (extracted as { image_url?: unknown } | null)?.image_url;
+  if (typeof url !== 'string') return null;
+  return url.startsWith(`${publicApiUrl()}/api/receipts/image/`) ? url : null;
+}
+
+/** The PDF on a message, if it is an invoice or receipt this server issued. */
+function ownDocument(extracted: unknown): { url: string; name: string } | null {
+  const e = extracted as { file_url?: unknown; file_name?: unknown } | null;
+  if (typeof e?.file_url !== 'string') return null;
+  const base = publicApiUrl();
+  if (!e.file_url.startsWith(`${base}/api/receipts/pdf/`) && !e.file_url.startsWith(`${base}/api/invoices/pdf/`)) return null;
+  return { url: e.file_url, name: typeof e.file_name === 'string' ? e.file_name.slice(0, 80) : 'Document.pdf' };
+}
 
 export const webchatRouter = Router();
 
@@ -29,11 +48,33 @@ export const webchatRouter = Router();
  * from anything the caller sends.
  */
 
-/** A caller identity for rate limiting. Best effort; not a security control. */
+/**
+ * A caller identity for rate limiting. Best effort; not a security control.
+ *
+ * X-Forwarded-For is a list the *client* can prepend to, so its first entry is
+ * whatever the caller says it is. On Vercel the platform sets x-real-ip (and
+ * x-vercel-forwarded-for) itself and overwrites anything the client sent, so
+ * those are preferred. Elsewhere the last X-Forwarded-For hop — the one added
+ * by the proxy nearest to us — is the most trustworthy value available.
+ */
 function callerKey(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') || req.ip || 'unknown';
-  return ip;
+  const header = (name: string): string => {
+    const v = req.headers[name];
+    return (Array.isArray(v) ? v[0] : v ?? '').toString().trim();
+  };
+
+  const real = header('x-real-ip');
+  if (real) return real;
+
+  const vercel = header('x-vercel-forwarded-for');
+  if (vercel) return vercel.split(',')[0].trim();
+
+  const forwarded = header('x-forwarded-for');
+  if (forwarded) {
+    const hops = forwarded.split(',').map((h) => h.trim()).filter(Boolean);
+    if (hops.length) return hops[hops.length - 1];
+  }
+  return req.ip || 'unknown';
 }
 
 interface ResolvedWebchat {
@@ -170,27 +211,35 @@ webchatRouter.post(
       timestamp: new Date().toISOString(),
     };
 
-    const claimed = await claimEvent('webchat', messageId, event.tenantId, event.channelId);
+    const claimed = await claimEvent('webchat', messageId, event.tenantId, event.channelId, event);
     if (!claimed) return res.json({ accepted: true, duplicate: true });
 
     const stored = await persistInbound(event);
-    if (!stored) return res.status(500).json({ error: "We couldn't deliver that message." });
+    if (!stored) {
+      await markEvent('webchat', messageId, 'failed', { error: 'could not persist the message' });
+      return res.status(500).json({ error: "We couldn't deliver that message." });
+    }
+    await markEvent('webchat', messageId, 'persisted', { conversationId: stored.conversationId });
 
     // Answer the widget now and let the AI turn run behind it. Shwari reasons
     // and calls tools, which takes seconds rather than milliseconds, and the
     // widget is already polling for the reply — holding the POST open would
     // only make the visitor watch a spinner for the same wait.
+    // The turn is registered with the platform so a serverless function is not
+    // frozen the moment this response is flushed.
     if (stored.aiEnabled) {
       const conversationId = stored.conversationId;
-      void dispatchInbound(
-        event,
-        { id: channel.id, tenantId: channel.tenantId, channelType: 'webchat', secretToken: channel.secretToken, status: 'active' },
-        conversationId
-      ).catch((e) => {
-        console.error('[webchat] dispatch failed:', e instanceof Error ? e.message : e);
+      const resolved = {
+        id: channel.id, tenantId: channel.tenantId, channelType: 'webchat' as const,
+        secretToken: channel.secretToken, status: 'active',
+      };
+      void runInBackground('webchat', async () => {
+        await runTurn(event, resolved, conversationId, 'webchat');
+        await housekeeping();
       });
     } else {
       console.log(`[webchat] conversation ${stored.conversationId} is staff-handled; no AI reply`);
+      await markEvent('webchat', messageId, 'processed');
     }
 
     res.json({ accepted: true, duplicate: false });
@@ -244,7 +293,7 @@ webchatRouter.get(
     const since = String(req.query.since ?? '');
     let q = serviceClient
       .from('conversation_messages')
-      .select('id, sender, body, created_at')
+      .select('id, sender, body, extracted, created_at')
       .eq('tenant_id', channel.tenantId)
       .eq('conversation_id', convo.id)
       .in('sender', ['customer', 'agent', 'staff'])
@@ -266,6 +315,16 @@ webchatRouter.get(
         from: m.sender === 'customer' ? 'you' : 'agent',
         text: m.body,
         at: m.created_at,
+        // A receipt comes with its picture. Only an address this server
+        // issued is ever passed on, so the widget cannot be made to load an
+        // image from anywhere else.
+        ...(ownReceiptImage((m as { extracted?: unknown }).extracted)
+          ? { image: ownReceiptImage((m as { extracted?: unknown }).extracted) }
+          : {}),
+        // An invoice or receipt as a PDF, by the same rule.
+        ...(ownDocument((m as { extracted?: unknown }).extracted)
+          ? { file: ownDocument((m as { extracted?: unknown }).extracted) }
+          : {}),
       })),
     });
   })

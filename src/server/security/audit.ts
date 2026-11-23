@@ -3,7 +3,9 @@ import { serviceClient } from '../supabase.js';
 export interface AuditRecord {
   tenantId: string;
   actorId: string;
-  actorType: 'user' | 'customer' | 'agent' | 'webhook' | 'system';
+  actorType: 'user' | 'customer' | 'agent' | 'webhook' | 'system' | 'platform_admin';
+  /** The actor as a person would recognise them, usually an email address. */
+  actorLabel?: string | null;
   agentRole?: string | null;
   action: string;
   resourceType: string;
@@ -37,6 +39,7 @@ export async function logAuditEvent(record: AuditRecord): Promise<void> {
       tenant_id: record.tenantId,
       actor_id: record.actorId,
       actor_type: record.actorType,
+      ...(record.actorLabel ? { actor_label: record.actorLabel } : {}),
       agent_role: record.agentRole || null,
       action: record.action,
       resource_type: record.resourceType,

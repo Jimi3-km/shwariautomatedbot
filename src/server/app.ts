@@ -8,6 +8,8 @@ import { inboxRouter } from './routes/inbox.js';
 import { commerceRouter } from './routes/commerce.js';
 import { channelsRouter } from './routes/channels.js';
 import { receiptsRouter } from './routes/receipts.js';
+import { notificationsRouter } from './routes/notifications.js';
+import { goRouter } from './routes/go.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { setupRouter } from './routes/setup.js';
@@ -20,6 +22,15 @@ import { internalRouter } from './routes/internal.js';
 import { webchatRouter } from './routes/webchat.js';
 import { instagramAuthRouter } from './routes/auth/instagram.js';
 import { adminRouter } from './routes/admin.js';
+import { marketingRouter } from './routes/marketing.js';
+import { teamRouter } from './routes/team.js';
+import { platformRouter } from './routes/platform.js';
+import { alertsRouter } from './routes/alerts.js';
+import { receiptSettingsRouter } from './routes/receiptSettings.js';
+import { activityRouter } from './routes/activity.js';
+import { invoicesRouter } from './routes/invoices.js';
+import { dataDeletionRouter, metaRemovalRouter } from './routes/dataDeletion.js';
+import { recordActivity } from './security/activity.js';
 
 export function createApp() {
   const app = express();
@@ -52,12 +63,34 @@ export function createApp() {
       },
     })
   );
-  app.use(
-    cors({
-      origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
-      credentials: false,
-    })
-  );
+  /**
+   * CORS, in two tiers.
+   *
+   * Web chat is embedded on our customers' own websites, so its routes must
+   * answer any origin. They carry no dashboard session: a visitor is
+   * authenticated by a signed token scoped to one conversation.
+   *
+   * Everything else is the dashboard API. It is served from the same origin as
+   * the SPA, so it needs no CORS at all; other origins are allowed only if
+   * listed in CORS_ORIGIN. In production an unset CORS_ORIGIN means "same
+   * origin only" rather than "reflect whoever asks". Development stays
+   * permissive so a separately-served frontend works without ceremony.
+   */
+  const openCors = cors({ origin: true, credentials: false });
+  const allowed = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  const production = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  const dashboardCors = cors({
+    origin: allowed.length ? allowed : production ? false : true,
+    credentials: false,
+  });
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/webchat/')) return openCors(req, res, next);
+    return dashboardCors(req, res, next);
+  });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
@@ -70,7 +103,17 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ supabase_url: SUPABASE_URL, supabase_anon_key: SUPABASE_ANON_KEY });
+    res.json({
+      supabase_url: SUPABASE_URL,
+      supabase_anon_key: SUPABASE_ANON_KEY,
+      // Who operates the service and how to reach them, for the public
+      // privacy, terms and data-deletion pages. Not secrets.
+      legal: {
+        operator: (process.env.LEGAL_OPERATOR_NAME ?? '').trim() || null,
+        contact_email: (process.env.LEGAL_CONTACT_EMAIL ?? '').trim() || null,
+        contact_phone: (process.env.LEGAL_CONTACT_PHONE ?? '').trim() || null,
+      },
+    });
   });
 
   // Instagram OAuth is a pre-authentication browser redirect flow: there is no
@@ -86,6 +129,9 @@ export function createApp() {
    * a dashboard session, and none may be reached by a browser, so each does its
    * own check rather than borrowing requireAuth.
    */
+  // Meta's "this person removed your app" and "delete this person's data"
+  // calls. Signed by Meta; mounted here so the body arrives as raw bytes.
+  app.use('/api', metaRemovalRouter);
   app.use('/api', metaWebhookRouter);
   app.use('/api', telegramWebhookRouter);
   app.use('/api', brevoWebhookRouter);
@@ -98,22 +144,39 @@ export function createApp() {
    */
   app.use('/api', webchatRouter);
 
+  // Asking for data to be deleted, and following such a request, are open to
+  // anyone: the person asking may have no account here at all.
+  app.use('/api', dataDeletionRouter);
+
   // Applied before every router: a client that tries to steer tenancy gets a
   // 400 rather than having the field quietly ignored.
   app.use('/api', rejectClientTenantId);
 
+  // Every change a signed-in person makes is written to the activity log of
+  // the business it was made in.
+  app.use('/api', recordActivity);
+
+  app.use('/api', platformRouter);
+  app.use('/api', teamRouter);
+  app.use('/api', alertsRouter);
+  app.use('/api', receiptSettingsRouter);
+  app.use('/api', activityRouter);
+  app.use('/api', invoicesRouter);
   app.use('/api', accountRouter);
   app.use('/api', catalogRouter);
   app.use('/api', inboxRouter);
   app.use('/api', commerceRouter);
   app.use('/api', channelsRouter);
   app.use('/api', receiptsRouter);
+  app.use('/api', notificationsRouter);
+  app.use('/api', goRouter);
   app.use('/api', analyticsRouter);
   app.use('/api', onboardingRouter);
   app.use('/api', setupRouter);
   app.use('/api', shwariRouter);
   app.use('/api', operationsRouter);
   app.use('/api', adminRouter);
+  app.use('/api', marketingRouter);
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 

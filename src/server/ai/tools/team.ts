@@ -1,6 +1,6 @@
 import { serviceClient } from '../../supabase.js';
 import { ToolInputError, str, oneOf, type Tool } from './types.js';
-import { AGENT_BLUEPRINTS, DEPARTMENTS, type AgentRole } from '../roles.js';
+import { AGENT_BLUEPRINTS, DEPARTMENTS, TEAM_ROLES, type AgentRole } from '../roles.js';
 
 /**
  * Tools for shaping the AI team.
@@ -13,16 +13,16 @@ import { AGENT_BLUEPRINTS, DEPARTMENTS, type AgentRole } from '../roles.js';
  */
 
 /**
- * Departments the owner may re-word or switch off. The manager is absent on
- * purpose: it directs the others, and something that could reconfigure itself
- * would not be a manager.
+ * Agents the owner may re-word or switch off: the four customer departments
+ * and marketing. The manager is absent on purpose: it directs the others, and
+ * something that could reconfigure itself would not be a manager.
  */
-const CONFIGURABLE_ROLES: AgentRole[] = [...DEPARTMENTS];
+const CONFIGURABLE_ROLES: AgentRole[] = [...TEAM_ROLES];
 
 export const listTeam: Tool = {
   name: 'list_team',
   description:
-    'List this business\'s five agents, what each is for, and whether it is live. Call this before changing anything or before answering a question about the team.',
+    'List this business\'s agents - you, the four customer departments and marketing - what each is for, and whether it is live. Call this before changing anything or before answering a question about the team.',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   mutates: false,
 
@@ -39,7 +39,7 @@ export const listTeam: Tool = {
         ...a,
         what_it_does: AGENT_BLUEPRINTS[a.role as AgentRole]?.summary ?? '',
       })),
-      note: 'Every business has these five. You cannot add or remove a department, only rename one, adjust how it works, or switch it off.',
+      note: 'Every business has the same team. You cannot add or remove an agent, only rename one, adjust how it works, or switch it off. Sales, support, booking and orders answer customers; marketing runs the posting calendar and never talks to a customer. While marketing is off, no posts are planned or published automatically.',
     };
   },
 };
@@ -110,7 +110,7 @@ export const configureAgent: Tool = {
 export const activateAgent: Tool = {
   name: 'activate_agent',
   description:
-    'Turn an agent on or off. Only do this when the owner explicitly asks. An agent that is off does not answer customers.',
+    'Turn an agent on or off. Only do this when the owner explicitly asks. A department that is off does not answer customers. While marketing is off, no posts are planned or published automatically, including posts already approved; they stay on the calendar until it is switched back on.',
   parameters: {
     type: 'object',
     properties: {
@@ -177,7 +177,9 @@ export const setupStatus: Tool = {
     if (!tenant?.timezone) missing.push('which city or timezone the business is in');
     if (!services) missing.push('the services or products on offer');
     if (!hours) missing.push('the opening hours');
-    if (!(agents ?? []).some((a) => a.role !== 'manager' && a.status === 'active')) {
+    // A department, specifically: marketing being on does not mean anyone
+    // will answer a customer.
+    if (!(agents ?? []).some((a) => DEPARTMENTS.includes(a.role as AgentRole) && a.status === 'active')) {
       missing.push('at least one customer-facing agent, switched on');
     }
     if (!(channels ?? []).length) missing.push('a channel customers can reach you on');

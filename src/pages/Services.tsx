@@ -41,7 +41,7 @@ const MODE_TONE: Record<BookingMode, 'success' | 'info' | 'neutral'> = {
 };
 
 export function Services() {
-  const { canWrite, currency } = useSession();
+  const { isAdmin: canWrite, currency } = useSession();
   const toast = useToast();
   const [showInactive, setShowInactive] = useState(false);
   const [editing, setEditing] = useState<Service | null>(null);
@@ -118,7 +118,7 @@ export function Services() {
           {services.map((s) => (
             <Card key={s.id}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ minWidth: 0, flex: '1 1 220px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</span>
                     <Pill tone={MODE_TONE[s.booking_mode]} dot>{MODE_LABEL[s.booking_mode]}</Pill>

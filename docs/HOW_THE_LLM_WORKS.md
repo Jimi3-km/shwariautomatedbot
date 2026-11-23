@@ -1,5 +1,14 @@
 # How the LLM works here
 
+> **Current state (kept in sync with the code).** Customers are answered by the
+> native agent in `src/server/ai/` — n8n is no longer part of the system. The
+> default model is `nvidia/nemotron-3-ultra-550b-a55b` on NVIDIA's OpenAI-compatible endpoint
+> (override with `SHWARI_MODEL`, `SHWARI_FAST_MODEL`, `SHWARI_FALLBACK_MODEL`).
+> There are five agent roles, defined in `src/server/ai/roles.ts`: a manager
+> plus the sales, booking, support and orders departments. The authoritative
+> list of tools is the code in `src/server/ai/tools/`; where a name or count
+> below disagrees with it, the code is right.
+
 There is no training. Nothing is fine-tuned, and no weights are ours. What we
 control is three things, and all of them are ordinary code:
 

@@ -1,20 +1,17 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const DEAD_PROJECT_REF = 'rnxcsvpmyviqukhdlypt';
-const DEFAULT_SUPABASE_URL = 'https://dmhqqfxlmvaeeyxdlthd.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_EL8zLqi5ldXC24aiH-Rgpg_6L5tEezT';
+/**
+ * All three values come from the environment and nothing else. There are no
+ * baked-in defaults: a deployment that forgets SUPABASE_URL must fail loudly
+ * rather than silently talk to some other project.
+ */
+function env(name: string): string {
+  return (process.env[name] ?? '').trim();
+}
 
-export const SUPABASE_URL = (!process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes(DEAD_PROJECT_REF))
-  ? DEFAULT_SUPABASE_URL
-  : process.env.SUPABASE_URL.trim();
-
-export const SUPABASE_ANON_KEY = (!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY.includes(DEAD_PROJECT_REF))
-  ? DEFAULT_SUPABASE_ANON_KEY
-  : process.env.SUPABASE_ANON_KEY.trim();
-
-export const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_ROLE_KEY.includes(DEAD_PROJECT_REF))
-  ? process.env.SUPABASE_SERVICE_ROLE_KEY.trim()
-  : '';
+export const SUPABASE_URL = env('SUPABASE_URL');
+export const SUPABASE_ANON_KEY = env('SUPABASE_ANON_KEY');
+export const SUPABASE_SERVICE_ROLE_KEY = env('SUPABASE_SERVICE_ROLE_KEY');
 
 export function assertSupabaseConfigured() {
   const missing = [
@@ -71,9 +68,15 @@ export const serviceClient: SupabaseClient = new Proxy({} as SupabaseClient, {
  * database. This is the second of the two independent layers of tenant
  * isolation; the first is the explicit .eq('tenant_id', ...) in each route.
  */
-export function userClient(accessToken: string): SupabaseClient {
+export function userClient(accessToken: string, actingTenant?: string): SupabaseClient {
+  assertSupabaseConfigured();
+  const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+  // A platform admin working in a business names it here. The database only
+  // honours the header for a platform admin, and only for that one business
+  // (see migration 0027), so it cannot widen anyone else's access.
+  if (actingTenant) headers['x-acting-tenant'] = actingTenant;
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    global: { headers },
   });
 }

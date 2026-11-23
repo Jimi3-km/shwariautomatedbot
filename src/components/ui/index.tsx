@@ -2,7 +2,7 @@ import React, {
   createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, CheckCircle2, Info, Loader2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, Info, Loader2, MoreHorizontal, X } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Button
@@ -76,15 +76,13 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
 
 export function Select({ options, placeholder, className = '', ...rest }: SelectProps) {
   return (
-    <div style={{ position: 'relative' }}>
+    // The arrow is drawn by the stylesheet (select.field), so every select in
+    // the app has exactly one, whether or not it goes through this component.
+    <div style={{ position: 'relative', minWidth: 0 }}>
       <select className={`field ${className}`} {...rest}>
         {placeholder && <option value="">{placeholder}</option>}
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <span aria-hidden style={{
-        position: 'absolute', right: 11, top: '50%', transform: 'translateY(-50%)',
-        pointerEvents: 'none', color: 'var(--text-3)', fontSize: 10,
-      }}>▼</span>
     </div>
   );
 }
@@ -168,6 +166,164 @@ export function FilterChip({ active, onClick, children }: {
 }) {
   return (
     <button type="button" className="chip" aria-pressed={active} onClick={onClick}>{children}</button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure
+// ---------------------------------------------------------------------------
+
+/**
+ * The part of a disclosure that opens and closes.
+ *
+ * Exported on its own for an accordion whose header is more than a title (the
+ * AI team page puts a switch beside it). Closed content stays in the page but
+ * is hidden from the keyboard and from screen readers by the stylesheet, which
+ * also drops the animation for anyone who asked for reduced motion.
+ */
+export function DisclosurePanel({ id, open, labelledBy, children }: {
+  id: string; open: boolean; labelledBy?: string; children: React.ReactNode;
+}) {
+  return (
+    <div id={id} className="disclosure-panel" data-open={open ? 'true' : 'false'} role="group" aria-labelledby={labelledBy}>
+      <div className="disclosure-inner">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One collapsible section: a real button that owns the region beneath it.
+ *
+ * Pass `open` and `onToggle` to control it, or neither to let it keep its own
+ * state. `count` shows how much is inside before it is opened.
+ */
+export function Disclosure({ title, count, open, defaultOpen = false, onToggle, children, className = '' }: {
+  title: React.ReactNode;
+  count?: number;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onToggle?: (open: boolean) => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const id = useId();
+  const [own, setOwn] = useState(defaultOpen);
+  const isOpen = open ?? own;
+
+  const toggle = () => {
+    if (open === undefined) setOwn(!isOpen);
+    onToggle?.(!isOpen);
+  };
+
+  return (
+    <div className={`disclosure ${className}`} data-open={isOpen ? 'true' : 'false'}>
+      <button
+        type="button" id={`${id}-head`} className="disclosure-head"
+        aria-expanded={isOpen} aria-controls={`${id}-panel`} onClick={toggle}
+      >
+        <span className="disclosure-title">{title}</span>
+        {count !== undefined && <span className="disclosure-count">{count}</span>}
+        <ChevronDown size={15} className="disclosure-chev" aria-hidden />
+      </button>
+      <DisclosurePanel id={`${id}-panel`} open={isOpen} labelledBy={`${id}-head`}>
+        <div className="disclosure-body">{children}</div>
+      </DisclosurePanel>
+    </div>
+  );
+}
+
+/** An on/off switch. A button with role="switch", so Space and Enter both work. */
+export function Switch({ checked, onChange, label, disabled, busy }: {
+  checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean; busy?: boolean;
+}) {
+  return (
+    <button
+      type="button" role="switch" className="switch"
+      aria-checked={checked} aria-label={label} aria-busy={busy || undefined}
+      disabled={disabled || busy} onClick={() => onChange(!checked)}
+    >
+      <span className="switch-track" aria-hidden />
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Action menu
+// ---------------------------------------------------------------------------
+export interface MenuItem {
+  label: string;
+  icon?: React.ReactNode;
+  onSelect?: () => void;
+  /** Opens this address in a new tab instead of running onSelect. */
+  href?: string;
+  tone?: 'danger';
+  disabled?: boolean;
+}
+
+/**
+ * The less-used actions on a row, behind one button, so a table row shows its
+ * main action and stays one line tall. Closes on Escape, on a click outside,
+ * and after a choice; arrow keys move between the items.
+ */
+export function ActionMenu({ items, label = 'More actions' }: { items: MenuItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEscape(open, () => setOpen(false));
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+    };
+  }, [open]);
+
+  const onKeys = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const els = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])'));
+    if (!els.length) return;
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    els[(i + (e.key === 'ArrowDown' ? 1 : els.length - 1) + els.length) % els.length].focus();
+  };
+
+  if (!items.length) return null;
+  return (
+    <div ref={root} className="action-menu">
+      <button
+        type="button" className="btn btn-sm btn-subtle action-menu-trigger"
+        aria-haspopup="menu" aria-expanded={open} aria-label={label}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="action-menu-list" role="menu" onKeyDown={onKeys}>
+          {items.map((item) => item.href ? (
+            <a
+              key={item.label} role="menuitem" className="action-menu-item" href={item.href}
+              target="_blank" rel="noreferrer" onClick={() => setOpen(false)}
+            >
+              {item.icon}<span>{item.label}</span>
+            </a>
+          ) : (
+            <button
+              key={item.label} type="button" role="menuitem" disabled={item.disabled}
+              aria-disabled={item.disabled || undefined}
+              className={`action-menu-item ${item.tone === 'danger' ? 'is-danger' : ''}`}
+              onClick={() => { setOpen(false); item.onSelect?.(); }}
+            >
+              {item.icon}<span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -360,12 +516,12 @@ export function PageHeader({ title, subtitle, actions }: {
   title: string; subtitle?: string; actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+    <div className="page-header flex items-start justify-between gap-3 px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
       <div style={{ minWidth: 0 }}>
         <h1 style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.02em' }}>{title}</h1>
         {subtitle && <p style={{ color: 'var(--text-2)', fontSize: 13, marginTop: 2 }}>{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
+      {actions && <div className="page-header-actions flex items-center gap-2 flex-shrink-0">{actions}</div>}
     </div>
   );
 }
@@ -381,7 +537,7 @@ export function StatTile({ label, value, tone, hint }: {
   return (
     <div className="card p-3.5">
       <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color, letterSpacing: '-0.02em' }}>{value}</div>
+      <div className="stat-value" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color, letterSpacing: '-0.02em' }}>{value}</div>
       {hint && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{hint}</div>}
     </div>
   );

@@ -72,16 +72,32 @@ export interface AdminLink {
 /** Is this chat identity an administrator, and of which business? */
 export async function findAdmin(
   channelType: string,
-  customerId: string
+  customerId: string,
+  tenantId?: string
 ): Promise<AdminLink | null> {
-  const { data } = await serviceClient
+  let q = serviceClient
     .from('shwari_admins')
     .select('tenant_id, user_id')
     .eq('channel_type', channelType)
-    .eq('customer_id', customerId)
-    .maybeSingle();
+    .eq('customer_id', customerId);
+  // Asked about one business, answer about that business: being the owner of
+  // another one says nothing about this one.
+  if (tenantId) q = q.eq('tenant_id', tenantId);
+  const { data } = await q.limit(1);
 
-  return data ? { tenantId: data.tenant_id, userId: data.user_id } : null;
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row) return null;
+
+  // Shwari takes instructions from the owner and managers only. A link made
+  // while someone held that role stops working the moment they lose it or
+  // leave the business; they are then answered like any other customer.
+  const { data: member, error } = await serviceClient
+    .from('tenant_users').select('role')
+    .eq('tenant_id', row.tenant_id).eq('user_id', row.user_id).maybeSingle();
+  if (error) return { tenantId: row.tenant_id, userId: row.user_id };
+  if (!member || !['owner', 'admin'].includes(String(member.role))) return null;
+
+  return { tenantId: row.tenant_id, userId: row.user_id };
 }
 
 /**

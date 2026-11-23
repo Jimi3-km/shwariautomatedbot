@@ -16,7 +16,7 @@
  * server.
  */
 
-export type ProviderId = 'telegram' | 'instagram' | 'whatsapp' | 'webchat';
+export type ProviderId = 'telegram' | 'instagram' | 'whatsapp' | 'webchat' | 'facebook';
 
 /**
  * How a channel gets connected:
@@ -84,11 +84,21 @@ export interface HealthReport {
 export interface ConnectContext {
   tenantId: string;
   userId: string;
+  /** The app origin the person is on, when starting a connection. */
+  returnTo?: string | null;
 }
 
 export interface CallbackResult {
   account: ConnectedAccount;
 }
+
+/**
+ * How an OAuth return leg ended. Usually with a connected account. `pending`
+ * is for a sign-in that succeeded but cannot be finished without the owner:
+ * 'pick_page' when the person manages several Facebook Pages and has to say
+ * which one this business uses. Nothing is connected in that case.
+ */
+export type OAuthCallbackResult = CallbackResult | { account: null; pending: 'pick_page' };
 
 export interface ChannelProvider {
   readonly id: ProviderId;
@@ -110,7 +120,7 @@ export interface ChannelProvider {
    * Finish an OAuth connection. Only implemented by 'oauth' providers; the
    * tenant comes from the signed state, never from the query string.
    */
-  callback?(params: Record<string, string>, ctx: ConnectContext): Promise<CallbackResult>;
+  callback?(params: Record<string, string>, ctx: ConnectContext): Promise<OAuthCallbackResult>;
 
   /**
    * Finish a credential connection. Only implemented by 'credential' providers.

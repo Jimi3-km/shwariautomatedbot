@@ -126,3 +126,20 @@ in the redirect allowlist):
    email, click the link in the "Reset your password" email. You now get the
    **Choose a new password** screen; set it and you are signed in with the new
    password.
+
+## Roles and who can change them
+
+| Role | Can |
+|---|---|
+| `viewer` | read |
+| `member` | read and write day-to-day data (leads, orders, payments, catalogue) |
+| `admin` | also manage business settings, channels, agents and the team |
+| `owner` | everything, including granting or removing `owner` |
+
+Nobody can change their own role, only an owner can grant or remove `owner`,
+and a workspace always keeps at least one owner. These rules are enforced by
+the API (`PATCH /api/team/:id`) and again by a trigger on `tenant_users`, so
+they also hold for a client that talks to the database directly.
+
+Keep **Confirm email** switched on in Supabase Auth: the operator allow-list
+(`SUPER_ADMIN_EMAILS`) only matches confirmed addresses.

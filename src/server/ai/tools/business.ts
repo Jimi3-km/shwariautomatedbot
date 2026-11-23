@@ -1,5 +1,7 @@
+import { mirrorHoursToSettings } from '../hours.js';
+import { isRealQuestion } from '../learning.js';
 import { serviceClient } from '../../supabase.js';
-import { ToolInputError, str, num, bool, oneOf, type Tool } from './types.js';
+import { ToolInputError, str, num, bool, oneOf, likeLiteral, type Tool } from './types.js';
 
 /**
  * Tools that read and shape the business itself: profile, services, opening
@@ -164,7 +166,8 @@ export const saveService: Tool = {
       .from('services')
       .select('id, name, description, price_amount, price_note, duration_minutes, booking_mode, active')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', lookupName)
+      .ilike('name', likeLiteral(lookupName))
+      .limit(1)
       .maybeSingle();
 
     let data;
@@ -176,7 +179,7 @@ export const saveService: Tool = {
         name,
         updated_at: new Date().toISOString(),
       };
-      if ('description' in args) patch.description = str(args, 'description', { max: 2000 }) || null;
+      if ('description' in args) patch.description = str(args, 'description', { max: 2000 });
       if (price !== null) patch.price_amount = price;
       if ('price_note' in args) patch.price_note = str(args, 'price_note', { max: 200 }) || null;
       if (duration !== null) patch.duration_minutes = Math.round(duration);
@@ -198,7 +201,9 @@ export const saveService: Tool = {
       const row = {
         tenant_id: ctx.tenantId,
         name,
-        description: str(args, 'description', { max: 2000 }) || null,
+        // The column is NOT NULL: a service saved without a description gets an
+        // empty one, not a failed save.
+        description: str(args, 'description', { max: 2000 }),
         price_amount: price,
         price_note: str(args, 'price_note', { max: 200 }) || null,
         duration_minutes: duration === null ? null : Math.round(duration),
@@ -238,7 +243,7 @@ export const removeService: Tool = {
       .from('services')
       .update({ active: false, updated_at: new Date().toISOString() })
       .eq('tenant_id', ctx.tenantId)
-      .ilike('name', name)
+      .ilike('name', likeLiteral(name))
       .select('id, name');
 
     if (error) throw new Error(error.message);
@@ -339,7 +344,15 @@ export const setOpeningHours: Tool = {
       .upsert(rows, { onConflict: 'tenant_id,day_of_week' });
     if (error) throw new Error(error.message);
 
-    return { set: rows.map((r) => DAYS[r.day_of_week]) };
+    // The Settings page shows its own copy of the hours. Without this the
+    // agents had the new hours and the owner, looking at Settings, saw none.
+    const shown = await mirrorHoursToSettings(ctx.tenantId).catch(() => false);
+
+    return {
+      set: rows.map((r) => DAYS[r.day_of_week]),
+      shown_on_settings_page: shown,
+      ...(shown ? {} : { note: 'The hours are saved for the agents but the Settings page could not be updated. Tell the owner.' }),
+    };
   },
 };
 
@@ -456,8 +469,8 @@ export const saveBusinessFact: Tool = {
       .from('knowledge_gaps')
       .update({ status: 'answered', resolution: value, updated_at: new Date().toISOString() })
       .eq('tenant_id', ctx.tenantId)
-      .eq('status', 'asked')
-      .ilike('question', `%${key.replace(/_/g, ' ')}%`);
+      .in('status', ['open', 'asked'])
+      .ilike('question', `%${likeLiteral(key.replace(/_/g, ' '))}%`);
 
     return { saved: { category, key } };
   },
@@ -466,7 +479,7 @@ export const saveBusinessFact: Tool = {
 export const recordKnowledgeGap: Tool = {
   name: 'record_knowledge_gap',
   description:
-    'Record a question you could not answer from business knowledge. Use this instead of guessing. Asking the same question twice increases its count, so the owner sees what customers keep asking about.',
+    "Record a question about the business that a customer asked and you could not answer from what you looked up - a price, a policy, a service, a location. Use this instead of guessing. Only for the customer's own question, in their words: never for something you yourself are missing (a name, an id, a date) and never for a greeting or a one-word message.",
   parameters: {
     type: 'object',
     properties: {
@@ -480,11 +493,21 @@ export const recordKnowledgeGap: Tool = {
   async run(args, ctx) {
     const question = str(args, 'question', { required: true, max: 300 });
 
+    // Noise in this list is what makes an owner stop reading it. A fragment or
+    // the agent's own confusion is acknowledged and dropped.
+    if (!isRealQuestion(question)) {
+      return {
+        recorded: false,
+        note: 'That is not a customer question about the business, so it was not recorded. Ask the customer for what you need, or help with what you have.',
+      };
+    }
+
     const { data: existing } = await serviceClient
       .from('knowledge_gaps')
       .select('id, times_seen')
       .eq('tenant_id', ctx.tenantId)
-      .ilike('question', question)
+      .ilike('question', likeLiteral(question))
+      .limit(1)
       .maybeSingle();
 
     if (existing) {
@@ -496,9 +519,16 @@ export const recordKnowledgeGap: Tool = {
       return { recorded: true, times_seen: existing.times_seen + 1 };
     }
 
-    const { error } = await serviceClient
+    // Remembering which conversation asked is what lets a staff reply there
+    // teach the answer later. The column arrives with migration 0020; without
+    // it the question is still recorded.
+    const row: Record<string, unknown> = { tenant_id: ctx.tenantId, question, status: 'open' };
+    let { error } = await serviceClient
       .from('knowledge_gaps')
-      .insert({ tenant_id: ctx.tenantId, question, status: 'open' });
+      .insert(ctx.conversationId ? { ...row, conversation_id: ctx.conversationId } : row);
+    if (error && ctx.conversationId && (error.code === 'PGRST204' || error.code === '42703')) {
+      ({ error } = await serviceClient.from('knowledge_gaps').insert(row));
+    }
     if (error) throw new Error(error.message);
     return { recorded: true, times_seen: 1 };
   },
@@ -532,36 +562,113 @@ export const listKnowledgeGaps: Tool = {
 // wrap them: one for the owner to set, one for the customer agents to read, so
 // neither has to guess a key.
 
+/**
+ * How customers pay lives in one place: the Payments tab of Settings
+ * (tenants.payment_details). The agents quote from it and Shwari writes to it.
+ *
+ * It used to live in two. Shwari saved the steps as a business fact and said
+ * "done", the owner opened Settings and saw the old details, and the agents
+ * were quoting a paybill that the page promising "your agent may only quote
+ * what appears here" did not show.
+ */
+export const HOW_TO_PAY_KEY = 'How to pay';
+
+function asDetails(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const key = String(k).trim().slice(0, 60);
+      // Older settings hold nested values (a till with a name and number, a
+      // list of methods). Flatten them to readable text rather than
+      // "[object Object]".
+      const flat = (x: unknown): string =>
+        x === null || x === undefined ? ''
+          : Array.isArray(x) ? x.map(flat).filter(Boolean).join(', ')
+          : typeof x === 'object' ? Object.entries(x as Record<string, unknown>).map(([a, b]) => `${a}: ${flat(b)}`).join('; ')
+          : String(x);
+      const val = flat(v).trim().slice(0, 2000);
+      if (key && val) out[key] = val;
+    }
+  }
+  return out;
+}
+
+/** Keep the legacy fact in step with Settings, so nothing reads a stale copy. */
+export async function syncPaymentFact(tenantId: string, details: Record<string, string>): Promise<void> {
+  const steps = details[HOW_TO_PAY_KEY];
+  if (steps) {
+    await serviceClient.from('business_facts').upsert(
+      {
+        tenant_id: tenantId, category: 'payment', fact_key: 'how_to_pay',
+        value: steps, source: 'owner', updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'tenant_id,category,fact_key' }
+    );
+  } else {
+    await serviceClient.from('business_facts').delete()
+      .eq('tenant_id', tenantId).eq('category', 'payment');
+  }
+}
+
 export const setPaymentInstructions: Tool = {
   name: 'set_payment_instructions',
   description:
-    'Record how customers should pay this business — the till, paybill, bank or wallet details and the steps to follow. The sales and orders agents read this out to customers, so write it exactly as a customer should see it.',
+    'Record how customers should pay this business. Saves to the Payments tab of Settings, which is the only place the agents quote payment details from. Pass the account details as labelled values (for example Paybill, Account number, Till, Bank) and the steps a customer follows. By default this replaces the payment details already there, because the owner is telling you how customers pay now.',
   parameters: {
     type: 'object',
     properties: {
-      instructions: { type: 'string', description: 'The full payment steps, in plain language.' },
+      details: {
+        type: 'object',
+        description: 'The account details as label: value, e.g. {"Paybill": "456565", "Account number": "123456"}. Only what the owner gave you.',
+        additionalProperties: { type: 'string' },
+      },
+      instructions: { type: 'string', description: 'The steps a customer follows to pay, in plain language.' },
+      keep_existing: {
+        type: 'boolean',
+        description: 'true to add to the payment details already saved instead of replacing them (a second way to pay).',
+      },
     },
-    required: ['instructions'],
     additionalProperties: false,
   },
   mutates: true,
 
   async run(args, ctx) {
-    const value = str(args, 'instructions', { required: true, max: 2000 });
+    const steps = str(args, 'instructions', { max: 2000 });
+    const given = asDetails(args.details);
+    delete given[HOW_TO_PAY_KEY];
+    if (!steps && !Object.keys(given).length) {
+      throw new ToolInputError('Send the account details, the steps to pay, or both.');
+    }
 
-    const { error } = await serviceClient.from('business_facts').upsert(
-      {
-        tenant_id: ctx.tenantId,
-        category: 'payment',
-        fact_key: 'how_to_pay',
-        value,
-        source: 'owner',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'tenant_id,category,fact_key' }
-    );
+    const { data: tenant, error: readErr } = await serviceClient
+      .from('tenants').select('payment_details').eq('id', ctx.tenantId).single();
+    if (readErr) throw new Error(readErr.message);
+    const current = asDetails(tenant?.payment_details);
+
+    const next: Record<string, string> = bool(args, 'keep_existing', false) ? { ...current } : {};
+    // Steps without new account details update the steps and leave the
+    // accounts alone: "change the wording" is not "remove the paybill".
+    if (!Object.keys(given).length && !bool(args, 'keep_existing', false)) {
+      for (const [k, v] of Object.entries(current)) if (k !== HOW_TO_PAY_KEY) next[k] = v;
+    }
+    Object.assign(next, given);
+    if (steps) next[HOW_TO_PAY_KEY] = steps;
+    else if (current[HOW_TO_PAY_KEY] && bool(args, 'keep_existing', false)) next[HOW_TO_PAY_KEY] = current[HOW_TO_PAY_KEY];
+
+    const { error } = await serviceClient
+      .from('tenants')
+      .update({ payment_details: next, updated_at: new Date().toISOString() })
+      .eq('id', ctx.tenantId);
     if (error) throw new Error(error.message);
-    return { saved: true };
+    await syncPaymentFact(ctx.tenantId, next);
+
+    const removed = Object.keys(current).filter((k) => !(k in next));
+    return {
+      saved: true,
+      now_on_settings_payments_tab: next,
+      ...(removed.length ? { replaced: removed, note: `These earlier entries were replaced: ${removed.join(', ')}. Tell the owner, in case one of them should stay.` } : {}),
+      where_to_see_it: 'Settings > Payments',
+    };
   },
 };
 
@@ -573,18 +680,35 @@ export const getPaymentInstructions: Tool = {
   mutates: false,
 
   async run(_args, ctx) {
-    const { data, error } = await serviceClient
-      .from('business_facts')
-      .select('value')
-      .eq('tenant_id', ctx.tenantId)
-      .eq('category', 'payment')
-      .order('updated_at', { ascending: false });
+    const { data: tenant, error } = await serviceClient
+      .from('tenants').select('payment_details').eq('id', ctx.tenantId).single();
     if (error) throw new Error(error.message);
+    const details = asDetails(tenant?.payment_details);
 
-    const instructions = (data ?? []).map((f) => f.value).filter(Boolean).join('\n\n');
+    // Steps recorded before the two stores were merged.
+    let steps = details[HOW_TO_PAY_KEY] ?? '';
+    if (!steps) {
+      const { data: facts } = await serviceClient
+        .from('business_facts').select('value')
+        .eq('tenant_id', ctx.tenantId).eq('category', 'payment')
+        .order('updated_at', { ascending: false }).limit(1);
+      steps = (Array.isArray(facts) && facts[0]?.value) || '';
+    }
+
+    const accounts = Object.entries(details).filter(([k]) => k !== HOW_TO_PAY_KEY);
+    const lines = [
+      ...accounts.map(([k, v]) => `${k}: ${v}`),
+      ...(steps ? [steps] : []),
+    ];
     return {
-      configured: Boolean(instructions),
-      instructions: instructions || null,
+      configured: lines.length > 0,
+      // Kept as one string too: it is what the agents have always relayed.
+      instructions: lines.length ? lines.join('\n') : null,
+      accounts: Object.fromEntries(accounts),
+      steps: steps || null,
+      note: lines.length
+        ? 'These are the only payment details you may give. Relay them exactly.'
+        : 'No payment details are set. Say a colleague will send them; never invent one.',
     };
   },
 };

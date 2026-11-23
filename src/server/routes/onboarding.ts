@@ -35,30 +35,47 @@ onboardingRouter.post(
       return res.status(400).json({ error: 'That business name is too long.' });
     }
 
+    const userId = req.authUser!.id;
+    const category = String(req.body?.business_category || '').trim().slice(0, 80) || null;
+    const timezone = typeof req.body?.timezone === 'string' ? req.body.timezone.trim().slice(0, 64) : '';
+    const currency =
+      typeof req.body?.currency === 'string' ? req.body.currency.trim().toUpperCase().slice(0, 3) : '';
+
     try {
+      // Someone who already belongs to a workspace is editing it, not creating
+      // one. That is a settings change and takes the same authority as
+      // PUT /business: admin or owner of the workspace they are acting for.
+      const membership = await resolveMembership(userId, req.headers['x-tenant-id']);
+      if (membership === 'forbidden') {
+        return res.status(403).json({ error: 'Not a member of the requested tenant' });
+      }
+      if (membership) {
+        if (!['owner', 'admin'].includes(membership.role)) {
+          return res.status(403).json({
+            error: 'Only an owner or admin can change the business details.',
+          });
+        }
+        const { error } = await serviceClient
+          .from('tenants')
+          .update({
+            business_name: businessName,
+            business_category: category,
+            ...(timezone ? { timezone } : {}),
+            ...(currency ? { currency } : {}),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', membership.tenant_id);
+        if (error) throw error;
+        return res.status(200).json({ business_name: businessName, created: false });
+      }
+
       const result = await createTenantForUser({
-        userId: req.authUser!.id,
+        userId,
         businessName,
         businessCategory: req.body?.business_category,
         timezone: req.body?.timezone,
         currency: req.body?.currency,
       });
-
-      // An existing workspace gets its details updated rather than a second
-      // one created, so re-running step 1 is safe.
-      if (!result.created) {
-        await serviceClient
-          .from('tenants')
-          .update({
-            business_name: businessName,
-            business_category: String(req.body?.business_category || '').trim() || null,
-            ...(req.body?.timezone ? { timezone: String(req.body.timezone) } : {}),
-            ...(req.body?.currency
-              ? { currency: String(req.body.currency).toUpperCase().slice(0, 3) }
-              : {}),
-          })
-          .eq('id', result.tenantId);
-      }
 
       res.status(result.created ? 201 : 200).json({
         business_name: businessName,
@@ -70,6 +87,33 @@ onboardingRouter.post(
     }
   })
 );
+
+/**
+ * The workspace a pre-tenant route should act on: the one named by
+ * x-tenant-id when the caller belongs to it, otherwise their oldest
+ * membership -- the same rule requireAuth applies, so the wizard and the rest
+ * of the dashboard always agree on which business is active.
+ *
+ * Returns null when the user has no workspace yet, and 'forbidden' when the
+ * header names one they are not in.
+ */
+async function resolveMembership(
+  userId: string,
+  requested: unknown
+): Promise<{ tenant_id: string; role: string } | null | 'forbidden'> {
+  const { data, error } = await serviceClient
+    .from('tenant_users')
+    .select('tenant_id, role, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+    .order('tenant_id', { ascending: true });
+  if (error) throw error;
+  if (!data?.length) return null;
+  if (typeof requested === 'string' && requested) {
+    return data.find((m) => m.tenant_id === requested) ?? 'forbidden';
+  }
+  return data[0];
+}
 
 // ---------------------------------------------------------------------------
 // Step 2 — channels
@@ -192,7 +236,7 @@ function buildPersona(input: {
 onboardingRouter.post(
   '/onboarding/agent',
   requireAuth,
-  requireWrite,
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
 
@@ -275,10 +319,12 @@ onboardingRouter.get(
   handler(async (req, res) => {
     const userId = req.authUser!.id;
 
-    const { data: memberships } = await serviceClient
-      .from('tenant_users').select('tenant_id, role').eq('user_id', userId);
+    const membership = await resolveMembership(userId, req.headers['x-tenant-id']);
+    if (membership === 'forbidden') {
+      return res.status(403).json({ error: 'Not a member of the requested tenant' });
+    }
 
-    if (!memberships?.length) {
+    if (!membership) {
       return res.json({
         step: 'business',
         complete: false,
@@ -288,7 +334,7 @@ onboardingRouter.get(
       });
     }
 
-    const tenantId = memberships[0].tenant_id;
+    const tenantId = membership.tenant_id;
 
     const [{ data: tenant }, { count: activeChannels }, { data: agent }] = await Promise.all([
       serviceClient
@@ -330,6 +376,10 @@ onboardingRouter.get(
         : null,
       has_channel: hasChannel,
       agent_configured: agentConfigured,
+      // Lets the UI tell a non-admin "ask an admin to finish setup" instead of
+      // walking them into steps that will be refused.
+      role: membership.role,
+      can_manage: ['owner', 'admin'].includes(membership.role),
     });
   })
 );
@@ -404,7 +454,9 @@ onboardingRouter.post(
 onboardingRouter.post(
   '/onboarding/test-message',
   requireAuth,
-  requireWrite,
+  // Sends a real message to an arbitrary recipient from the business's own
+  // account, so it takes the same authority as connecting the channel.
+  requireAdmin,
   handler(async (req, res) => {
     const ctx = req.ctx!;
     const channelId = String(req.body?.channel_id || '');
@@ -412,6 +464,9 @@ onboardingRouter.post(
 
     if (!channelId || !recipient) {
       return res.status(400).json({ error: 'Choose a channel and enter where to send the test.' });
+    }
+    if (recipient.length > 128) {
+      return res.status(400).json({ error: 'That recipient does not look right.' });
     }
 
     const { data: channel } = await serviceClient

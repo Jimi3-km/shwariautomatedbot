@@ -1,3 +1,4 @@
+import { raisePlatformAlert } from './platform.js';
 import { serviceClient } from '../supabase.js';
 
 /**
@@ -83,6 +84,9 @@ export async function createTenantForUser(input: CreateTenantInput): Promise<Cre
       order_prefix: slugify(businessName).slice(0, 3).toUpperCase() || 'ORD',
       // The wizard is not finished yet; /me uses this to route the user.
       onboarding_completed_at: null,
+      // Nobody is answered in this business's name until the platform admin
+      // has approved it.
+      status: 'pending',
     })
     .select('id, slug')
     .single();
@@ -105,6 +109,12 @@ export async function createTenantForUser(input: CreateTenantInput): Promise<Cre
 
   // Every tenant gets an agent_settings row so the agent page is never empty.
   await serviceClient.from('agent_settings').insert({ tenant_id: tenant.id });
+
+  void raisePlatformAlert({
+    kind: 'new_business',
+    tenantId: tenant.id,
+    summary: `"${businessName}" has signed up and is waiting for approval.`,
+  });
 
   return { tenantId: tenant.id, slug: tenant.slug, role: 'owner', created: true };
 }

@@ -10,7 +10,9 @@
 -- tenant_id: the WITH CHECK clauses reject any row whose tenant_id is not one
 -- the authenticated user actually belongs to.
 --
--- Reversible: see the companion .down.sql.
+-- Depends on 20260809_0000_baseline.sql for the tables themselves.
+-- To reverse: drop the policies and helper functions created below; no data
+-- is changed by this migration.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------

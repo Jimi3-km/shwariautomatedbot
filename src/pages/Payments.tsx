@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { CreditCard, Check, X, Receipt, ShieldCheck } from 'lucide-react';
 import { getPayments, verifyPayment, issueReceipt } from '../lib/api';
 import type { Payment, VerificationStatus } from '../types';
-import { useAsync, useIsMobile, useMutation } from '../hooks';
+import { useAsync, useIsMobile, useMutation, useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FilterChip, InlineError,
@@ -34,6 +34,8 @@ export function Payments() {
 
   const [filter, setFilter] = useState<VerificationStatus | ''>('unverified');
   const state = useAsync(() => getPayments(filter || undefined), [filter]);
+  // A claim a customer has just made appears without anyone reloading the page.
+  useVisiblePolling(state.reload, 20_000, true);
 
   const [confirming, setConfirming] = useState<Payment | null>(null);
   const [rejecting, setRejecting] = useState<Payment | null>(null);
@@ -41,8 +43,21 @@ export function Payments() {
   const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
 
   const decide = useMutation(async (id: string, decision: 'verified' | 'rejected', reason?: string) => {
-    await verifyPayment(id, decision, reason);
-    toast.push('success', decision === 'verified' ? 'Payment verified.' : 'Payment claim rejected.');
+    const result = await verifyPayment(id, decision, reason);
+    if (decision !== 'verified') {
+      toast.push('success', 'Payment claim rejected.');
+    } else if (result.customer_notified) {
+      const how = [
+        result.receipt_image ? 'as a photo in the chat' : 'in the chat',
+        ...(result.receipt_emailed ? ['by email'] : []),
+      ].join(' and ');
+      toast.push('success', `Payment verified. The receipt was sent ${how}.`);
+    } else if (result.receipt_emailed) {
+      toast.push('info', `Payment verified. The receipt was emailed, but the chat message was not sent: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
+    } else {
+      // Verified either way; say plainly that the customer has not been told.
+      toast.push('info', `Payment verified, but the customer was not notified: ${result.customer_notice_reason ?? 'they could not be reached.'}`);
+    }
     setConfirming(null); setRejecting(null); setRejectReason('');
     state.reload();
     refreshCounts();
@@ -100,7 +115,7 @@ export function Payments() {
                   <Pill tone={TONE[p.verification_status]}>{humanize(p.verification_status)}</Pill>
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
-                  {p.customer_id || p.customer_phone || 'Unknown customer'}
+                  {(p as any).customer_name || p.customer_phone || p.customer_id || 'Unknown customer'}
                 </div>
                 {p.transaction_code && (
                   <div className="mono" style={{ fontSize: 12, marginTop: 3 }}>{p.transaction_code}</div>
@@ -126,7 +141,12 @@ export function Payments() {
                 {payments.map((p) => (
                   <tr key={p.id}>
                     <td className="primary">
-                      <div>{p.customer_id || p.customer_phone || '—'}</div>
+                      <div style={{ fontWeight: 500 }}>{(p as any).customer_name || p.customer_phone || p.customer_id || '—'}</div>
+                      {(p as any).customer_name && (p.customer_phone || (p as any).order_ref) && (
+                        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                          {[(p as any).order_ref, p.customer_phone].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
                       {p.customer_email && (
                         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.customer_email}</div>
                       )}

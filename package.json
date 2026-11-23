@@ -9,9 +9,11 @@
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node src/server/channels/__tests__/run-all.mjs"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@supabase/supabase-js": "^2.106.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/multer": "^2.1.0",
@@ -19,6 +21,7 @@
     "axios": "^1.15.2",
     "cors": "^2.8.6",
     "date-fns": "^4.1.0",
+    "dejavu-fonts-ttf": "^2.37.3",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "form-data": "^4.0.5",

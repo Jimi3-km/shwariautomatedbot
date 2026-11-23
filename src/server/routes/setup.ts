@@ -1,11 +1,48 @@
 import { Router } from 'express';
-import { requireAuth, requireAdmin, handler } from '../auth.js';
+import { requireAuth, platformOnly, handler } from '../auth.js';
 import { allProviders } from '../channels/providers/index.js';
 import { metaConfig } from '../config/meta.js';
 import { widgetOrigin } from '../channels/providers/webchat.js';
 import { llmConfigured, llmModel } from '../ai/llm.js';
+import { runMetaDiagnostics, subscribeWebhook, WEBHOOK_OBJECTS, type WebhookObject } from '../services/meta/diagnostics.js';
 
 export const setupRouter = Router();
+
+/**
+ * Test the Meta settings against Meta itself.
+ *
+ * Platform admins only, like the readiness check below, and for the same reason: it is
+ * for the person running the deployment. It reports what is set and whether it
+ * matches, never a secret's value.
+ */
+setupRouter.get(
+  '/setup/meta-check',
+  requireAuth,
+  platformOnly,
+  handler(async (_req, res) => {
+    res.json(await runMetaDiagnostics());
+  })
+);
+
+/**
+ * Switch on message delivery for one Meta product from here, so the person
+ * running the deployment does not have to find the right "Subscribe" toggle
+ * in the Meta dashboard. Admin-only; returns Meta's own words when it refuses.
+ */
+setupRouter.post(
+  '/setup/meta-webhook',
+  requireAuth,
+  platformOnly,
+  handler(async (req, res) => {
+    const object = String(req.body?.object ?? '') as WebhookObject;
+    if (!WEBHOOK_OBJECTS.includes(object)) {
+      return res.status(400).json({ error: 'Unknown webhook.' });
+    }
+    const result = await subscribeWebhook(object);
+    if (!result.ok) return res.status(502).json({ error: result.message });
+    res.json(result);
+  })
+);
 
 /**
  * Operator readiness check.
@@ -20,7 +57,7 @@ export const setupRouter = Router();
 setupRouter.get(
   '/setup/status',
   requireAuth,
-  requireAdmin,
+  platformOnly,
   handler(async (_req, res) => {
     const origin = widgetOrigin();
 
@@ -57,6 +94,7 @@ setupRouter.get(
         verify_token_is_set: Boolean(metaConfig.verifyToken),
 
         instagram_signin_redirect_uri: `${origin}/api/auth/instagram/callback`,
+        facebook_redirect_uri: `${origin}/api/channels/oauth/facebook/callback`,
         subscribe_to_fields: ['messages'],
       },
       /** Shwari runs in this process rather than in n8n, so it has its own key. */

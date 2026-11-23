@@ -90,9 +90,71 @@ let onAuthFailure: (() => void) | null = null;
 export function setAuthFailureHandler(fn: () => void) { onAuthFailure = fn; }
 
 /** The tenant chosen when a user belongs to more than one business. */
-let activeTenantId: string | null = null;
-export function setActiveTenant(id: string | null) { activeTenantId = id; }
+const TENANT_STORAGE_KEY = 'shwari-dashboard-active-tenant';
+
+function readStoredTenant(): string | null {
+  try { return localStorage.getItem(TENANT_STORAGE_KEY); } catch { return null; }
+}
+
+/**
+ * Persisted, because switching business does a full page reload: an in-memory
+ * value would be wiped by that reload and the server would fall back to the
+ * user's first membership. The server still verifies membership on every
+ * request, so a stale or tampered value can only ever produce a 403.
+ */
+let activeTenantId: string | null = readStoredTenant();
+export function setActiveTenant(id: string | null) {
+  activeTenantId = id;
+  try {
+    if (id) localStorage.setItem(TENANT_STORAGE_KEY, id);
+    else localStorage.removeItem(TENANT_STORAGE_KEY);
+  } catch { /* storage unavailable: the choice lasts for this page only */ }
+}
 export function getActiveTenant() { return activeTenantId; }
+
+/** The current session's bearer token, for the rare call that cannot use request(). */
+export async function getAccessToken(): Promise<string | null> {
+  const { data } = await getSupabase().auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+/**
+ * Downloads an authenticated file. A plain link or window.open cannot do this:
+ * the API authenticates with a bearer header, which a navigation never sends.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = await getAccessToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  if (activeTenantId) headers['x-tenant-id'] = activeTenantId;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, { headers });
+  } catch {
+    throw new NetworkError();
+  }
+  if (!res.ok) {
+    let message = defaultMessage(res.status);
+    try {
+      const j = (await res.json()) as { error?: unknown };
+      if (typeof j.error === 'string' && j.error.length < 300) message = j.error;
+    } catch { /* non-JSON error body */ }
+    if (res.status === 401) onAuthFailure?.();
+    throw new ApiError(message, res.status);
+  }
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const name = match ? decodeURIComponent(match[1]) : fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -108,11 +170,35 @@ interface RequestOptions {
  * query string: the server derives tenancy from the token and rejects any
  * client-supplied tenant_id outright.
  */
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/**
+ * Reads already on their way, by address. Several parts of a page ask for the
+ * same thing at the same moment (the menu and the page both want the overview;
+ * a remount asks again), and each used to become its own request. The second
+ * asker now shares the first one's answer. Only plain reads are shared, and
+ * only while in flight: nothing is cached once it has arrived.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+export function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? 'GET';
+  if (method !== 'GET' || options.signal || options.body !== undefined) return send<T>(path, options);
+  const key = `${activeTenantId ?? ''} ${path}`;
+  const existing = inFlight.get(key);
+  if (existing) return existing as Promise<T>;
+  const started = send<T>(path, options).finally(() => { inFlight.delete(key); });
+  inFlight.set(key, started);
+  return started;
+}
+
+async function send<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { data } = await getSupabase().auth.getSession();
   const token = data.session?.access_token;
 
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  // A file upload is sent as a form: the browser writes the multipart
+  // content-type (with its boundary) itself, so none is set here. Everything
+  // else about the call - the session token, the selected tenant - is the same.
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers: Record<string, string> = isForm ? {} : { 'content-type': 'application/json' };
   if (token) headers.authorization = `Bearer ${token}`;
   if (activeTenantId) headers['x-tenant-id'] = activeTenantId;
 
@@ -121,7 +207,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     res = await fetch(`/api${path}`, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.body === undefined ? undefined : isForm ? (options.body as FormData) : JSON.stringify(options.body),
       signal: options.signal,
     });
   } catch (err) {
@@ -153,6 +239,7 @@ function defaultMessage(status: number): string {
     case 403: return 'You do not have permission to do that.';
     case 404: return 'That item could not be found.';
     case 409: return 'That action conflicts with the current state.';
+    case 413: return 'That file is too large to upload.';
     case 501: return 'That feature is not available yet.';
     case 502: return 'An upstream service rejected the request.';
     default: return status >= 500 ? 'Something went wrong on our side.' : 'The request failed.';

@@ -1,4 +1,20 @@
 {
+    "functions": {
+        "api/index.ts": {
+            "maxDuration": 60,
+            "includeFiles": "node_modules/dejavu-fonts-ttf/ttf/DejaVuSans{,-Bold}.ttf"
+        }
+    },
+    "crons": [
+        {
+            "path": "/api/internal/cron/dispatch",
+            "schedule": "0 5 * * *"
+        },
+        {
+            "path": "/api/internal/cron/maintenance",
+            "schedule": "30 2 * * *"
+        }
+    ],
     "rewrites": [
         {
             "source": "/api/(.*)",

@@ -16,7 +16,6 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'stub-anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-service-key';
 process.env.META_APP_SECRET = 'test-app-secret';
-process.env.N8N_META_WEBHOOK_URL = 'https://n8n.invalid/webhook/meta-in';
 
 let pass = 0;
 let fail = 0;
@@ -158,7 +157,7 @@ globalThis.fetch = async (input, init = {}) => {
   return json([], 200);
 };
 
-const { resolveChannel, claimEvent, persistInbound, forwardToPipeline, normalize } =
+const { resolveChannel, claimEvent, markEvent, persistInbound, normalize } =
   await import('../../../services/inbound.ts');
 
 // ---------------------------------------------------------------------------
@@ -369,35 +368,47 @@ await t('a staff-handled message still reaches the Inbox', async () => {
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n--- pipeline handoff ---');
+console.log('\n--- event progress tracking ---');
 // ---------------------------------------------------------------------------
 
-await t('forwards with the channel secret, never a tenant id', async () => {
-  const r = await forwardToPipeline(event(), 'secret-a');
-  assert.equal(r.forwarded, true);
-  assert.equal(db.pipelineCalls.length, 1);
-  assert.equal(db.pipelineCalls[0].secret, 'secret-a');
-
-  const keys = Object.keys(db.pipelineCalls[0].body);
-  assert.ok(!keys.includes('tenant_id') && !keys.includes('tenantId'),
-    'the pipeline re-derives the tenant from the channel, so it is not sent');
+await t('a claim records the event as claimed, with the payload to resume from', async () => {
+  const ok = await claimEvent('whatsapp', 'wamid.ONE', TENANT_A, 'chan-a', event());
+  assert.equal(ok, true);
+  assert.equal(db.webhook_events.length, 1);
+  assert.equal(db.webhook_events[0].status, 'claimed');
+  assert.equal(db.webhook_events[0].payload.messageId, 'wamid.ONE');
 });
 
-await t('a channel with no secret is not forwarded', async () => {
-  const r = await forwardToPipeline(event(), null);
-  assert.equal(r.forwarded, false);
-  assert.equal(r.reason, 'channel_not_provisioned');
-  assert.equal(db.pipelineCalls.length, 0);
+await t('the stored payload never carries a channel secret', async () => {
+  await claimEvent('whatsapp', 'wamid.ONE', TENANT_A, 'chan-a', event());
+  const stored = JSON.stringify(db.webhook_events[0].payload);
+  assert.ok(!stored.includes('secret'), 'only the normalized event is stored');
 });
 
-await t('an unconfigured pipeline is reported, not crashed on', async () => {
-  const saved = process.env.N8N_META_WEBHOOK_URL;
-  delete process.env.N8N_META_WEBHOOK_URL;
-  const r = await forwardToPipeline(event(), 'secret-a');
-  process.env.N8N_META_WEBHOOK_URL = saved;
+await t('a finished event is marked processed and its payload dropped', async () => {
+  await claimEvent('whatsapp', 'wamid.ONE', TENANT_A, 'chan-a', event());
+  await markEvent('whatsapp', 'wamid.ONE', 'persisted', { conversationId: 'convo-1' });
+  assert.equal(db.webhook_events[0].status, 'persisted');
+  assert.equal(db.webhook_events[0].conversation_id, 'convo-1');
+  assert.ok(db.webhook_events[0].payload, 'still needed while a reply is outstanding');
 
-  assert.equal(r.forwarded, false);
-  assert.equal(r.reason, 'pipeline_not_configured');
+  await markEvent('whatsapp', 'wamid.ONE', 'processed');
+  assert.equal(db.webhook_events[0].status, 'processed');
+  assert.equal(db.webhook_events[0].payload, null);
+});
+
+await t('a failure records why', async () => {
+  await claimEvent('whatsapp', 'wamid.ONE', TENANT_A, 'chan-a', event());
+  await markEvent('whatsapp', 'wamid.ONE', 'failed', { error: 'AI turn exceeded 50s' });
+  assert.equal(db.webhook_events[0].status, 'failed');
+  assert.equal(db.webhook_events[0].last_error, 'AI turn exceeded 50s');
+});
+
+await t('marking one event leaves another untouched', async () => {
+  await claimEvent('whatsapp', 'wamid.ONE', TENANT_A, 'chan-a', event());
+  await claimEvent('whatsapp', 'wamid.TWO', TENANT_A, 'chan-a', event({ messageId: 'wamid.TWO' }));
+  await markEvent('whatsapp', 'wamid.ONE', 'processed');
+  assert.equal(db.webhook_events.find((e) => e.event_id === 'wamid.TWO').status, 'claimed');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,3 +1,4 @@
+import { identityLabel } from './identity.js';
 import { serviceClient } from '../supabase.js';
 import type { NormalizedInboundEvent, ParsedEvent } from '../channels/meta/types.js';
 import type { ProviderId } from '../channels/providers/types.js';
@@ -10,7 +11,7 @@ import type { ProviderId } from '../channels/providers/types.js';
  *   1. resolve the channel  — tenancy comes from our own row, never the payload
  *   2. claim the event      — a unique insert, so a retry cannot do the work twice
  *   3. persist              — the message reaches the Inbox even if the AI is off
- *   4. forward              — only when the conversation is still AI-handled
+ *   4. dispatch             — only when the conversation is still AI-handled
  *
  * Persisting before forwarding is deliberate. The previous Telegram pipeline
  * logged the customer's message only after the agent had replied, which meant a
@@ -59,20 +60,64 @@ export async function resolveChannel(
 }
 
 /**
+ * What webhook_events records about an event beyond the claim itself.
+ *
+ *   claimed    the claim was won; nothing durable has been written yet
+ *   persisted  the customer's message is in the Inbox; no reply yet
+ *   processed  finished, whether or not a reply was due
+ *   failed     gave up; `last_error` says why
+ *
+ * These columns arrive with migration 0019. Until it is applied the claim
+ * still works exactly as before; only the status tracking (and therefore the
+ * retry of interrupted events) is unavailable.
+ */
+export type EventStatus = 'claimed' | 'persisted' | 'processed' | 'failed';
+
+/** Flipped off the first time the database says the tracking columns are absent. */
+let trackingSupported = true;
+
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === '42703' ||
+    error.code === 'PGRST204' ||
+    /column .* does not exist|could not find the .* column/i.test(error.message ?? '')
+  );
+}
+
+/** The provider value recorded in webhook_events for an event. */
+type EventProvider = ProviderId;
+
+/**
  * Claim an event id. Returns false when this delivery has already been handled.
  *
  * The unique constraint decides, not a preceding SELECT: two concurrent
  * retries would both pass a read check, and only one can win the insert.
+ *
+ * `payload` is the normalized event. Storing it is what lets an event whose
+ * processing was cut short (a serverless function frozen mid-turn) be picked
+ * up again later instead of being lost behind its own claim.
  */
 export async function claimEvent(
-  provider: ProviderId,
+  provider: EventProvider,
   eventId: string,
   tenantId: string,
-  channelId: string
+  channelId: string | null,
+  payload?: NormalizedInboundEvent
 ): Promise<boolean> {
-  const { error } = await serviceClient
-    .from('webhook_events')
-    .insert({ provider, event_id: eventId, tenant_id: tenantId, channel_id: channelId });
+  const base = { provider, event_id: eventId, tenant_id: tenantId, channel_id: channelId };
+
+  let { error } = trackingSupported
+    ? await serviceClient
+        .from('webhook_events')
+        .insert({ ...base, status: 'claimed', attempts: 1, payload: payload ?? null })
+    : await serviceClient.from('webhook_events').insert(base);
+
+  if (error && trackingSupported && isMissingColumn(error)) {
+    trackingSupported = false;
+    console.warn('[inbound] webhook_events has no status columns yet (migration 0019); continuing without retry tracking');
+    ({ error } = await serviceClient.from('webhook_events').insert(base));
+  }
 
   if (!error) return true;
 
@@ -81,8 +126,42 @@ export async function claimEvent(
 
   console.error('[inbound] could not record the event:', { code: error.code, message: error.message });
   // Fail closed: without a claim we cannot promise idempotency, so drop the
-  // event rather than risk replying twice. Meta will retry.
+  // event rather than risk replying twice. The provider will retry.
   return false;
+}
+
+/** Record how far an event got. Best effort; never throws. */
+export async function markEvent(
+  provider: EventProvider,
+  eventId: string,
+  status: EventStatus,
+  extra: { conversationId?: string; error?: string } = {}
+): Promise<void> {
+  if (!trackingSupported) return;
+  try {
+    const patch: Record<string, unknown> = { status };
+    if (extra.conversationId) patch.conversation_id = extra.conversationId;
+    if (status === 'processed' || status === 'failed') patch.processed_at = new Date().toISOString();
+    if (status === 'failed') patch.last_error = (extra.error ?? 'unknown').slice(0, 500);
+    // The payload has served its purpose once the event is finished, and it
+    // holds customer text, so it is not kept around.
+    if (status === 'processed') patch.payload = null;
+
+    const { error } = await serviceClient
+      .from('webhook_events')
+      .update(patch)
+      .eq('provider', provider)
+      .eq('event_id', eventId);
+
+    if (error && isMissingColumn(error)) trackingSupported = false;
+  } catch {
+    /* tracking is an aid, not a requirement */
+  }
+}
+
+/** For tests. */
+export function resetEventTracking(): void {
+  trackingSupported = true;
 }
 
 export interface PersistResult {
@@ -112,6 +191,19 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
   let conversationId: string;
   let aiEnabled: boolean;
 
+  // What the Inbox calls this customer until they give a name: the Instagram
+  // @username, the WhatsApp number, or a visitor code for web chat. Looked up
+  // only when the conversation has no name yet.
+  let label: string | null = event.customerName ?? null;
+  if (!existing?.customer_name) {
+    label = (await identityLabel({
+      tenantId: event.tenantId,
+      channelType: event.channelType,
+      customerId: event.customerId,
+      profileName: event.customerName,
+    }).catch(() => null)) ?? label;
+  }
+
   if (existing) {
     conversationId = existing.id;
     aiEnabled = existing.ai_enabled;
@@ -124,9 +216,9 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
         last_message_preview: preview,
         status: 'open',
         // Only fill a name in; never overwrite one staff may have corrected.
-        ...(existing.customer_name || !event.customerName
+        ...(existing.customer_name || !label
           ? {}
-          : { customer_name: event.customerName }),
+          : { customer_name: label }),
       })
       .eq('id', conversationId)
       .eq('tenant_id', event.tenantId);
@@ -143,7 +235,7 @@ export async function persistInbound(event: NormalizedInboundEvent): Promise<Per
         channel_id: event.channelId,
         channel_type: event.channelType,
         customer_id: event.customerId,
-        customer_name: event.customerName,
+        customer_name: label,
         status: 'open',
         unread_count: 1,
         last_message_at: event.timestamp,
@@ -227,6 +319,7 @@ async function upsertLead(event: NormalizedInboundEvent, conversationId: string)
       // WhatsApp customer ids are phone numbers; Instagram ids are not, so the
       // phone column is only filled where it actually means one.
       phone: event.channelType === 'whatsapp' ? event.customerId : null,
+      email: event.channelType === 'email' ? event.customerId : null,
       stage: 'new',
       last_message: lastMessage,
       last_contact: event.timestamp,
@@ -248,23 +341,6 @@ async function upsertLead(event: NormalizedInboundEvent, conversationId: string)
       .eq('tenant_id', event.tenantId);
   }
 }
-
-/**
- * Hand the message to the existing n8n pipeline for the AI turn.
- *
- * The channel's secret token travels in the header exactly as it does for
- * Telegram, so n8n resolves the channel — and therefore the tenant — from its
- * own database read rather than from anything in this body.
- */
-/**
- * The hand-off endpoint.
- *
- * Named for the agent rather than for Meta, because web chat uses the same
- * entry point — the pipeline resolves the channel from the secret and does not
- * care which product the message came from. The old name is still honoured so
- * an existing deployment does not go quiet on upgrade.
- */
-
 
 /** Turn a parsed provider event into normalized events for one channel. */
 export function normalize(

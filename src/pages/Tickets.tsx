@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
-import { LifeBuoy, Plus, Sparkles, Clock, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { LifeBuoy, Plus, Sparkles, Clock, X, MessageSquare, Send, ExternalLink, Bot, UserRound } from 'lucide-react';
 import {
   getTickets, createTicket, updateTicket,
   getFollowUps, cancelFollowUp,
+  getConversation, sendMessage, setConversationTakeover,
 } from '../lib/api';
 import type { SupportTicket, TicketStatus, TicketPriority, FollowUp } from '../types';
 import type { AsyncState } from '../hooks';
-import { useAsync, useMutation } from '../hooks';
+import { useAsync, useMutation, useVisiblePolling } from '../hooks';
 import { useSession } from '../app/SessionContext';
 import {
   Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FilterChip,
@@ -126,8 +128,13 @@ function TicketList() {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4 }}>
-                  {t.customer_name || 'No customer'} · {relativeTime(t.created_at)}
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span>{t.customer_name || 'No customer'} · {relativeTime(t.created_at)}</span>
+                  {t.conversation_id && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--info)' }}>
+                      <MessageSquare size={11} /> Chat with customer
+                    </span>
+                  )}
                 </div>
               </div>
               <Pill tone={t.status === 'resolved' || t.status === 'closed' ? 'success' : 'neutral'}>
@@ -229,7 +236,7 @@ function TicketDetail({ ticket, canWrite, onClose, onSaved }: {
 
   return (
     <Modal
-      open onClose={onClose} title={ticket.subject} width={560}
+      open onClose={onClose} title={ticket.subject} width={ticket.conversation_id ? 780 : 560}
       footer={canWrite && (
         <>
           <Button onClick={onClose}>Close</Button>
@@ -255,6 +262,16 @@ function TicketDetail({ ticket, canWrite, onClose, onSaved }: {
           </p>
         )}
 
+        {/* The conversation this ticket came from, so the owner can answer the
+            customer here instead of hunting for them in the Inbox. */}
+        {ticket.conversation_id ? (
+          <TicketChat conversationId={ticket.conversation_id} canWrite={canWrite} />
+        ) : (
+          <div className="ticket-chat-empty">
+            This ticket is not linked to a customer conversation, so there is nobody to message from here.
+          </div>
+        )}
+
         {canWrite ? (
           <>
             <Field label="Status">
@@ -278,6 +295,135 @@ function TicketDetail({ ticket, canWrite, onClose, onSaved }: {
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Talk to the customer from inside the ticket.
+ *
+ * Shows the live conversation and sends replies on the channel the customer
+ * is using. Sending a message here is a person stepping in, so the AI is
+ * paused for this conversation first: two voices answering at once is worse
+ * than either. It can be handed back with one click.
+ */
+function TicketChat({ conversationId, canWrite }: { conversationId: string; canWrite: boolean }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const state = useAsync(() => getConversation(conversationId), [conversationId]);
+  useVisiblePolling(state.reload, 8000, true);
+
+  const [draft, setDraft] = useState('');
+  const endRef = useRef<HTMLDivElement>(null);
+  const messages = state.data?.messages ?? [];
+  const conversation = state.data?.conversation;
+  const aiOn = conversation ? (conversation as any).ai_enabled !== false : true;
+
+  // Keep the newest message in view, as a chat does.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages.length]);
+
+  const send = useMutation(async () => {
+    const text = draft.trim();
+    if (!text) return;
+    if (aiOn) await setConversationTakeover(conversationId, false);
+    await sendMessage(conversationId, text);
+    setDraft('');
+    state.reload();
+  });
+
+  const handBack = useMutation(async (ai: boolean) => {
+    await setConversationTakeover(conversationId, ai);
+    toast.push('success', ai ? 'The AI will answer this customer again.' : 'The AI is paused for this customer.');
+    state.reload();
+  });
+
+  return (
+    <section className="ticket-chat" aria-label="Conversation with the customer">
+      <header className="ticket-chat-head">
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+          <MessageSquare size={14} style={{ color: 'var(--info)', flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {conversation?.customer_name || conversation?.customer_id || 'Customer'}
+          </span>
+          {conversation && <Pill tone="neutral">{conversation.channel_type}</Pill>}
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <Pill tone={aiOn ? 'accent' : 'warning'} dot>{aiOn ? 'AI answering' : 'You are answering'}</Pill>
+          {canWrite && conversation && (
+            <Button size="sm" variant="subtle" loading={handBack.busy} onClick={() => handBack.run(!aiOn)}>
+              {aiOn ? 'Pause AI' : 'Hand back to AI'}
+            </Button>
+          )}
+          <button type="button" className="btn-icon" title="Open in Inbox" aria-label="Open in Inbox"
+            onClick={() => navigate(`/inbox/${conversationId}`)}>
+            <ExternalLink size={14} />
+          </button>
+        </span>
+      </header>
+
+      <div className="ticket-chat-thread scroll-y">
+        {state.loading && !state.data && <LoadingState rows={3} />}
+        {state.error && <ErrorState message={state.error} onRetry={state.reload} />}
+        {state.data && messages.length === 0 && (
+          <div className="ticket-chat-empty">No messages in this conversation yet.</div>
+        )}
+        {messages.map((m) => {
+          const failed = (m.extracted as any)?.delivery?.status === 'failed';
+          if (m.sender === 'system') {
+            return <div key={m.id} className="chat-note">{m.body}</div>;
+          }
+          const mine = m.sender !== 'customer';
+          return (
+            <div key={m.id} className={`chat-row ${mine ? 'mine' : ''}`}>
+              <div className={`chat-bubble ${m.sender}`}>
+                <div className="chat-who">
+                  {m.sender === 'customer' ? <UserRound size={10} /> : m.sender === 'agent' ? <Bot size={10} /> : <UserRound size={10} />}
+                  {m.sender === 'customer' ? 'Customer' : m.sender === 'agent' ? 'AI' : 'You / team'}
+                  <span>· {relativeTime(m.created_at)}</span>
+                </div>
+                <div className="chat-text">{m.body}</div>
+                {failed && (
+                  <div className="chat-failed">
+                    Not delivered: {(m.extracted as any)?.delivery?.error ?? 'the message could not be sent.'}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+
+      {canWrite && (
+        <form
+          className="ticket-chat-composer"
+          onSubmit={(e) => { e.preventDefault(); send.run(); }}
+        >
+          <InlineError message={send.error ?? handBack.error} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <Textarea
+              rows={2}
+              value={draft}
+              placeholder={`Message ${conversation?.customer_name || 'the customer'} on ${conversation?.channel_type ?? 'their channel'}…`}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send.run(); }
+              }}
+              aria-label="Message to the customer"
+            />
+            <Button type="submit" variant="accent" icon={<Send size={14} />} loading={send.busy} disabled={!draft.trim()}>
+              Send
+            </Button>
+          </div>
+          <p style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 6 }}>
+            {aiOn
+              ? 'Sending pauses the AI for this customer so you are not both answering. Enter sends, Shift+Enter adds a line.'
+              : 'The AI is paused for this customer. Hand it back when you are done.'}
+          </p>
+        </form>
+      )}
+    </section>
   );
 }
 

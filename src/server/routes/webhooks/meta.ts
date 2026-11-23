@@ -2,15 +2,15 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { verifyMetaSignature, verifyChallenge } from '../../channels/meta/signature.js';
 import { parseMetaWebhook } from '../../channels/meta/parsers.js';
-import {
-  resolveChannel, claimEvent, persistInbound, normalize,
-} from '../../services/inbound.js';
-import { dispatchInbound } from '../../services/dispatch.js';
+import { resolveChannel, normalize } from '../../services/inbound.js';
+import { processInbound } from '../../services/pipeline.js';
+import { runInBackground } from '../../services/background.js';
+import { housekeeping } from '../../services/followUps.js';
 
 export const metaWebhookRouter = Router();
 
 /**
- * Meta's inbound webhook, for WhatsApp and Instagram.
+ * Meta's inbound webhook, for WhatsApp, Instagram and Facebook Pages (Messenger).
  *
  * Deliberately unauthenticated in the dashboard sense: Meta has no session and
  * no bearer token. Its credential is the HMAC signature over the raw body,
@@ -69,11 +69,13 @@ metaWebhookRouter.post('/webhooks/meta', (req: Request, res: Response) => {
   }
 
   // Ack immediately, then do the work. Meta's timeout is short, and a slow
-  // AI turn must not turn into a retried delivery.
+  // AI turn must not turn into a retried delivery. The work is registered with
+  // the platform so a serverless function is kept alive until it finishes.
   res.sendStatus(200);
 
-  void handleEvents(payload).catch((e) => {
-    console.error('[webhooks/meta] processing failed:', e instanceof Error ? e.message : e);
+  void runInBackground('webhooks/meta', async () => {
+    await handleEvents(payload);
+    await housekeeping();
   });
 });
 
@@ -85,7 +87,8 @@ async function handleEvents(body: unknown): Promise<void> {
     return;
   }
   if (!events.length) {
-    // Status receipts and read notifications land here. Normal, not an error.
+    // Status receipts, read notifications and changes on a Page's feed land
+    // here. Normal, not an error.
     return;
   }
 
@@ -103,23 +106,7 @@ async function handleEvents(body: unknown): Promise<void> {
     }
 
     for (const event of normalize(parsed, channel)) {
-      const claimed = await claimEvent(provider, event.messageId, event.tenantId, event.channelId);
-      if (!claimed) {
-        console.log(`[webhooks/meta] duplicate delivery of ${provider} message; already handled`);
-        continue;
-      }
-
-      const stored = await persistInbound(event);
-      if (!stored) continue;
-
-      // The Inbox now has the message either way. The AI only gets a turn when
-      // staff have not taken the conversation over.
-      if (!stored.aiEnabled) {
-        console.log(`[webhooks/meta] conversation ${stored.conversationId} is staff-handled; no AI reply`);
-        continue;
-      }
-
-      await dispatchInbound(event, channel, stored.conversationId);
+      await processInbound(event, channel, 'webhooks/meta');
     }
   }
 }

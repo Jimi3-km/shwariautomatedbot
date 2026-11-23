@@ -1,3 +1,5 @@
+import { renderReceiptDocument } from '../services/receiptHtml.js';
+import { logReceipt } from '../services/notify.js';
 import { Router } from 'express';
 import { requireAuth, requireWrite, handler } from '../auth.js';
 
@@ -32,47 +34,9 @@ interface ReceiptInput {
   lead: any | null;
 }
 
-export function renderReceiptHtml({ business, payment, order, lead }: ReceiptInput): string {
-  const currency = payment.currency || business.currency || 'KES';
-  const brand = business.branding ?? {};
-  const accent = /^#[0-9a-fA-F]{3,8}$/.test(String(brand.accent_color || '')) ? brand.accent_color : '#1a1a2e';
-  const contact = business.contact_info ?? {};
-  const ref = order?.order_ref ?? `${business.order_prefix || 'ORD'}-${String(payment.id).slice(0, 8).toUpperCase()}`;
-
-  const rows: Array<[string, string]> = [
-    ['Customer', esc(lead?.customer_name || payment.customer_id || '-')],
-    ['Email', esc(payment.customer_email || lead?.email || '-')],
-    ['Delivery location', esc(payment.delivery_location || order?.delivery_location || lead?.delivery_location || '-')],
-    ['Product', esc([payment.product_model, payment.product_storage, payment.product_condition].filter(Boolean).join(' ') || '-')],
-    ['Payment method', esc(payment.payment_method || '-')],
-    ['Transaction code', esc(payment.transaction_code || '-')],
-  ];
-
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Receipt ${esc(ref)}</title></head>
-<body style="margin:0;padding:20px;background:#f4f4f4;font-family:Arial,Helvetica,sans-serif;">
-  <div style="max-width:580px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
-    <div style="background:${esc(accent)};color:#fff;padding:28px;text-align:center;">
-      <h1 style="margin:0;font-size:22px;">${esc(business.business_name)}</h1>
-      <p style="margin:6px 0 0;color:#ddd;font-size:13px;">Official purchase receipt</p>
-    </div>
-    <div style="padding:28px;">
-      <div style="background:#f0f4ff;border-left:4px solid ${esc(accent)};padding:12px 16px;margin-bottom:20px;">
-        <div style="font-size:12px;color:#666;">Order reference</div>
-        <strong style="font-size:16px;color:#1a1a2e;">${esc(ref)}</strong>
-        <div style="display:inline-block;background:#d1fae5;color:#065f46;font-size:12px;padding:3px 10px;border-radius:20px;margin-top:6px;">Payment verified</div>
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        ${rows.map(([k, v]) => `<tr><td style="padding:8px 0;color:#777;border-bottom:1px solid #f2f2f2;">${esc(k)}</td><td style="padding:8px 0;text-align:right;color:#222;border-bottom:1px solid #f2f2f2;">${v}</td></tr>`).join('')}
-        <tr><td style="padding:14px 0;font-weight:bold;font-size:17px;">Total paid</td><td style="padding:14px 0;text-align:right;font-weight:bold;font-size:17px;">${money(payment.amount, currency)}</td></tr>
-      </table>
-    </div>
-    <div style="background:#fafafa;padding:18px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #eee;">
-      Thank you for choosing ${esc(business.business_name)}.<br>
-      ${esc(business.address || '')}${contact.phone ? ` &middot; ${esc(contact.phone)}` : ''}${contact.email ? ` &middot; ${esc(contact.email)}` : ''}
-    </div>
-  </div>
-</body></html>`;
+export function renderReceiptHtml(input: ReceiptInput): string {
+  // One design for every form of the receipt: see services/receiptHtml.ts.
+  return renderReceiptDocument(input);
 }
 
 /**
@@ -112,7 +76,7 @@ receiptsRouter.post(
 
     const { data: business } = await ctx.db
       .from('tenants')
-      .select('business_name, address, currency, order_prefix, branding, contact_info')
+      .select('business_name, address, currency, order_prefix, branding, contact_info, timezone')
       .eq('id', ctx.tenantId).single();
 
     const { data: order } = payment.order_id
@@ -124,6 +88,18 @@ receiptsRouter.post(
       : { data: null as any };
 
     const html = renderReceiptHtml({ business, payment, order, lead });
+
+    await logReceipt({
+      tenantId: ctx.tenantId,
+      paymentId: payment.id,
+      orderId: payment.order_id ?? null,
+      leadId: payment.lead_id ?? null,
+      orderRef: order?.order_ref ?? null,
+      amount: payment.amount,
+      currency: payment.currency || business?.currency || null,
+      htmlBody: html,
+      issuedBy: ctx.userId,
+    });
 
     await ctx.db.from('payments')
       .update({ receipt_sent_at: new Date().toISOString() })

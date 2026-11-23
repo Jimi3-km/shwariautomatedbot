@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { instagramConnectConfigured, metaConfig } from '../../config/meta.js';
@@ -8,9 +9,15 @@ import {
   exchangeForLongLivedToken,
   fetchProfile,
   sendInstagramMessage,
+  subscribeToMessages,
+  diagnoseInstagramAccess,
+  formatInstagramTrace,
   InstagramOAuthError,
+  type InstagramDiagnosis,
+  type TokenShape,
 } from '../../services/meta/instagram.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
+import { chunkText, withRetry, lastInboundAt, windowIsOpen, TEXT_LIMITS } from '../outbound.js';
 import {
   ProviderError,
   ProviderNotConfiguredError,
@@ -63,7 +70,7 @@ export const instagramProvider: ChannelProvider = {
     const a = this.availability();
     if (!a.available) throw new ProviderNotConfiguredError('Instagram', a.missing);
 
-    const state = createOAuthState({ provider: 'instagram', tenantId: ctx.tenantId, userId: ctx.userId });
+    const state = createOAuthState({ provider: 'instagram', tenantId: ctx.tenantId, userId: ctx.userId, returnTo: ctx.returnTo ?? null });
     // Connecting a channel comes back on its own callback, not the sign-in
     // one, so the redirect URI is passed explicitly through both legs.
     return {
@@ -82,47 +89,121 @@ export const instagramProvider: ChannelProvider = {
 
     let profile;
     let longLived;
+    let granted: string[] | null = null;
+    // Each step is named, because "it failed" is useless: the three steps fail
+    // for different reasons and need different fixes.
+    let step = 'exchange the sign-in code';
+    let shortToken: string | null = null;
+    let shape: TokenShape | undefined;
+    let diagnosis: InstagramDiagnosis | null = null;
     try {
       const shortLived = await exchangeCodeForToken(code, metaConfig.instagram.connectRedirectUri);
-      longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+      shortToken = shortLived.accessToken;
+      shape = shortLived.shape;
+      granted = shortLived.permissions ?? null;
+      step = 'get a long-lived token';
+      try {
+        longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+      } catch (e) {
+        // Ask again several ways with the same token. If one of them is
+        // answered, the connection goes ahead with it and the record says
+        // which; if none is, the record holds what each was told.
+        diagnosis = await diagnoseInstagramAccess(shortLived.accessToken);
+        if (!diagnosis.longLived) throw e;
+        longLived = diagnosis.longLived;
+        console.warn(
+          `[providers/instagram] the usual long-lived exchange was refused but ${diagnosis.longLived.via} worked: `
+          + formatInstagramTrace(shape, diagnosis.probes)
+        );
+      }
+      step = 'read the account';
       profile = await fetchProfile(longLived.accessToken);
     } catch (e) {
-      if (e instanceof InstagramOAuthError) {
-        console.error(`[providers/instagram] Meta error (${e.metaCode ?? 'n/a'}): ${e.message}`);
-      } else {
-        console.error('[providers/instagram] token exchange failed:', e);
+      const meta = e instanceof InstagramOAuthError
+        ? `Meta error ${e.metaCode ?? 'n/a'} (HTTP ${e.httpStatus ?? 'n/a'}): ${e.message}`
+        : e instanceof Error ? e.message : String(e);
+
+      // Instagram signed the person in and handed over a token, then refused
+      // to let this app use it. Meta gives the same answer for several causes
+      // (an account without a role on an app in Development mode, an account
+      // that is not Business or Creator, an app without approved access), so
+      // no cause is claimed here: the trace below is what tells them apart.
+      const refused = step !== 'exchange the sign-in code';
+      // The same few calls made several ways with the first token, so this one
+      // attempt says what Instagram refuses and how. No token is recorded.
+      if (refused && shortToken && !diagnosis) {
+        diagnosis = await diagnoseInstagramAccess(shortToken).catch(() => null);
+      }
+      const trace = refused ? formatInstagramTrace(shape, diagnosis?.probes ?? []) : '';
+      console.error(`[providers/instagram] could not ${step}: ${meta}${trace ? `; trace: ${trace}` : ''}`);
+      const grantedList = granted?.join(', ') || 'none reported';
+      if (refused) {
+        throw new ProviderError(
+          'Instagram signed you in but did not let this app use the account.',
+          {
+            status: 502, code: 'INSTAGRAM_ACCESS_REFUSED',
+            detail: `could not ${step}; ${meta}; granted: ${grantedList}; trace: ${trace}`,
+          }
+        );
       }
       throw new ProviderError(
         "Instagram couldn't be connected. Please try again.",
-        { status: 502, code: 'INSTAGRAM_EXCHANGE_FAILED' }
+        { status: 502, code: 'INSTAGRAM_EXCHANGE_FAILED', detail: `could not ${step}; ${meta}` }
       );
     }
 
-    // One Instagram account belongs to one workspace.
-    const { data: existing } = await serviceClient
-      .from('channels')
-      .select('id, tenant_id')
-      .eq('channel_type', 'instagram')
-      .eq('channel_account_id', profile.id)
-      .maybeSingle();
+    /**
+     * Webhooks identify the business by its professional account id, which is
+     * `user_id` on /me, not the app-scoped `id`. A channel keyed on the wrong
+     * one connects cleanly and then never matches an inbound DM.
+     */
+    const accountId = profile.professionalAccountId || profile.id;
 
-    if (existing && existing.tenant_id !== ctx.tenantId) {
-      throw new ProviderError('That Instagram account is already connected to another business.', { status: 409 });
+    // Without this the account is authorized but Meta sends us no messages.
+    // Not fatal: reconnecting retries it.
+    try {
+      await subscribeToMessages(longLived.accessToken);
+    } catch (e) {
+      console.warn(
+        '[providers/instagram] could not subscribe the account to message webhooks:',
+        e instanceof Error ? e.message : e
+      );
     }
+
+    // An account another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('instagram', [accountId, profile.id], ctx.tenantId);
+
+    // One Instagram account belongs to one workspace. Rows connected before
+    // the id fix are keyed on the app-scoped id, so both are looked for.
+    const { data: matches } = await serviceClient
+      .from('channels')
+      .select('id, tenant_id, channel_account_id')
+      .eq('channel_type', 'instagram')
+      .in('channel_account_id', Array.from(new Set([accountId, profile.id])));
+
+    const candidates = Array.isArray(matches) ? matches : [];
+    if (candidates.some((r) => r.tenant_id !== ctx.tenantId)) {
+      throw new ProviderError('That Instagram account is already connected to another business.', {
+        status: 409, code: 'ACCOUNT_IN_USE',
+      });
+    }
+    const existing = candidates.find((r) => r.channel_account_id === accountId) ?? candidates[0] ?? null;
 
     await storeToken({
       tenantId: ctx.tenantId,
       platform: 'instagram',
       accessToken: longLived.accessToken,
       expiresAt: longLived.expiresAt,
-      instagramUserId: profile.id,
+      instagramUserId: accountId,
       instagramUsername: profile.username,
+      // What was granted, so the Marketing page can say whether posting is allowed.
+      scopes: granted,
     });
 
     const row = {
       tenant_id: ctx.tenantId,
       channel_type: 'instagram' as const,
-      channel_account_id: profile.id,
+      channel_account_id: accountId,
       display_name: profile.username ? `@${profile.username}` : 'Instagram',
       // Points at meta_tokens rather than holding a credential itself.
       credentials_ref: `meta_tokens:${ctx.tenantId}:instagram`,
@@ -138,7 +219,13 @@ export const instagramProvider: ChannelProvider = {
 
     if (error || !data) {
       console.error('[providers/instagram] save failed', error);
-      throw new ProviderError("We couldn't save that connection. Please try again.", { status: 500 });
+      // Two businesses connecting the same account at once: the unique key decided.
+      if ((error as { code?: string } | null)?.code === '23505') {
+        throw new ProviderError('That Instagram account is already connected to another business.', {
+          status: 409, code: 'ACCOUNT_IN_USE',
+        });
+      }
+      throw new ProviderError("We couldn't save that connection. Please try again.", { status: 500, code: 'SAVE_FAILED' });
     }
 
     return { account: toAccount(data) };
@@ -190,16 +277,61 @@ export const instagramProvider: ChannelProvider = {
     }
   },
 
+  /**
+   * Instagram allows a reply only within 24 hours of the customer's last
+   * message, and has no template escape hatch the way WhatsApp does. A late
+   * message therefore fails up front with a readable reason.
+   */
   async sendMessage(_channelId, recipientId, text, ctx) {
     const token = await loadToken(ctx.tenantId, 'instagram');
     if (!token?.instagramUserId) {
       throw new ProviderError('Instagram is not connected.', { status: 409 });
     }
+    if (token.isExpired) {
+      throw new ProviderError(
+        'Instagram authorization has expired. Reconnect Instagram in Integrations.',
+        { status: 409, code: 'INSTAGRAM_REAUTH_REQUIRED' }
+      );
+    }
+    const igUserId = token.instagramUserId;
+    const accessToken = token.accessToken;
+
+    if (!windowIsOpen(await lastInboundAt(ctx.tenantId, 'instagram', recipientId))) {
+      throw new ProviderError(
+        "Instagram only allows messages within 24 hours of the customer's last message. This customer hasn't written in that time, so the message was not sent.",
+        { status: 409, code: 'OUTSIDE_24H_WINDOW' }
+      );
+    }
+
     try {
-      await sendInstagramMessage(token.accessToken, token.instagramUserId, recipientId, text);
+      for (const part of chunkText(text, TEXT_LIMITS.instagram)) {
+        await withRetry(() => sendInstagramMessage(accessToken, igUserId, recipientId, part));
+      }
     } catch (e) {
+      const detail = e instanceof Error ? e.message : undefined;
+      const code = e instanceof InstagramOAuthError ? e.metaCode : undefined;
+      const subcode = e instanceof InstagramOAuthError ? e.metaSubcode : undefined;
+
+      if (code === '190') {
+        throw new ProviderError(
+          'Instagram authorization has expired. Reconnect Instagram in Integrations.',
+          { status: 409, code: 'INSTAGRAM_REAUTH_REQUIRED', detail }
+        );
+      }
+      if (code === '10' || subcode === '2534022' || subcode === '2018278') {
+        throw new ProviderError(
+          "Instagram rejected the message because the customer hasn't written in the last 24 hours.",
+          { status: 409, code: 'OUTSIDE_24H_WINDOW', detail }
+        );
+      }
+      if (code === '4' || code === '613') {
+        throw new ProviderError(
+          'Instagram is limiting how fast we can send right now. Please try again shortly.',
+          { status: 429, code: 'INSTAGRAM_RATE_LIMITED', detail }
+        );
+      }
       throw new ProviderError("We couldn't send that message on Instagram. Please try again.", {
-        status: 502, detail: e instanceof Error ? e.message : undefined,
+        status: 502, code: 'INSTAGRAM_SEND_FAILED', detail,
       });
     }
   },

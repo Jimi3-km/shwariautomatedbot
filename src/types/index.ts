@@ -5,7 +5,7 @@
  */
 
 export type Role = 'owner' | 'admin' | 'member' | 'viewer';
-export type ChannelType = 'telegram' | 'whatsapp' | 'instagram' | 'webchat';
+export type ChannelType = 'telegram' | 'whatsapp' | 'instagram' | 'webchat' | 'facebook';
 export type ChannelStatus = 'active' | 'disabled';
 export type ConversationStatus = 'open' | 'closed';
 export type MessageSender = 'customer' | 'agent' | 'staff' | 'system';
@@ -46,13 +46,34 @@ export interface Tenant {
 export interface Membership {
   tenant_id: string;
   role: Role;
-  tenants?: { business_name: string } | null;
+  tenants?: { business_name: string; status?: string } | null;
 }
 
 export interface TenantUser {
   id: string;
   user_id: string;
   role: Role;
+  created_at: string;
+  email?: string | null;
+}
+
+export interface TeamInvitation {
+  id: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface ActivityEvent {
+  id: number;
+  actor_id: string;
+  actor_type: string;
+  actor_label: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -63,8 +84,12 @@ export interface Me {
     Tenant,
     | 'id' | 'business_name' | 'slug' | 'currency' | 'timezone' | 'agent_name'
     | 'order_prefix' | 'status' | 'business_category' | 'onboarding_completed_at'
-  > | null;
+  > & { agents_paused?: boolean; status_reason?: string | null } | null;
   memberships: Membership[];
+  /** Runs the platform. Decided by the server from the database. */
+  platform_admin?: boolean;
+  /** A platform admin working inside a business they do not belong to. */
+  support_mode?: boolean;
 }
 
 /** Channel as the browser sees it: secrets reduced to booleans. */
@@ -273,7 +298,13 @@ export interface Onboarding {
 // Setup wizard
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'whatsapp' | 'instagram' | 'webchat' | 'telegram';
+export type ProviderId = 'whatsapp' | 'instagram' | 'facebook' | 'webchat' | 'telegram';
+
+/** A Facebook Page the owner may choose to connect. Never carries a token. */
+export interface FacebookPageChoice {
+  id: string;
+  name: string;
+}
 
 /**
  * How a channel is connected: a redirect to the provider, a token we take, or
@@ -392,7 +423,7 @@ export interface SetupStatus {
 // Shwari
 // ---------------------------------------------------------------------------
 
-export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders';
+export type AgentRole = 'manager' | 'sales' | 'support' | 'booking' | 'orders' | 'marketing';
 export type AgentStatus = 'draft' | 'active' | 'disabled';
 
 export interface TeamMember {
@@ -546,7 +577,7 @@ export interface AttentionReport {
   waiting_on_a_person: Array<{ id: string; customer_name: string | null; last_message_at: string | null }>;
 }
 
-/** One of the five agents every business has. */
+/** One of the six agents every business has. */
 export interface AgentConfig {
   id: string;
   role: AgentRole;
@@ -556,6 +587,8 @@ export interface AgentConfig {
   objective: string;
   /** What it handles, in the owner's words. */
   responsibilities: string[];
+  /** The rules it cannot be talked out of. Absent on a server that predates them. */
+  rules?: string[];
   instructions: string;
   escalation: string;
   status: AgentStatus;
@@ -564,6 +597,15 @@ export interface AgentConfig {
   /** False for the manager: it directs the others, so its setup is fixed. */
   editable: boolean;
   updated_at: string;
+}
+
+/** A standing correction the team was taught. `role` null means every agent. */
+export interface AgentLesson {
+  id: string;
+  role: AgentRole | null;
+  lesson: string;
+  source: 'owner' | 'qa_label' | 'staff_reply';
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -599,4 +641,83 @@ export interface ServiceInput {
   duration_minutes?: number | null;
   booking_mode?: BookingMode;
   active?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Marketing: the content library and the posting calendar
+// ---------------------------------------------------------------------------
+export type ContentStatus = 'draft' | 'approved' | 'archived';
+export type PostStatus =
+  | 'proposed' | 'approved' | 'publishing' | 'published' | 'failed' | 'rejected' | 'cancelled';
+export type ApprovalMode = 'week' | 'each' | 'autopilot';
+/** Where a post goes out. */
+export type PostPlatform = 'instagram' | 'facebook';
+
+export interface ContentItem {
+  id: string;
+  media_url: string;
+  media_type: 'image' | 'video';
+  caption: string;
+  product_id: string | null;
+  service_id: string | null;
+  about: string | null;
+  platforms: string[];
+  status: ContentStatus;
+  max_uses: number | null;
+  times_used: number;
+  last_used_at: string | null;
+  created_at: string;
+  /** Why a person should read the caption before it is posted, if anything. */
+  review_reason?: string | null;
+  note?: string;
+}
+
+export interface ScheduledPost {
+  id: string;
+  content_item_id: string | null;
+  platform: string;
+  caption: string;
+  media_url: string;
+  media_type: 'image' | 'video';
+  about: string | null;
+  scheduled_for: string;
+  status: PostStatus;
+  needs_review_reason: string | null;
+  approved_at: string | null;
+  published_at: string | null;
+  external_permalink: string | null;
+  failure_reason: string | null;
+  week_start: string | null;
+}
+
+export interface PostingSlot { day: number; time: string }
+
+export interface PostingSettings {
+  approval_mode: ApprovalMode;
+  paused: boolean;
+  /** True when the Marketing agent is switched off on the AI team page: nothing is planned or published. */
+  agent_off?: boolean;
+  slots: PostingSlot[];
+}
+
+export interface PostingStatus {
+  settings: PostingSettings;
+  instagram: { connected: boolean; username: string | null; can_publish: boolean | null; expired: boolean };
+  /** The connected Facebook Page, if any. Absent on a server that predates it. */
+  facebook?: { connected: boolean; page_name: string | null; can_publish: boolean | null; expired: boolean };
+  /** Where the calendar posts to: the platforms that are connected. */
+  platforms?: PostPlatform[];
+  timezone: string | null;
+}
+
+export interface WeekPlan {
+  week_start: string;
+  mode: ApprovalMode;
+  paused: boolean;
+  proposed: ScheduledPost[];
+  platforms?: PostPlatform[];
+  already_planned: number;
+  unfilled: Array<{ scheduled_for: string; when: string; why: string; platform?: PostPlatform }>;
+  library: { approved: number; usable: number };
+  note?: string;
 }

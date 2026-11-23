@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireWrite, handler } from '../auth.js';
+import { searchTerm } from './refs.js';
 import { serviceClient } from '../supabase.js';
 import { getProvider, ProviderError } from '../channels/providers/index.js';
 
@@ -35,7 +36,7 @@ inboxRouter.get(
     if (req.query.handled_by === 'ai') q = q.eq('ai_enabled', true);
     if (req.query.handled_by === 'human') q = q.eq('ai_enabled', false);
     if (req.query.search) {
-      const s = String(req.query.search).replace(/[%,()]/g, '');
+      const s = searchTerm(req.query.search);
       q = q.or(`customer_name.ilike.%${s}%,customer_id.ilike.%${s}%,last_message_preview.ilike.%${s}%`);
     }
 
@@ -232,7 +233,7 @@ inboxRouter.get(
     if (req.query.stage) q = q.eq('stage', String(req.query.stage));
     if (req.query.channel_type) q = q.eq('channel_type', String(req.query.channel_type));
     if (req.query.search) {
-      const s = String(req.query.search).replace(/[%,()]/g, '');
+      const s = searchTerm(req.query.search);
       q = q.or(`customer_name.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%,customer_id.ilike.%${s}%`);
     }
     const { data, error } = await q;

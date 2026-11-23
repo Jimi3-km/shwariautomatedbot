@@ -222,13 +222,123 @@ export function parseInstagram(body: unknown): ParsedEvent[] {
   return events;
 }
 
+// ---------------------------------------------------------------------------
+// Facebook Page (Messenger)
+// ---------------------------------------------------------------------------
+
+function messengerMedia(message: Json): InboundMedia | null {
+  for (const attachmentRaw of asArray(message.attachments)) {
+    const attachment = asObject(attachmentRaw);
+    if (!attachment) continue;
+    const type = asString(attachment.type) ?? 'unknown';
+    const payload = asObject(attachment.payload);
+    const kind: InboundMedia['kind'] =
+      type === 'image' || type === 'video' || type === 'audio' ? type
+        : type === 'file' ? 'document'
+        : 'unknown';
+    return {
+      kind,
+      // Messenger gives an address for the file rather than a media id.
+      mediaId: asString(payload?.url) ?? asString(payload?.sticker_id),
+      mimeType: null,
+      caption: null,
+    };
+  }
+  return null;
+}
+
+/**
+ * Messenger events for a Page: object "page", one entry per Page, messages
+ * under entry[].messaging[].
+ *
+ * The same webhook also carries `feed` changes (comments and reactions on the
+ * Page's posts) under entry[].changes[]. Those are not messages and are not
+ * handled yet, so they produce nothing here - quietly, since they are expected.
+ */
+export function parseFacebook(body: unknown): ParsedEvent[] {
+  const root = asObject(body);
+  if (!root || root.object !== 'page') return [];
+
+  const events: ParsedEvent[] = [];
+
+  for (const entryRaw of asArray(root.entry)) {
+    const entry = asObject(entryRaw);
+    if (!entry) continue;
+
+    // entry.id is the Page id - the value stored as channel_account_id when
+    // the Page was connected.
+    const accountId = asString(entry.id);
+    if (!accountId) continue;
+
+    const messages: ParsedMessage[] = [];
+
+    for (const eventRaw of asArray(entry.messaging)) {
+      const event = asObject(eventRaw);
+      if (!event) continue;
+
+      const customerId = asString(asObject(event.sender)?.id);
+      if (!customerId) continue;
+
+      // What the Page itself sent comes back on this webhook as an echo, with
+      // the Page as the sender. Dropping it stops the agent answering itself.
+      if (customerId === accountId) continue;
+
+      const message = asObject(event.message);
+      if (message) {
+        if (message.is_echo === true || message.is_deleted === true) continue;
+
+        const messageId = asString(message.mid);
+        if (!messageId) continue;
+
+        const media = messengerMedia(message);
+        const text = asString(message.text);
+        if (!text && !media) continue;
+
+        messages.push({
+          customerId,
+          // The event carries no name; it is looked up from the profile later.
+          customerName: null,
+          messageId,
+          text,
+          media,
+          timestamp: toIso(event.timestamp, 'milliseconds'),
+        });
+        continue;
+      }
+
+      // A tapped button ("Get started", a menu item). The label is what the
+      // person said, so it is read as their message.
+      const postback = asObject(event.postback);
+      if (postback) {
+        const text = asString(postback.title) ?? asString(postback.payload);
+        if (!text) continue;
+        messages.push({
+          customerId,
+          customerName: null,
+          // Older deliveries carry no mid; sender and time identify the tap.
+          messageId: asString(postback.mid) ?? `postback:${customerId}:${asString(event.timestamp) ?? ''}`,
+          text,
+          media: null,
+          timestamp: toIso(event.timestamp, 'milliseconds'),
+        });
+      }
+      // Delivery and read receipts, reactions and the rest carry nothing to answer.
+    }
+
+    if (messages.length) events.push({ accountId, messages });
+  }
+
+  return events;
+}
+
 /** Dispatch on the payload's own `object` field. */
 export function parseMetaWebhook(body: unknown): {
-  provider: 'whatsapp' | 'instagram' | null;
+  provider: 'whatsapp' | 'instagram' | 'facebook' | null;
   events: ParsedEvent[];
 } {
   const object = asObject(body)?.object;
   if (object === 'whatsapp_business_account') return { provider: 'whatsapp', events: parseWhatsApp(body) };
   if (object === 'instagram') return { provider: 'instagram', events: parseInstagram(body) };
+  if (object === 'page') return { provider: 'facebook', events: parseFacebook(body) };
   return { provider: null, events: [] };
 }

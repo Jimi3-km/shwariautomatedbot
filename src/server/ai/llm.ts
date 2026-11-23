@@ -84,18 +84,53 @@ export function llmConfigured(): { configured: boolean; missing: string[] } {
 
 export type ModelProfile = 'primary' | 'fast' | 'fallback';
 
+/**
+ * Is the operator allowed to point the agents at a different model?
+ *
+ * Off by default. Every agent runs on Nemotron: the model variables in the
+ * environment had drifted to an id the provider retired, the agents fell back
+ * to whatever substitute answered, and the quality of their tool use fell with
+ * it. A stale variable can no longer do that. To run another model on purpose,
+ * set SHWARI_ALLOW_MODEL_OVERRIDE=on alongside the model variable.
+ */
+function modelOverrideAllowed(): boolean {
+  return /^(1|on|true|yes)$/i.test(process.env.SHWARI_ALLOW_MODEL_OVERRIDE ?? '');
+}
+
 export function resolveModel(profile: ModelProfile = 'primary'): string {
+  if (!modelOverrideAllowed()) return DEFAULT_MODEL;
+  const env = (name: string) => (process.env[name] ?? '').trim();
   if (profile === 'fast') {
-    return process.env.SHWARI_FAST_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+    return env('SHWARI_FAST_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
   }
   if (profile === 'fallback') {
-    return process.env.SHWARI_FALLBACK_MODEL || process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+    return env('SHWARI_FALLBACK_MODEL') || env('SHWARI_PRIMARY_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
   }
-  return process.env.SHWARI_PRIMARY_MODEL || process.env.SHWARI_MODEL || DEFAULT_MODEL;
+  return env('SHWARI_PRIMARY_MODEL') || env('SHWARI_MODEL') || DEFAULT_MODEL;
 }
 
 export function llmModel(profile: ModelProfile = 'primary'): string {
   return resolveModel(profile);
+}
+
+/**
+ * Models a tenant's "AI Agent" settings may select.
+ *
+ * The setting is free text in the database and reachable by anyone who can
+ * edit it, so it is honoured only when the operator listed the model here or
+ * it is one the server already runs. Anything else is ignored rather than
+ * billed.
+ */
+export function allowedModel(requested: string | null | undefined): string | null {
+  const model = (requested ?? '').trim();
+  if (!model) return null;
+  const allow = new Set(
+    [
+      ...(process.env.SHWARI_ALLOWED_MODELS ?? '').split(','),
+      resolveModel('primary'), resolveModel('fast'), resolveModel('fallback'),
+    ].map((m) => m.trim()).filter(Boolean)
+  );
+  return allow.has(model) ? model : null;
 }
 
 function baseUrl(): string {
@@ -127,6 +162,11 @@ function toWire(m: ChatMessage): Record<string, unknown> {
 }
 
 export interface CompleteOptions {
+  /**
+   * 'required' makes the model return a tool call rather than prose. Used when
+   * it has just announced an action instead of taking it.
+   */
+  toolChoice?: 'auto' | 'required';
   messages: ChatMessage[];
   tools?: ToolDefinition[];
   temperature?: number;
@@ -135,6 +175,12 @@ export interface CompleteOptions {
   timeoutMs?: number;
   /** Targeted model profile. Defaults to 'primary'. */
   profile?: ModelProfile;
+  /** Force reasoning on or off for this call, whatever SHWARI_THINKING says. */
+  thinking?: boolean;
+  /** An explicit model id, overriding the profile. Callers must have allowlisted it. */
+  model?: string;
+  /** Epoch ms after which the whole turn has run out of time; caps this call's timeout. */
+  deadlineAt?: number;
 }
 
 /**
@@ -146,15 +192,91 @@ export interface CompleteOptions {
  */
 export async function complete(opts: CompleteOptions): Promise<Completion> {
   const profile = opts.profile ?? 'primary';
+  const configured = (opts.model?.trim() || resolveModel(profile)).trim();
+  const model = retiredModels.get(configured) ?? configured;
   try {
-    return await executeCompletion(opts, profile);
+    return await executeCompletion(opts, model);
   } catch (err) {
-    if (profile !== 'fallback' && err instanceof LlmError && (err.status >= 500 || err.status === 429)) {
-      console.warn(`[llm] ${profile} model failed with HTTP ${err.status}; retrying with fallback model...`);
-      return await executeCompletion(opts, 'fallback');
+    // Not every hosted model accepts a forced tool call. One that refuses the
+    // request is asked again the ordinary way rather than failing the turn.
+    if (opts.toolChoice === 'required' && err instanceof LlmError && (err.status === 400 || err.status === 422)) {
+      return complete({ ...opts, toolChoice: undefined });
     }
-    throw err;
+    // The provider retires hosted models: the id that worked last month starts
+    // answering 404 or 410, and every turn fails until someone edits the
+    // environment. Rather than go dark, move to a model that is still served
+    // and remember the substitution for the life of this process.
+    if (err instanceof LlmError && (err.status === 404 || err.status === 410)) {
+      const tried = new Set([model]);
+      for (const candidate of substituteModels()) {
+        if (tried.has(candidate)) continue;
+        tried.add(candidate);
+        if (opts.deadlineAt && opts.deadlineAt - Date.now() < 3_000) break;
+        try {
+          const result = await executeCompletion(opts, candidate);
+          retiredModels.set(configured, candidate);
+          console.error(
+            `[llm] model "${configured}" is no longer served (HTTP ${err.status}); using "${candidate}" instead. ` +
+              'Update SHWARI_MODEL / SHWARI_PRIMARY_MODEL / SHWARI_FAST_MODEL.'
+          );
+          return result;
+        } catch (e) {
+          if (!(e instanceof LlmError && (e.status === 404 || e.status === 410))) throw e;
+        }
+      }
+      throw new LlmError(
+        `The configured model "${configured}" is no longer served by the provider, and no substitute answered`,
+        err.status
+      );
+    }
+
+    const retryable = err instanceof LlmError && (err.status >= 500 || err.status === 429);
+    if (!retryable || profile === 'fallback') throw err;
+
+    const fallback = resolveModel('fallback');
+    const rateLimited = (err as LlmError).status === 429;
+    const timedOut = (err as LlmError).status === 504;
+
+    // Retrying the very same model only makes sense when it was rate limited,
+    // and then only after a pause. A timeout on the same model would just
+    // spend the caller's whole budget twice.
+    if (fallback === model && (!rateLimited || timedOut)) throw err;
+    if (opts.deadlineAt && opts.deadlineAt - Date.now() < 3_000) throw err;
+
+    if (rateLimited) await sleep(Math.min(RATE_LIMIT_BACKOFF_MS, remaining(opts.deadlineAt) / 2));
+    console.warn(`[llm] ${model} failed with HTTP ${(err as LlmError).status}; retrying with ${fallback}`);
+    return await executeCompletion(opts, fallback);
   }
+}
+
+/** Configured model id → the substitute that answered after it was retired. */
+const retiredModels = new Map<string, string>();
+
+/**
+ * Models to try, in order, when the configured one has been retired: the
+ * operator's own fallback first, then ids the default provider serves.
+ */
+function substituteModels(): string[] {
+  return [
+    // Nemotron first: a retired override should land on the model the agents
+    // are built and tested against, not on whatever else happens to answer.
+    DEFAULT_MODEL,
+    modelOverrideAllowed() ? process.env.SHWARI_FALLBACK_MODEL : '',
+    'moonshotai/kimi-k3.1-pro',
+    'nvidia/nemotron-3.5-lightning-30b-a3b',
+  ]
+    .map((m) => (m ?? '').trim())
+    .filter(Boolean);
+}
+
+const RATE_LIMIT_BACKOFF_MS =parseInt(process.env.SHWARI_RATE_LIMIT_BACKOFF_MS || '1500', 10);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function remaining(deadlineAt: number | undefined): number {
+  return deadlineAt ? Math.max(0, deadlineAt - Date.now()) : Number.MAX_SAFE_INTEGER;
 }
 
 /**
@@ -171,32 +293,29 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   text = text.replace(/\?{2,}/g, '?');
   text = text.replace(/\.{4,}/g, '...');
 
-  // 2. Collapse repetitive identical sentences / phrases (autoregressive loops)
-  const sentences = text.split(/(?<=[.?!])\s+/);
-  const dedupedSentences: string[] = [];
-  for (const s of sentences) {
-    const trimmed = s.trim();
-    if (!trimmed) continue;
-    // Skip if identical to the sentence right before it
-    if (
-      dedupedSentences.length > 0 &&
-      dedupedSentences[dedupedSentences.length - 1].toLowerCase() === trimmed.toLowerCase()
-    ) {
-      continue;
+  // 2. Collapse repetitive identical sentences (autoregressive loops), one
+  //    line at a time. Line breaks are the reply's structure - bullets, steps,
+  //    paragraphs - so they are never joined away; only a sentence that repeats
+  //    the one immediately before it on the same line is dropped.
+  const lines = text.split(/\r?\n/).map((line) => {
+    const sentences = line.trim().split(/(?<=[.?!])[ \t]+/);
+    const kept: string[] = [];
+    for (const s of sentences) {
+      const trimmed = s.trim();
+      if (!trimmed) continue;
+      if (kept.length > 0 && kept[kept.length - 1].toLowerCase() === trimmed.toLowerCase()) continue;
+      kept.push(trimmed);
     }
-    dedupedSentences.push(trimmed);
-  }
-  text = dedupedSentences.join(' ');
+    return kept.join(' ');
+  });
 
-  // 3. Collapse repetitive identical lines
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // 3. Collapse repetitive identical lines, and runs of blank lines to one.
   const dedupedLines: string[] = [];
   for (const line of lines) {
-    if (
-      dedupedLines.length > 0 &&
-      dedupedLines[dedupedLines.length - 1].toLowerCase() === line.toLowerCase()
-    ) {
-      continue;
+    const previous = dedupedLines[dedupedLines.length - 1];
+    if (previous !== undefined) {
+      if (!line && !previous) continue;
+      if (line && previous.toLowerCase() === line.toLowerCase()) continue;
     }
     dedupedLines.push(line);
   }
@@ -208,12 +327,83 @@ export function sanitizeCompletionText(raw: string | null): string | null {
   return text.trim() || null;
 }
 
-async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): Promise<Completion> {
+export function looksLikeTextToolCall(text: string): boolean {
+  return /<\/?tool_call>|<function=[\w-]+>|<\|tool_call\|>|<parameter=[\w-]+>/i.test(text);
+}
+
+function looseValue(raw: string): unknown {
+  const v = raw.trim();
+  if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
+  if (/^(true|false)$/i.test(v)) return v.toLowerCase() === 'true';
+  if (/^[\[{]/.test(v)) {
+    try { return JSON.parse(v); } catch { /* keep it as text */ }
+  }
+  return v;
+}
+
+/**
+ * Pull tool calls out of text, in the two spellings models use:
+ *
+ *   <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+ *   <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ *
+ * Returns the calls and whatever prose was left once the markup is removed.
+ */
+export function extractTextToolCalls(text: string): { calls: ToolCall[]; rest: string } {
+  const calls: ToolCall[] = [];
+  let n = 0;
+
+  const fn = /<function=([\w-]+)>([\s\S]*?)(?:<\/function>|$)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = fn.exec(text))) {
+    const args: Record<string, unknown> = {};
+    const param = /<parameter=([\w-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|$)/gi;
+    let p: RegExpExecArray | null;
+    while ((p = param.exec(m[2]))) args[p[1]] = looseValue(p[2]);
+    calls.push({ id: `text_call_${n++}`, name: m[1], argumentsJson: JSON.stringify(args) });
+  }
+
+  if (!calls.length) {
+    const block = /<tool_call>\s*(\{[\s\S]*?\})\s*(?:<\/tool_call>|$)/gi;
+    while ((m = block.exec(text))) {
+      try {
+        const parsed = JSON.parse(m[1]);
+        const name = parsed?.name ?? parsed?.function?.name;
+        const args = parsed?.arguments ?? parsed?.parameters ?? parsed?.function?.arguments ?? {};
+        if (typeof name === 'string' && name) {
+          calls.push({
+            id: `text_call_${n++}`,
+            name,
+            argumentsJson: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+          });
+        }
+      } catch { /* not a call we can read */ }
+    }
+  }
+
+  const rest = text
+    .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi, ' ')
+    .replace(/<function=[\w-]+>[\s\S]*?(?:<\/function>|$)/gi, ' ')
+    .replace(/<\/?(?:tool_call|function|parameter)[^>]*>/gi, ' ')
+    .replace(/<\|tool_call\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  return { calls, rest };
+}
+
+async function executeCompletion(opts: CompleteOptions, model: string): Promise<Completion> {
   const apiKey = process.env.SHWARI_API_KEY?.trim();
   if (!apiKey) throw new LlmNotConfiguredError();
 
+  // One call never outlives the turn it belongs to. The per-call ceiling is
+  // sized to fit inside a serverless function's lifetime with room to reply.
+  const perCall = opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '30000', 10);
+  const budget = Math.min(perCall, remaining(opts.deadlineAt));
+  if (budget < 1_000) throw new LlmError('The model took too long to answer', 504);
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? parseInt(process.env.SHWARI_TIMEOUT_MS || '90000', 10));
+  const timer = setTimeout(() => controller.abort(), budget);
 
   let res: Response;
   try {
@@ -225,7 +415,7 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: resolveModel(profile),
+        model,
         messages: opts.messages.map(toWire),
         temperature: opts.temperature ?? 0.3,
         
@@ -236,7 +426,7 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
          * Sending it 
          * keeps one code path for both.
          */
-        chat_template_kwargs: { enable_thinking: thinkingEnabled() },
+        chat_template_kwargs: { enable_thinking: opts.thinking ?? thinkingEnabled() },
         ...(opts.tools?.length
           ? {
               tools: opts.tools.map((t) => ({
@@ -247,7 +437,7 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
                   parameters: t.parameters,
                 },
               })),
-              tool_choice: 'auto',
+              tool_choice: opts.toolChoice ?? 'auto',
             }
           : {}),
       }),
@@ -291,9 +481,24 @@ async function executeCompletion(opts: CompleteOptions, profile: ModelProfile): 
    * owner should ever read, so it is dropped here rather than downstream —
    * there is no path by which it can reach a reply.
    */
-  const rawText = typeof message.content === 'string' && message.content.trim()
+  let rawText = typeof message.content === 'string' && message.content.trim()
     ? message.content.trim()
     : null;
+
+  /**
+   * Some models write a tool call into the reply as text instead of returning
+   * it as a call. Left alone, that markup is what the owner reads: a block of
+   * <tool_call> tags where an answer should be, and nothing done. It is read
+   * here as the call it was meant to be, and never survives as text.
+   */
+  if (rawText && looksLikeTextToolCall(rawText)) {
+    const extracted = extractTextToolCalls(rawText);
+    if (!toolCalls.length && opts.tools?.length) {
+      const known = new Set(opts.tools.map((t) => t.name));
+      toolCalls.push(...extracted.calls.filter((c) => known.has(c.name)));
+    }
+    rawText = extracted.rest || null;
+  }
   const text = sanitizeCompletionText(rawText);
 
   /**

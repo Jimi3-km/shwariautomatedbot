@@ -46,6 +46,18 @@ const COPY: Partial<Record<ProviderId, Copy>> = {
       'We only get permission to read and reply to your direct messages. We never see your password, and we cannot post to your account.',
     cta: 'Continue to Instagram',
   },
+  facebook: {
+    title: 'Connect a Facebook Page',
+    intro: "We'll hand you to Facebook to approve access. It takes about a minute.",
+    steps: [
+      'Sign in to Facebook as someone who manages the Page',
+      'Tick the Page this business uses when Facebook asks which Pages to share',
+      "You'll come straight back here. If you shared more than one Page, you'll choose which one to use",
+    ],
+    reassurance:
+      "Only a Page can be connected, never your personal profile. We get permission to answer the Page's messages and publish the posts you approve. We never see your password or your own timeline, and we never post anything you haven't approved.",
+    cta: 'Continue to Facebook',
+  },
 };
 
 export function ConnectChannelDialog({

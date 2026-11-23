@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { META_GRAPH_URL, META_GRAPH_VERSION, metaConfig } from '../../config/meta.js';
 
 /**
@@ -17,15 +18,47 @@ import { META_GRAPH_URL, META_GRAPH_VERSION, metaConfig } from '../../config/met
 
 export class WhatsAppError extends Error {
   readonly metaCode?: string;
-  constructor(message: string, metaCode?: string) {
+  readonly httpStatus?: number;
+  constructor(message: string, metaCode?: string, httpStatus?: number) {
     super(message);
     this.name = 'WhatsAppError';
     this.metaCode = metaCode;
+    this.httpStatus = httpStatus;
   }
 }
 
+/**
+ * Sign a Graph call with the app secret.
+ *
+ * A Meta app can be set to "Require app secret", after which every call made
+ * with a user or business token is refused unless it carries an
+ * appsecret_proof: an HMAC of the token, keyed with the app secret. Sending it
+ * is harmless when the setting is off and necessary when it is on, so it is
+ * always sent. App tokens ("id|secret") already contain the secret and are
+ * left alone.
+ */
+export function withAppSecretProof(path: string, init?: RequestInit): string {
+  const secret = metaConfig.appSecret;
+  if (!secret) return path;
+
+  const [base, query = ''] = path.split('?');
+  const params = new URLSearchParams(query);
+  if (params.has('appsecret_proof')) return path;
+
+  let token = params.get('access_token') ?? '';
+  if (!token) {
+    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const auth = headers.get('authorization') ?? '';
+    if (/^bearer\s+/i.test(auth)) token = auth.replace(/^bearer\s+/i, '').trim();
+  }
+  if (!token || token.includes('|')) return path;
+
+  params.set('appsecret_proof', crypto.createHmac('sha256', secret).update(token).digest('hex'));
+  return `${base}?${params}`;
+}
+
 async function graph<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${META_GRAPH_URL}${path}`, init);
+  const res = await fetch(`${META_GRAPH_URL}${withAppSecretProof(path, init)}`, init);
   if (!res.ok) {
     let detail = `Graph API returned HTTP ${res.status}`;
     let code: string | undefined;
@@ -36,7 +69,7 @@ async function graph<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error body */
     }
-    throw new WhatsAppError(detail, code);
+    throw new WhatsAppError(detail, code, res.status);
   }
   return (await res.json()) as T;
 }
@@ -65,11 +98,39 @@ const EMBEDDED_SIGNUP_EXTRAS = {
   featureType: 'whatsapp_business_app_onboarding',
 } as const;
 
+/** The extras for the flow the operator chose; see metaConfig.whatsapp.featureType. */
+function signupExtras(): Record<string, string> {
+  const chosen = metaConfig.whatsapp.featureType.toLowerCase();
+  if (!chosen) return { ...EMBEDDED_SIGNUP_EXTRAS };
+  const { featureType: _coexistence, ...plain } = EMBEDDED_SIGNUP_EXTRAS;
+  return chosen === 'standard' || chosen === 'none' ? plain : { ...plain, featureType: metaConfig.whatsapp.featureType };
+}
+
+/** Facebook's sign-in dialog, which is what returns a code to our callback. */
+export const SIGNUP_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`;
+
 export function buildEmbeddedSignupUrl(state: string): string {
+  if (metaConfig.whatsapp.flow === 'dialog') {
+    const chosen = metaConfig.whatsapp.featureType.toLowerCase();
+    const extras: Record<string, unknown> = { setup: {}, sessionInfoVersion: '3' };
+    if (chosen && chosen !== 'standard' && chosen !== 'none') extras.featureType = metaConfig.whatsapp.featureType;
+    const dialog = new URLSearchParams({
+      client_id: metaConfig.appId,
+      config_id: metaConfig.whatsapp.configId,
+      response_type: 'code',
+      // Required with a configuration id, or the dialog ignores response_type.
+      override_default_response_type: 'true',
+      redirect_uri: metaConfig.whatsapp.redirectUri,
+      extras: JSON.stringify(extras),
+      state,
+    });
+    return `${SIGNUP_DIALOG_URL}?${dialog}`;
+  }
+
   const params = new URLSearchParams({
     app_id: metaConfig.appId,
     config_id: metaConfig.whatsapp.configId,
-    extras: JSON.stringify(EMBEDDED_SIGNUP_EXTRAS),
+    extras: JSON.stringify(signupExtras()),
     redirect_uri: metaConfig.whatsapp.redirectUri,
     state,
   });
@@ -145,12 +206,51 @@ export async function discoverWabaId(accessToken: string): Promise<string> {
   const json = await graph<DebugTokenResponse>(`/debug_token?${params}`);
 
   const scopes = json.data?.granular_scopes ?? [];
-  const waba = scopes.find((s) => s.scope === 'whatsapp_business_management')
-    ?? scopes.find((s) => s.scope === 'whatsapp_business_messaging');
-  const id = waba?.target_ids?.[0];
+  // What was granted, by name and count only: enough to diagnose a failed
+  // signup from the log without recording an id or a token.
+  console.log(
+    '[whatsapp] granted:',
+    scopes.map((s) => `${s.scope}(${s.target_ids?.length ?? 'all'})`).join(', ') || 'no granular scopes'
+  );
 
-  if (!id) throw new WhatsAppError('No WhatsApp Business account was granted');
-  return id;
+  // 1. The account named on a WhatsApp permission.
+  const direct = scopes
+    .filter((s) => s.scope.startsWith('whatsapp_business'))
+    .flatMap((s) => s.target_ids ?? [])[0];
+  if (direct) return direct;
+
+  // 2. The permission was granted without naming an account (Meta does this
+  //    when access covers everything the person chose). Find the account
+  //    through the businesses the token can see.
+  const businessIds = new Set<string>(
+    scopes.filter((s) => s.scope === 'business_management').flatMap((s) => s.target_ids ?? [])
+  );
+  try {
+    const mine = await graph<{ data?: Array<{ id: string }> }>(
+      `/me/businesses?${new URLSearchParams({ fields: 'id', access_token: accessToken })}`
+    );
+    for (const b of mine.data ?? []) businessIds.add(b.id);
+  } catch { /* the token may not be allowed to list businesses */ }
+
+  for (const businessId of businessIds) {
+    for (const edge of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const found = await graph<{ data?: Array<{ id: string }> }>(
+          `/${businessId}/${edge}?${new URLSearchParams({ fields: 'id', access_token: accessToken })}`
+        );
+        const id = found.data?.[0]?.id;
+        if (id) return id;
+      } catch { /* try the next edge */ }
+    }
+  }
+
+  const hasWhatsApp = scopes.some((s) => s.scope.startsWith('whatsapp_business'));
+  throw new WhatsAppError(
+    hasWhatsApp
+      ? 'A WhatsApp permission was granted but no WhatsApp Business account could be found on it'
+      : 'The sign-in did not grant any WhatsApp permission',
+    hasWhatsApp ? 'NO_WABA' : 'NO_WHATSAPP_PERMISSION'
+  );
 }
 
 export interface WhatsAppPhoneNumber {
@@ -160,22 +260,82 @@ export interface WhatsAppPhoneNumber {
   qualityRating: string | null;
 }
 
+export interface WhatsAppNumberState {
+  /** CONNECTED once the number is live on the Cloud API. */
+  status: string | null;
+  /** CLOUD_API once registered; NOT_APPLICABLE or ON_PREMISE otherwise. */
+  platformType: string | null;
+  codeVerificationStatus: string | null;
+  live: boolean;
+}
+
+/** Is this number actually a working WhatsApp account yet? */
+export async function getNumberState(phoneNumberId: string, accessToken: string): Promise<WhatsAppNumberState> {
+  const params = new URLSearchParams({
+    fields: 'status,platform_type,code_verification_status',
+    access_token: accessToken,
+  });
+  const json = await graph<{ status?: string; platform_type?: string; code_verification_status?: string }>(
+    `/${phoneNumberId}?${params}`
+  );
+  const status = json.status ?? null;
+  const platformType = json.platform_type ?? null;
+  return {
+    status,
+    platformType,
+    codeVerificationStatus: json.code_verification_status ?? null,
+    live: platformType === 'CLOUD_API' && (status === 'CONNECTED' || status === null),
+  };
+}
+
+/**
+ * The six-digit PIN the number is registered with.
+ *
+ * WhatsApp asks for one when a number is registered and again if it is ever
+ * registered anew. It is derived from the server's encryption key and the
+ * number's id, so it is the same every time without being stored anywhere.
+ */
+export function registrationPin(phoneNumberId: string): string {
+  const key = metaConfig.tokenEncryptionKey || metaConfig.appSecret || 'unconfigured';
+  const digest = crypto.createHmac('sha256', key).update(`wa-pin:${phoneNumberId}`).digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+}
+
+/**
+ * Register the number with the Cloud API.
+ *
+ * Signing up adds the number to the business's account; it does not make it a
+ * live WhatsApp account. Until this call succeeds the number cannot send or
+ * receive anything and does not show up as being on WhatsApp at all.
+ */
+export async function registerNumber(phoneNumberId: string, accessToken: string): Promise<void> {
+  await graph(`/${phoneNumberId}/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ messaging_product: 'whatsapp', pin: registrationPin(phoneNumberId) }),
+    signal: AbortSignal.timeout(20_000),
+  });
+}
+
 export async function listPhoneNumbers(
   wabaId: string,
   accessToken: string
 ): Promise<WhatsAppPhoneNumber[]> {
-  const params = new URLSearchParams({
-    fields: 'id,display_phone_number,verified_name,quality_rating',
-    access_token: accessToken,
-  });
-  const json = await graph<{
-    data?: Array<{
-      id: string;
-      display_phone_number: string;
-      verified_name?: string;
-      quality_rating?: string;
-    }>;
-  }>(`/${wabaId}/phone_numbers?${params}`);
+  type Row = { id: string; display_phone_number: string; verified_name?: string; quality_rating?: string };
+  const read = (fields: string) =>
+    graph<{ data?: Row[] }>(
+      `/${wabaId}/phone_numbers?${new URLSearchParams({ fields, access_token: accessToken })}`
+    );
+
+  let json: { data?: Row[] };
+  try {
+    json = await read('id,display_phone_number,verified_name,quality_rating');
+  } catch (e) {
+    // A number that has only just been added can refuse some fields. The id
+    // and the number itself are all the connection needs.
+    if (!(e instanceof WhatsAppError)) throw e;
+    json = await read('id,display_phone_number');
+  }
 
   return (json.data ?? []).map((p) => ({
     id: p.id,
@@ -223,5 +383,121 @@ export async function sendWhatsAppMessage(
       type: 'text',
       text: { body: text },
     }),
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+
+/**
+ * A pre-approved template message — the only kind WhatsApp accepts once the
+ * 24-hour customer-service window has closed.
+ *
+ * The template is expected to have exactly one body variable, {{1}}, which
+ * carries the text. Template parameters may not contain newlines, tabs or runs
+ * of more than four spaces, and are capped at 1024 characters, so the text is
+ * flattened to fit.
+ */
+export async function sendWhatsAppTemplate(
+  accessToken: string,
+  phoneNumberId: string,
+  to: string,
+  template: { name: string; language: string },
+  bodyText: string
+): Promise<void> {
+  const param = bodyText.replace(/\s+/g, ' ').trim().slice(0, 1024);
+  await graph(`/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }],
+      },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Message templates
+// ---------------------------------------------------------------------------
+
+export interface WhatsAppTemplateState {
+  /** APPROVED, PENDING, REJECTED, PAUSED, DISABLED; null when it does not exist. */
+  status: string | null;
+  language: string | null;
+}
+
+/** Does a template with this name exist on the account, and is it approved? */
+export async function getTemplateState(
+  wabaId: string,
+  accessToken: string,
+  name: string
+): Promise<WhatsAppTemplateState> {
+  const json = await graph<{ data?: Array<{ name: string; status?: string; language?: string }> }>(
+    `/${wabaId}/message_templates?${new URLSearchParams({ name, fields: 'name,status,language', access_token: accessToken })}`,
+    { signal: AbortSignal.timeout(12_000) }
+  );
+  // The name filter is a "contains" match, so pick the exact one.
+  const exact = (json.data ?? []).filter((t) => t.name === name);
+  const best = exact.find((t) => t.status === 'APPROVED') ?? exact[0];
+  return { status: best?.status ?? null, language: best?.language ?? null };
+}
+
+/**
+ * Ask WhatsApp to approve a utility template with a text body.
+ *
+ * `body` uses {{1}}, {{2}}… placeholders and `examples` gives one sample value
+ * for each, which WhatsApp requires in order to review it.
+ */
+export async function createTextTemplate(
+  wabaId: string,
+  accessToken: string,
+  template: { name: string; language: string; body: string; examples: string[] }
+): Promise<{ status: string | null }> {
+  const json = await graph<{ id?: string; status?: string }>(`/${wabaId}/message_templates`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({
+      name: template.name,
+      language: template.language,
+      category: 'UTILITY',
+      components: [{ type: 'BODY', text: template.body, example: { body_text: [template.examples] } }],
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { status: json.status ?? null };
+}
+
+/** Send an approved template whose body takes several text values. */
+export async function sendWhatsAppTemplateValues(
+  accessToken: string,
+  phoneNumberId: string,
+  to: string,
+  template: { name: string; language: string },
+  values: string[]
+): Promise<void> {
+  // Template values may not contain newlines, tabs or long runs of spaces.
+  const clean = (v: string) => v.replace(/\s+/g, ' ').trim().slice(0, 900) || '-';
+  await graph(`/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        components: [{ type: 'body', parameters: values.map((v) => ({ type: 'text', text: clean(v) })) }],
+      },
+    }),
+    signal: AbortSignal.timeout(15_000),
   });
 }

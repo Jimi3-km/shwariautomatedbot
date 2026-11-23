@@ -1,3 +1,4 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import { generateSecretToken } from '../telegram.js';
 import { whatsappEmbeddedSignupConfigured } from '../../config/meta.js';
@@ -10,10 +11,14 @@ import {
   subscribeApp,
   listSubscribedApps,
   sendWhatsAppMessage,
+  sendWhatsAppTemplate,
   readSignupReturn,
+  getNumberState,
+  registerNumber,
   WhatsAppError,
 } from '../../services/meta/whatsapp.js';
 import { storeToken, loadToken, deleteToken } from '../../services/meta/tokens.js';
+import { chunkText, withRetry, lastInboundAt, windowIsOpen, TEXT_LIMITS } from '../outbound.js';
 import {
   ProviderError,
   ProviderNotConfiguredError,
@@ -49,6 +54,61 @@ function toAccount(row: {
   };
 }
 
+/**
+ * Make sure the number is a live WhatsApp account, registering it if not.
+ * Never throws: a number that could not be activated is still saved, and the
+ * health check says plainly what is wrong with it.
+ */
+async function activateNumber(phoneNumberId: string, accessToken: string): Promise<{ live: boolean; reason?: string }> {
+  try {
+    const before = await getNumberState(phoneNumberId, accessToken).catch(() => null);
+    if (before?.live) return { live: true };
+    await registerNumber(phoneNumberId, accessToken);
+    const after = await getNumberState(phoneNumberId, accessToken).catch(() => null);
+    return after && !after.live
+      ? { live: false, reason: numberProblem(after) }
+      : { live: true };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('[providers/whatsapp] could not register the number:', detail);
+    return { live: false, reason: activationHint(detail) };
+  }
+}
+
+function numberProblem(state: { status: string | null; platformType: string | null; codeVerificationStatus: string | null }): string {
+  if (state.codeVerificationStatus && state.codeVerificationStatus !== 'VERIFIED') {
+    return 'The number has not been verified with the code WhatsApp sends by SMS or call. Finish verifying it in the WhatsApp signup, then reconnect.';
+  }
+  return `WhatsApp reports this number as ${state.status ?? 'not ready'}. It is not live yet.`;
+}
+
+function activationHint(detail: string): string {
+  if (/two.?step|pin/i.test(detail)) {
+    return 'This number already has a two-step verification PIN set elsewhere. Turn two-step verification off for the number in WhatsApp Manager, then reconnect.';
+  }
+  if (/verif/i.test(detail)) {
+    return 'The number has not been verified with the code WhatsApp sends. Finish verifying it in the signup, then reconnect.';
+  }
+  if (/already|in use|registered/i.test(detail)) {
+    return 'This number is still registered on the WhatsApp or WhatsApp Business app on a phone. Delete that account in the app first, or use a number that is not on WhatsApp.';
+  }
+  return 'WhatsApp did not activate this number. Open WhatsApp Manager to see what it needs, then reconnect.';
+}
+
+/** Run one step of the signup, naming it in the log when Meta refuses it. */
+async function step<T>(name: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof WhatsAppError) {
+      console.error(
+        `[providers/whatsapp] could not ${name} (code ${e.metaCode ?? 'n/a'}, HTTP ${e.httpStatus ?? 'n/a'}): ${e.message}`
+      );
+    }
+    throw e;
+  }
+}
+
 export const whatsappProvider: ChannelProvider = {
   id: 'whatsapp',
   label: 'WhatsApp',
@@ -63,7 +123,7 @@ export const whatsappProvider: ChannelProvider = {
     const a = this.availability();
     if (!a.available) throw new ProviderNotConfiguredError('WhatsApp', a.missing);
 
-    const state = createOAuthState({ provider: 'whatsapp', tenantId: ctx.tenantId, userId: ctx.userId });
+    const state = createOAuthState({ provider: 'whatsapp', tenantId: ctx.tenantId, userId: ctx.userId, returnTo: ctx.returnTo ?? null });
     return { mode: 'oauth', authorize_url: buildEmbeddedSignupUrl(state) };
   },
 
@@ -76,6 +136,7 @@ export const whatsappProvider: ChannelProvider = {
     let accessToken: string;
     let wabaId: string;
     let phone;
+    let activation: { live: boolean; reason?: string } = { live: false };
 
     try {
       // The code is short-lived — Meta gives it 30 seconds — so the exchange
@@ -86,7 +147,7 @@ export const whatsappProvider: ChannelProvider = {
       // debug_token lookup is the documented fallback when it does not.
       wabaId = signup.wabaId ?? (await discoverWabaId(accessToken));
 
-      const numbers = await listPhoneNumbers(wabaId, accessToken);
+      const numbers = await step('list the numbers', () => listPhoneNumbers(wabaId, accessToken));
       phone = signup.phoneNumberId
         ? numbers.find((n) => n.id === signup.phoneNumberId) ?? numbers[0]
         : numbers[0];
@@ -99,11 +160,35 @@ export const whatsappProvider: ChannelProvider = {
       }
 
       // Inbound messages only arrive once the app is subscribed to the WABA.
-      await subscribeApp(wabaId, accessToken);
+      // A refusal here does not undo the connection: the number is saved and
+      // the status check reports that messages are not being delivered yet.
+      try {
+        await step('subscribe to messages', () => subscribeApp(wabaId, accessToken));
+      } catch (e) {
+        if (!(e instanceof WhatsAppError)) throw e;
+      }
+
+      // And the number only exists on WhatsApp once it is registered. Without
+      // this the dashboard said "connected" for a number nobody could message.
+      activation = await activateNumber(phone.id, accessToken);
     } catch (e) {
       if (e instanceof ProviderError) throw e;
       if (e instanceof WhatsAppError) {
         console.error(`[providers/whatsapp] Meta error (${e.metaCode ?? 'n/a'}): ${e.message}`);
+        // Say what actually went wrong rather than "try again": trying again
+        // with the same Meta configuration fails the same way.
+        if (e.metaCode === 'NO_WHATSAPP_PERMISSION') {
+          throw new ProviderError(
+            'Facebook signed you in, but the sign-in did not include WhatsApp. The Meta configuration used for WhatsApp must be a "WhatsApp Embedded Signup" configuration.',
+            { status: 409, code: 'WHATSAPP_NO_PERMISSION' }
+          );
+        }
+        if (e.metaCode === 'NO_WABA') {
+          throw new ProviderError(
+            'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.',
+            { status: 409, code: 'WHATSAPP_NO_ACCOUNT' }
+          );
+        }
       } else {
         console.error('[providers/whatsapp] signup failed:', e);
       }
@@ -111,6 +196,9 @@ export const whatsappProvider: ChannelProvider = {
         status: 502, code: 'WHATSAPP_SIGNUP_FAILED',
       });
     }
+
+    // A number another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('whatsapp', [phone.id], ctx.tenantId);
 
     const { data: existing } = await serviceClient
       .from('channels')
@@ -120,7 +208,9 @@ export const whatsappProvider: ChannelProvider = {
       .maybeSingle();
 
     if (existing && existing.tenant_id !== ctx.tenantId) {
-      throw new ProviderError('That WhatsApp number is already connected to another business.', { status: 409 });
+      throw new ProviderError('That WhatsApp number is already connected to another business.', {
+        status: 409, code: 'ACCOUNT_IN_USE',
+      });
     }
 
     await storeToken({
@@ -188,6 +278,28 @@ export const whatsappProvider: ChannelProvider = {
       return { healthy: false, summary: 'WhatsApp authorization is missing. Reconnect WhatsApp.', needs_reconnect: true };
     }
 
+    // "Connected" has to mean the number works. A number that was added but
+    // never became a live WhatsApp account is reported as exactly that.
+    const { data: own } = await serviceClient
+      .from('channels').select('channel_account_id')
+      .eq('id', channelId).eq('tenant_id', ctx.tenantId).maybeSingle();
+    const phoneNumberId = (own as { channel_account_id?: string } | null)?.channel_account_id;
+    if (phoneNumberId) {
+      const state = await getNumberState(phoneNumberId, token.accessToken).catch(() => null);
+      if (state && !state.live) {
+        // Try once more to make it live: a number verified after the signup
+        // finished only needs registering, not a whole new connection.
+        const again = await activateNumber(phoneNumberId, token.accessToken);
+        if (!again.live) {
+          return {
+            healthy: false,
+            summary: `This number is not live on WhatsApp yet. ${again.reason ?? numberProblem(state)}`,
+            needs_reconnect: false,
+          };
+        }
+      }
+    }
+
     // The row records the WABA; re-reading it proves the token still works and
     // that we are still subscribed for inbound messages.
     const { data: meta } = await serviceClient
@@ -220,15 +332,40 @@ export const whatsappProvider: ChannelProvider = {
     }
   },
 
+  /**
+   * Free-form text is only allowed within 24 hours of the customer's last
+   * message. Outside that window Meta rejects everything except an approved
+   * template, so a late message goes out as the configured template or fails
+   * with a reason a person can act on, never as a send that is known to bounce.
+   */
   async sendMessage(_channelId, recipientId, text, ctx) {
     const token = await loadToken(ctx.tenantId, 'whatsapp');
     if (!token?.phoneNumberId) throw new ProviderError('WhatsApp is not connected.', { status: 409 });
+    const phoneNumberId = token.phoneNumberId;
+
+    const open = windowIsOpen(await lastInboundAt(ctx.tenantId, 'whatsapp', recipientId));
+
     try {
-      await sendWhatsAppMessage(token.accessToken, token.phoneNumberId, recipientId, text);
+      if (!open) {
+        const template = followUpTemplate();
+        if (!template) {
+          throw new ProviderError(
+            "WhatsApp only allows free-form messages within 24 hours of the customer's last message. This customer hasn't written in that time, so the message was not sent.",
+            { status: 409, code: 'OUTSIDE_24H_WINDOW' }
+          );
+        }
+        await withRetry(() =>
+          sendWhatsAppTemplate(token.accessToken, phoneNumberId, recipientId, template, text)
+        );
+        return;
+      }
+
+      for (const part of chunkText(text, TEXT_LIMITS.whatsapp)) {
+        await withRetry(() => sendWhatsAppMessage(token.accessToken, phoneNumberId, recipientId, part));
+      }
     } catch (e) {
-      throw new ProviderError("We couldn't send that message on WhatsApp. Please try again.", {
-        status: 502, detail: e instanceof Error ? e.message : undefined,
-      });
+      if (e instanceof ProviderError) throw e;
+      throw describeSendFailure(e);
     }
   },
 
@@ -240,3 +377,59 @@ export const whatsappProvider: ChannelProvider = {
     return data ? toAccount(data) : null;
   },
 };
+
+/** The approved template used once the 24-hour window has closed, if any. */
+function followUpTemplate(): { name: string; language: string } | null {
+  const name = (process.env.WHATSAPP_FOLLOWUP_TEMPLATE || '').trim();
+  if (!name) return null;
+  return { name, language: (process.env.WHATSAPP_FOLLOWUP_TEMPLATE_LANG || 'en').trim() || 'en' };
+}
+
+/** Meta's numeric error codes, turned into something a business owner can act on. */
+function describeSendFailure(e: unknown): ProviderError {
+  const detail = e instanceof Error ? e.message : undefined;
+  const code = e instanceof WhatsAppError ? e.metaCode : undefined;
+
+  switch (code) {
+    case '131047':
+      return new ProviderError(
+        "WhatsApp rejected the message because the customer hasn't written in the last 24 hours.",
+        { status: 409, code: 'OUTSIDE_24H_WINDOW', detail }
+      );
+    case '131026':
+      return new ProviderError(
+        "That number can't receive WhatsApp messages right now.",
+        { status: 422, code: 'WHATSAPP_UNDELIVERABLE', detail }
+      );
+    case '131030':
+      return new ProviderError(
+        'That number is not on the allowed list for this WhatsApp test number.',
+        { status: 422, code: 'WHATSAPP_RECIPIENT_NOT_ALLOWED', detail }
+      );
+    case '190':
+      return new ProviderError(
+        'WhatsApp authorization has expired. Reconnect WhatsApp in Integrations.',
+        { status: 409, code: 'WHATSAPP_REAUTH_REQUIRED', detail }
+      );
+    case '4':
+    case '80007':
+    case '130429':
+    case '131048':
+    case '131056':
+      return new ProviderError(
+        'WhatsApp is limiting how fast we can send right now. Please try again shortly.',
+        { status: 429, code: 'WHATSAPP_RATE_LIMITED', detail }
+      );
+    case '132000':
+    case '132001':
+    case '132012':
+      return new ProviderError(
+        'The WhatsApp follow-up template is missing or does not match. Check WHATSAPP_FOLLOWUP_TEMPLATE.',
+        { status: 502, code: 'WHATSAPP_TEMPLATE_INVALID', detail }
+      );
+    default:
+      return new ProviderError("We couldn't send that message on WhatsApp. Please try again.", {
+        status: 502, code: 'WHATSAPP_SEND_FAILED', detail,
+      });
+  }
+}

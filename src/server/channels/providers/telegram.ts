@@ -1,7 +1,11 @@
+import { releaseDisconnectedElsewhere } from './release.js';
 import { serviceClient } from '../../supabase.js';
 import {
   getMe, setWebhook, deleteWebhook, getWebhookInfo, sendTelegramMessage, generateSecretToken,
+  TelegramError,
 } from '../telegram.js';
+import { chunkText, withRetry, TEXT_LIMITS } from '../outbound.js';
+import { publicApiUrl } from '../../config/publicUrl.js';
 import {
   ProviderError,
   ProviderNotConfiguredError,
@@ -29,14 +33,14 @@ import {
  * This used to be n8n directly, which meant no Telegram message was ever seen
  * by this application: the workflow logged the customer's message only after
  * the agent had answered, and Shwari could not be reached on Telegram at all.
- * Updates now come here first and are handed on to n8n from the dispatcher, so
- * the pipeline still answers customers — it is just no longer the front door.
+ * Updates now come here and are answered by the in-process agent; n8n is no
+ * longer involved.
  *
- * Bots connected before this change still point at n8n. healthCheck notices
- * ("delivering messages somewhere else") and the fix is to reconnect.
+ * Bots connected before this change may still point at n8n. healthCheck
+ * notices ("delivering messages somewhere else") and the fix is to reconnect.
  */
-const webhookUrl = () => {
-  const base = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
+export const webhookUrl = () => {
+  const base = publicApiUrl();
   return base ? `${base}/api/webhooks/telegram` : '';
 };
 
@@ -113,6 +117,9 @@ export const telegramProvider: ChannelProvider = {
     }
 
     const accountId = String(bot.id);
+
+    // A bot another business has disconnected is free to connect here.
+    await releaseDisconnectedElsewhere('telegram', [accountId], ctx.tenantId);
 
     // UNIQUE (channel_type, channel_account_id) already prevents two tenants
     // owning one bot; checking first turns that into a readable message.
@@ -210,11 +217,26 @@ export const telegramProvider: ChannelProvider = {
   async sendMessage(channelId, recipientId, text, ctx) {
     const channel = await loadChannel(channelId, ctx);
     if (!channel?.bot_token) throw new ProviderError('Telegram is not connected.', { status: 409 });
+    const botToken = channel.bot_token;
     try {
-      await sendTelegramMessage(channel.bot_token, recipientId, text);
+      // Telegram rejects anything over 4096 characters outright.
+      for (const part of chunkText(text, TEXT_LIMITS.telegram)) {
+        await withRetry(() => sendTelegramMessage(botToken, recipientId, part));
+      }
     } catch (e) {
+      const detail = e instanceof Error ? e.message : undefined;
+      if (e instanceof TelegramError && e.httpStatus === 403) {
+        throw new ProviderError('That customer has blocked the bot or never started a chat with it.', {
+          status: 422, code: 'TELEGRAM_BLOCKED', detail,
+        });
+      }
+      if (e instanceof TelegramError && e.httpStatus === 401) {
+        throw new ProviderError('Telegram no longer accepts this bot token. Reconnect Telegram.', {
+          status: 409, code: 'TELEGRAM_REAUTH_REQUIRED', detail,
+        });
+      }
       throw new ProviderError("We couldn't send that message. Please try again.", {
-        status: 502, detail: e instanceof Error ? e.message : undefined,
+        status: 502, code: 'TELEGRAM_SEND_FAILED', detail,
       });
     }
   },

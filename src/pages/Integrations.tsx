@@ -1,15 +1,17 @@
+import { detectInAppBrowser, type InAppBrowser } from '../lib/inAppBrowser';
+import { OpenInBrowserDialog } from '../components/ConnectHelp';
+import { getFacebookPages } from '../lib/api';
 import React, { useEffect, useState } from 'react';
 import {
-  Send, MessageCircle, Instagram, Globe, CheckCircle2, ExternalLink, Plug,
+  Send, MessageCircle, Instagram, Facebook, Globe, CheckCircle2, ExternalLink, Plug,
 } from 'lucide-react';
 import {
-  getChannels, connectTelegram, disconnectChannel, getChannelStatus,
+  getChannels, submitChannelCredentials, disconnectChannel, getChannelStatus,
   getChannelProviders, startChannelConnect,
-  completeMetaEmbeddedSignup, completeInstagramLogin
 } from '../lib/api';
 import { EmbedSnippetBlock } from '../components/EmbedSnippetBlock';
 import { ConnectChannelDialog } from '../components/ConnectChannelDialog';
-import { SetupReadinessPanel } from '../components/SetupReadinessPanel';
+import { FacebookPagePicker } from '../components/FacebookPagePicker';
 import type { Channel, ChannelProviderInfo, EmbedSnippet, ProviderId } from '../types';
 import { useAsync, useMutation } from '../hooks';
 import { useSession } from '../app/SessionContext';
@@ -32,6 +34,8 @@ export function Integrations() {
   const [disconnecting, setDisconnecting] = useState<Channel | null>(null);
   const [embed, setEmbed] = useState<EmbedSnippet | null>(null);
   const [confirming, setConfirming] = useState<ProviderId | null>(null);
+  // Signed in with Facebook, with more than one Page to choose from.
+  const [pickingPage, setPickingPage] = useState(false);
 
   const toast = useToast();
 
@@ -43,30 +47,19 @@ export function Integrations() {
     window.history.replaceState({}, '', window.location.pathname);
 
     if (status === 'connected') { toast.push('success', 'Connected.'); state.reload(); }
+    else if (status === 'pick_page') setPickingPage(true);
     else if (status === 'cancelled') toast.push('info', 'That connection was cancelled.');
     else if (status === 'expired') toast.push('error', 'That took too long, so we stopped for safety. Please try again.');
+    else if (status === 'no_pages') toast.push('error', 'No Facebook Page was shared, so nothing was connected. Only a Page can be connected, not a personal profile: sign in as someone who manages the Page and tick it when Facebook asks.');
+    else if (status === 'page_in_use') toast.push('error', 'That Facebook Page is already connected to another business.');
+    else if (status === 'database_update_needed') toast.push('error', "This is a problem on our side, not yours. We've been notified and will fix it. Nothing was connected.");
+    else if (status === 'platform_fault' || status === 'whatsapp_no_permission' || status === 'provider_not_configured') toast.push('error', "This is a problem on our side, not yours. We've been notified and will fix it. Nothing was connected.");
+    else if (status === 'whatsapp_no_account') toast.push('error', 'WhatsApp was approved, but no WhatsApp Business account was shared. In the signup, choose or create a WhatsApp Business account and add a phone number before finishing.');
+    else if (status === 'whatsapp_no_number') toast.push('error', 'No WhatsApp number was set up. Finish adding a phone number in the WhatsApp signup, then try again.');
+    else if (status === 'account_in_use') toast.push('error', 'That account is already connected to another business on this platform. Disconnect it there first, then connect it here.');
+    else if (status === 'instagram_access_refused') toast.push('error', "Instagram signed you in but did not let this app use the account. Check that you signed in to the Instagram account you meant to connect, and that it is a Business or Creator account. We've recorded what Instagram answered and have been notified.");
+    else if (status === 'instagram_exchange_failed') toast.push('error', 'Instagram did not complete the sign-in. Try again; if it keeps happening, check that the account is a Business or Creator account.');
     else toast.push('error', "We couldn't finish connecting. Please try again.");
-  }, []);
-
-  useEffect(() => {
-
-    // Initialize Facebook SDK for Meta Embedded Signup
-    if (!(window as any).fbAsyncInit) {
-      (window as any).fbAsyncInit = function() {
-        (window as any).FB.init({
-          appId      : (import.meta as any).env.VITE_META_APP_ID,
-          cookie     : true,
-          xfbml      : true,
-          version    : 'v20.0'
-        });
-      };
-      
-      const script = document.createElement('script');
-      script.src = 'https://connect.facebook.net/en_US/sdk.js';
-      script.async = true;
-      script.defer = true;
-      document.body.appendChild(script);
-    }
   }, []);
 
   /**
@@ -84,44 +77,25 @@ export function Integrations() {
 
   /** OAuth providers hand back a URL for the browser to follow. */
   const beginOAuth = useMutation(async (provider: ProviderId) => {
+    // Meta's sign-in does not work inside another app's built-in browser.
+    const inApp = detectInAppBrowser();
+    if (inApp) { setConfirming(null); setWrongBrowser(inApp); return; }
     const result = await startChannelConnect(provider);
-    if (result.mode === 'oauth') window.location.href = result.authorize_url;
+    if (result.mode === 'oauth') window.location.href = `/api/go?to=${encodeURIComponent(result.authorize_url)}`;
   });
+  const [wrongBrowser, setWrongBrowser] = useState<InAppBrowser | null>(null);
 
-  const connectWhatsApp = useMutation(async () => {
-    return new Promise<void>((resolve, reject) => {
-      (window as any).FB.login((response: any) => {
-        if (response.authResponse && response.authResponse.code) {
-          completeMetaEmbeddedSignup(response.authResponse.code)
-            .then(() => { toast.push('success', 'WhatsApp connected successfully.'); state.reload(); resolve(); })
-            .catch(err => { toast.push('error', err.message); reject(err); });
-        } else {
-          reject(new Error('WhatsApp connection was cancelled.'));
-        }
-      }, {
-        config_id: (import.meta as any).env.VITE_META_WHATSAPP_CONFIG_ID,
-        response_type: 'code',
-        override_default_response_type: true
-      });
-    });
-  });
-
-  const connectInstagram = useMutation(async () => {
-    return new Promise<void>((resolve, reject) => {
-      (window as any).FB.login((response: any) => {
-        if (response.authResponse && response.authResponse.accessToken) {
-          completeInstagramLogin(response.authResponse.accessToken)
-            .then(() => { toast.push('success', 'Instagram connected successfully.'); state.reload(); resolve(); })
-            .catch(err => { toast.push('error', err.message); reject(err); });
-        } else {
-          reject(new Error('Instagram connection was cancelled.'));
-        }
-      }, {
-        scope: 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list',
-        return_scopes: true
-      });
-    });
-  });
+  // A Facebook sign-in finished in another browser leaves a Page still to be
+  // chosen. This browser never saw the return, so it asks.
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    getFacebookPages()
+      .then((r) => { if (!cancelled && r.pages.length > 0) setPickingPage(true); })
+      .catch(() => { /* nothing waiting */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const providerInfo = (id: ProviderId): ChannelProviderInfo | undefined =>
     providers.data?.providers.find((p) => p.id === id);
@@ -137,6 +111,7 @@ export function Integrations() {
   const telegram = channels.filter((c) => c.channel_type === 'telegram' && c.status === 'active');
   const whatsapp = channels.filter((c) => c.channel_type === 'whatsapp' && c.status === 'active');
   const instagram = channels.filter((c) => c.channel_type === 'instagram' && c.status === 'active');
+  const facebook = channels.filter((c) => c.channel_type === 'facebook' && c.status === 'active');
   const webchat = channels.filter((c) => c.channel_type === 'webchat' && c.status === 'active');
 
   /**
@@ -167,13 +142,19 @@ export function Integrations() {
         subtitle="Connect the places your customers already message you."
       />
 
-      <InlineError message={disconnect.error ?? beginOAuth.error ?? connectWebchat.error ?? connectWhatsApp.error ?? connectInstagram.error} />
+      <InlineError message={disconnect.error ?? beginOAuth.error ?? connectWebchat.error} />
 
       <div className="scroll-y" style={{ flex: 1, padding: 20 }}>
         <div style={{ display: 'grid', gap: 14, maxWidth: 760, margin: '0 auto' }}>
 
-          {/* Renders nothing once the server is fully configured. */}
-          {isAdmin && <SetupReadinessPanel />}
+          {/* How the platform is wired to Meta is the platform admin's
+              business and lives on the Platform page. Here a business only
+              connects, checks and disconnects its own channels. */}
+          {!isAdmin && (
+            <p className="field-hint" style={{ margin: 0 }}>
+              Only the owner or a manager can connect or disconnect a channel.
+            </p>
+          )}
 
           <div className="section-label">Messaging</div>
 
@@ -196,7 +177,7 @@ export function Integrations() {
               connected={whatsapp.length > 0}
               channels={whatsapp}
               isAdmin={isAdmin}
-              onConnect={() => connectWhatsApp.run()}
+              onConnect={() => setConfirming('whatsapp')}
               onDisconnect={setDisconnecting}
             />
           ) : (
@@ -212,12 +193,28 @@ export function Integrations() {
               connected={instagram.length > 0}
               channels={instagram}
               isAdmin={isAdmin}
-              onConnect={() => connectInstagram.run()}
+              onConnect={() => setConfirming('instagram')}
               onDisconnect={setDisconnecting}
             />
           ) : (
             <ComingSoon icon={<Instagram size={18} />} name="Instagram"
               description="Handle Instagram direct messages from the same inbox." />
+          )}
+
+          {facebook.length > 0 || providerInfo('facebook')?.available ? (
+            <IntegrationCard
+              icon={<Facebook size={18} />}
+              name="Facebook Page"
+              description="Sign in with Facebook and choose your Page. We'll answer its Messenger messages and publish the posts you approve."
+              connected={facebook.length > 0}
+              channels={facebook}
+              isAdmin={isAdmin}
+              onConnect={() => setConfirming('facebook')}
+              onDisconnect={setDisconnecting}
+            />
+          ) : (
+            <ComingSoon icon={<Facebook size={18} />} name="Facebook Page"
+              description="Answer Messenger messages and post to your Page from the same place." />
           )}
 
           <IntegrationCard
@@ -242,6 +239,18 @@ export function Integrations() {
         busy={beginOAuth.busy}
         onClose={() => setConfirming(null)}
         onConfirm={() => confirming && beginOAuth.run(confirming)}
+      />
+
+      <OpenInBrowserDialog browser={wrongBrowser} onClose={() => setWrongBrowser(null)} />
+
+      <FacebookPagePicker
+        open={pickingPage}
+        onClose={() => setPickingPage(false)}
+        onConnected={(name) => {
+          setPickingPage(false);
+          toast.push('success', name ? `Connected ${name}.` : 'Connected.');
+          state.reload();
+        }}
       />
 
       <TelegramModal
@@ -314,6 +323,9 @@ function ConnectedChannelRow({
   const [health, setHealth] = useState<string | null>(null);
   const check = useMutation(async () => {
     const r = await getChannelStatus(channel.id);
+    // Instagram, WhatsApp and Facebook report in the platform's own words.
+    if (r.health) { setHealth(r.health.summary); return; }
+    if (!r.webhook) { setHealth('Connected.'); return; }
     setHealth(
       !r.webhook.configured ? 'No webhook is registered with the provider.'
         : !r.webhook.matches_expected ? 'The webhook points somewhere unexpected.'
@@ -323,13 +335,15 @@ function ConnectedChannelRow({
   });
 
   return (
+    // Wraps on a phone: the name keeps a readable width and the buttons drop
+    // to their own line, rather than the name being squeezed to one letter.
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px',
+      display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', flexWrap: 'wrap',
       background: 'var(--surface-2)', borderRadius: 'var(--radius)', marginBottom: 6,
     }}>
       <CheckCircle2 size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13 }}>{channel.display_name || channel.channel_account_id}</div>
+      <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+        <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{channel.display_name || channel.channel_account_id}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
           Connected {formatDateTime(channel.created_at)}
         </div>
@@ -378,9 +392,12 @@ function TelegramModal({
   // open. It is never written to localStorage, and never comes back from the
   // API once saved.
   const connect = useMutation(async (value: string) => {
-    const r = await connectTelegram(value);
+    // The provider route verifies the token, registers the webhook against
+    // this app's own inbound endpoint and stores the channel.
+    const r = await submitChannelCredentials('telegram', { bot_token: value });
     setToken('');
-    toast.push('success', `Connected @${r.bot.username}. Customers messaging that bot now reach your agent.`);
+    const name = r.account.display_name;
+    toast.push('success', `Connected${name ? ` ${name}` : ''}. Customers messaging that bot now reach your agent.`);
     onConnected();
   });
 

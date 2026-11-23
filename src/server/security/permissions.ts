@@ -73,6 +73,18 @@ const TOOL_PERMISSIONS: Record<string, Permission> = {
   update_order_status: 'orders:write',
   message_customer: 'conversations:write',
   set_conversation_handling: 'conversations:write',
+  teach_team: 'agents:configure',
+  save_products: 'catalog:write',
+  save_services: 'catalog:write',
+  remove_products: 'catalog:delete',
+  remove_services: 'catalog:delete',
+  forget_lesson: 'agents:configure',
+  // Marketing: deciding what the public sees is an owner or admin decision.
+  propose_week_posts: 'agents:configure',
+  approve_posts: 'agents:configure',
+  update_scheduled_post: 'agents:configure',
+  set_posting_schedule: 'agents:configure',
+  pause_posting: 'agents:configure',
 };
 
 export function canUserRunTool(role: Role, toolName: string): boolean {

@@ -2,7 +2,7 @@
 
 An autonomous, multi-tenant AI workforce platform for commerce, operations, customer support, and appointment scheduling across WhatsApp, Instagram, Telegram, and WebChat.
 
-Powered by a native Express backend, Supabase Row-Level Security (PostgreSQL), and an NVIDIA Moonshot LLM reasoning core (`moonshotai/kimi-k3`) executing under strict zero-hallucination guardrails.
+Powered by a native Express backend, Supabase Row-Level Security (PostgreSQL), and an NVIDIA-hosted LLM reasoning core (default `nvidia/nemotron-3-ultra-550b-a55b`, configurable) executing under strict zero-hallucination guardrails.
 
 ---
 
@@ -111,7 +111,7 @@ shwariautomatedbot/
 │       │   └── webchat/         # Visitor token issuance, session cookies & rate limits
 │       │
 │       └── ai/                  # AI WORKFORCE & LLM ENGINE
-│           ├── llm.ts           # NVIDIA Moonshot AI completion client & tool-calling loop
+│           ├── llm.ts           # NVIDIA NIM (OpenAI-compatible) completion client & tool-calling loop
 │           ├── agent.ts         # Agent turn runner (runAgentTurn), system prompt & memory
 │           ├── roles.ts         # 5 Agent Blueprints, Universal Rules, Zero-Hallucination
 │           ├── router.ts        # Intent classification & department routing
@@ -149,7 +149,7 @@ The intelligence engine is located in `src/server/ai/`. It is built around zero 
 
 1. **`llm.ts` (LLM Client)**:
    - Connects to NVIDIA's AI Foundation endpoints (`https://integrate.api.nvidia.com/v1`).
-   - Default model: `moonshotai/kimi-k3` (with deep reasoning capability).
+   - Default model: `nvidia/nemotron-3-ultra-550b-a55b`. Override with `SHWARI_MODEL` / `SHWARI_PRIMARY_MODEL`, `SHWARI_FAST_MODEL` and `SHWARI_FALLBACK_MODEL`.
    - Handles multi-turn chat completions, function/tool schema generation, and tool response processing.
    - Built with configurable token limits (`SHWARI_MAX_TOKENS`) and execution timeouts (`SHWARI_TIMEOUT_MS`).
 
@@ -234,9 +234,9 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 Fill in the required variables:
-- `SUPABASE_URL` & `SUPABASE_ANON_KEY` & `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_URL` & `SUPABASE_ANON_KEY` & `SUPABASE_SERVICE_ROLE_KEY` — all three are required; there are no built-in defaults and the server refuses to start without them
 - `SHWARI_API_KEY` (NVIDIA API key: `nvapi-...`)
-- `SHWARI_MODEL=moonshotai/kimi-k3`
+- `SHWARI_MODEL=nvidia/nemotron-3-ultra-550b-a55b` (optional; this is the default)
 - `SHWARI_API_BASE=https://integrate.api.nvidia.com/v1`
 - `INTERNAL_API_SECRET`, `META_TOKEN_ENCRYPTION_KEY`, `META_VERIFY_TOKEN`
 
@@ -251,7 +251,25 @@ npm run dev
 # Run TypeScript compilation check
 npm run lint
 
-# Run automated AI test suites
+# Run a test suite (each file is a standalone script)
 npx tsx src/server/ai/__tests__/tools.test.mjs
 npx tsx src/server/ai/__tests__/endToEnd.test.mjs
+npx tsx src/server/__tests__/adminQa.test.mjs
 ```
+
+### 4. Database
+The schema lives in `supabase/migrations/` and builds a database from empty:
+`20260809_0000_baseline.sql` creates the core tables and every later file is
+idempotent, so applying them in filename order is safe on a new project and on
+an existing one.
+
+```bash
+supabase db push            # or run the files in order with psql
+psql "$DATABASE_URL" -f supabase/tests/tenant_isolation.sql   # seeds its own data, rolls back
+```
+
+### 5. Deployment (Vercel)
+`api/index.ts` wraps the Express app as a serverless function; `vercel.json`
+holds the rewrites and scheduled jobs. Set the same environment variables in the
+Vercel project. n8n is no longer part of the system — every message is handled
+by the native agent in `src/server/ai/`.
