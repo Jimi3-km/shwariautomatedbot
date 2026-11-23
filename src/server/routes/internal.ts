@@ -350,3 +350,21 @@ internalRouter.get(
     });
   })
 );
+
+/**
+ * Account emails, handed over by the sign-in service.
+ *
+ * The database function `send_auth_email` is registered as the sign-in
+ * service's "send email" hook. It posts each request here with the scheduler's
+ * token, and the email goes out through the platform's own email account.
+ * Nothing about the request is logged: it carries a one-time sign-in token.
+ */
+internalRouter.post(
+  '/internal/auth-email',
+  requireScheduler,
+  handler(async (req, res) => {
+    const { sendAuthEmail } = await import('../services/authEmail.js');
+    const result = await sendAuthEmail(req.body);
+    res.json(result);
+  })
+);
