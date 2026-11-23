@@ -63,6 +63,7 @@ const SUGGESTED_TAGS = [
   'formatting_issue',
   'unverified_payment_claim',
   'escalation_accuracy',
+  'tone_inconsistency',
 ];
 
 export function AgentQA() {
