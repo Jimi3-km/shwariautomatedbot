@@ -28,10 +28,10 @@ interface Copy { subject: string; heading: string; body: string; button: string;
 
 const COPY: Record<Action, Copy> = {
   signup: {
-    subject: `Confirm your email for ${PRODUCT}`,
+    subject: `Your ${PRODUCT} confirmation code`,
     heading: 'Confirm your email address',
-    body: `Thanks for creating a ${PRODUCT} account. Confirm this address to finish signing up.`,
-    button: 'Confirm email address',
+    body: `Thanks for creating a ${PRODUCT} account. Enter this code on the sign-up page to confirm your email address.`,
+    button: '',
     after: 'If you did not create an account, you can ignore this email.',
   },
   recovery: {
@@ -133,7 +133,9 @@ export async function sendAuthEmail(event: any): Promise<AuthEmailResult> {
   const minutes = 60;
   const jobs: Array<{ to: string; link: string | null; code: string | null }> = [];
 
-  if (action === 'reauthentication') {
+  // Sign-up is confirmed by typing the code. No link is sent: mail scanners
+  // open links, which would use the code up before the person sees it.
+  if (action === 'reauthentication' || action === 'signup') {
     if (user.email && data.token) jobs.push({ to: user.email, link: null, code: String(data.token) });
   } else if (action === 'email_change') {
     // With both addresses confirming, the service's naming is crossed over:

@@ -369,8 +369,8 @@ function ConversationPane({
   }
 
   return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Header with the AI/human state as a first-class control */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
