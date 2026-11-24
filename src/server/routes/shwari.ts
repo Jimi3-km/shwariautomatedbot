@@ -96,6 +96,7 @@ shwariRouter.post(
         tenantId: ctx.tenantId,
         role: 'manager',
         userId: ctx.userId,
+        userRole: ctx.role,
         conversationId: null,
         text,
         history: cleanHistory,

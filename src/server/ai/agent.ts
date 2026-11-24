@@ -64,6 +64,13 @@ export interface AgentTurnInput {
   role: AgentRole;
   /** The signed-in user, when there is one. Null for a chat identity. */
   userId: string | null;
+  /**
+   * The signed-in person's role as the dashboard already decided it. A
+   * platform admin helping a business is not a member of it but acts there as
+   * an admin; without this the membership lookup made them a viewer and every
+   * change they asked Shwari for was refused.
+   */
+  userRole?: Role;
   conversationId: string | null;
   channelType?: string | null;
   text: string;
@@ -614,7 +621,9 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     // The AI Agent page shapes how customers are spoken to, so it applies to
     // the departments only: not to the manager, and not to marketing.
     department ? loadAgentSettings(input.tenantId).catch(() => null) : Promise.resolve(null),
-    input.userId ? staffRole(input.tenantId, input.userId).catch(() => null) : Promise.resolve(undefined),
+    input.userId
+      ? (input.userRole ? Promise.resolve(input.userRole) : staffRole(input.tenantId, input.userId).catch(() => null))
+      : Promise.resolve(undefined),
     loadLessons(input.tenantId, role),
     // Read how this customer is behaving - what they want, how keen, how they
     // feel - and keep the lead's score current while we are at it.
