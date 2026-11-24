@@ -344,7 +344,7 @@ function ChannelsStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     else if (status === 'page_in_use') setError('That Facebook Page is already connected to another business.');
     else if (status === 'database_update_needed') setError('The database needs its latest update before a Facebook Page can be connected. Nothing was connected.');
     else if (status === 'account_in_use') setError('That account is already connected to another business on this platform. Disconnect it there first, then connect it here.');
-    else if (status === 'instagram_access_refused') setError("Instagram signed you in but did not let this app use the account. Check that you signed in to the Instagram account you meant to connect, and that it is a Business or Creator account. We've recorded what Instagram answered and have been notified.");
+    else if (status === 'instagram_access_refused') setError("Instagram signed you in but has not opened this app to your account yet. Instagram is still reviewing the app, and until it approves, only accounts added as testers can connect. We've been notified and will tell you when it is open; meanwhile you can connect Telegram or web chat.");
     else if (status === 'instagram_exchange_failed') setError('Instagram did not complete the sign-in. Try again; if it keeps happening, check that the account is a Business or Creator account.');
     else setError("We couldn't finish connecting. Please try again.");
   }, []);
