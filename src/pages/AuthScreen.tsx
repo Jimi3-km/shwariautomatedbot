@@ -14,7 +14,8 @@ const COPY: Record<Mode, { title: string; subtitle: string; cta: string }> = {
 };
 
 const CODE_LENGTH = 6;
-const RESEND_WAIT_SECONDS = 45;
+// The sign-in service allows one code a minute per address.
+const RESEND_WAIT_SECONDS = 60;
 
 /** What the sign-in service says, in words a person can act on. */
 function friendly(err: unknown): string {
